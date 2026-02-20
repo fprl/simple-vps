@@ -1,0 +1,18 @@
+---
+# Bootstrap a fresh VPS as root.
+# Safe to run on a brand-new machine.
+
+- name: VPS bootstrap
+  hosts: "{{ target | default('vps') }}"
+  become: true
+
+  vars:
+    admin_user: "{{ openvps_admin_user | default('admin') }}"
+    openvps_timezone: "{{ openvps_timezone | default('UTC') }}"
+    openvps_locale: "{{ openvps_locale | default('en_US.UTF-8') }}"
+    openvps_ssh_public_keys: "{{ openvps_ssh_public_keys | default([]) }}"
+    security_bootstrap_only: true
+
+  roles:
+    - { role: system }
+    - { role: security }

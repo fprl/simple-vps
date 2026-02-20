@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  shell:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Bash syntax checks
+        run: |
+          bash -n install.sh
+          bash -n scripts/host-ip
+
+  ansible:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Ansible
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install ansible ansible-lint
+      - name: Ansible syntax checks
+        run: |
+          ansible-playbook --syntax-check playbooks/vps-bootstrap.yml
+          ansible-playbook --syntax-check playbooks/vps-apply.yml
+      - name: Ansible lint
+        run: |
+          ansible-lint playbooks/vps-bootstrap.yml playbooks/vps-apply.yml

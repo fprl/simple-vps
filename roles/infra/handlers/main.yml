@@ -1,0 +1,10 @@
+---
+- name: Restart Docker
+  systemd:
+    name: docker
+    state: restarted
+
+- name: Reload Caddy
+  systemd:
+    name: caddy
+    state: reloaded

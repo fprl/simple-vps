@@ -1,0 +1,173 @@
+---
+# Updates + SSH hardening + firewall + fail2ban + tailscale.
+
+- name: Install unattended-upgrades
+  apt:
+    name:
+      - unattended-upgrades
+      - apt-listchanges
+    state: present
+
+- name: Enable periodic unattended upgrades
+  copy:
+    dest: /etc/apt/apt.conf.d/20auto-upgrades
+    owner: root
+    group: root
+    mode: '0644'
+    content: |
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Unattended-Upgrade "1";
+
+- name: Configure unattended-upgrades policy
+  copy:
+    dest: /etc/apt/apt.conf.d/50unattended-upgrades
+    owner: root
+    group: root
+    mode: '0644'
+    content: |
+      Unattended-Upgrade::Origins-Pattern {
+        "origin=${distro_id},codename=${distro_codename},label=${distro_id}-Security";
+        "origin=${distro_id},codename=${distro_codename}-security,label=${distro_id}-Security";
+      };
+
+      Unattended-Upgrade::Remove-Unused-Kernel-Packages "true";
+      Unattended-Upgrade::Remove-New-Unused-Dependencies "true";
+      Unattended-Upgrade::Remove-Unused-Dependencies "true";
+
+      Unattended-Upgrade::Automatic-Reboot "{{ unattended_upgrades_auto_reboot | default(false) | bool | ternary('true','false') }}";
+      Unattended-Upgrade::Automatic-Reboot-Time "{{ unattended_upgrades_auto_reboot_time | default('04:00') }}";
+
+- name: Start unattended-upgrades service if present
+  systemd:
+    name: unattended-upgrades
+    enabled: yes
+    state: started
+  ignore_errors: yes
+
+- name: Install security packages
+  apt:
+    name:
+      - ufw
+      - fail2ban
+    state: present
+  when: not (security_bootstrap_only | default(false) | bool)
+
+- name: Configure SSH hardening
+  lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "{{ item.regexp }}"
+    line: "{{ item.line }}"
+  loop:
+    - { regexp: '^#?PermitRootLogin', line: 'PermitRootLogin prohibit-password' }
+    - { regexp: '^#?PasswordAuthentication', line: 'PasswordAuthentication no' }
+    - { regexp: '^#?PubkeyAuthentication', line: 'PubkeyAuthentication yes' }
+    - { regexp: '^#?X11Forwarding', line: 'X11Forwarding no' }
+    - { regexp: '^#?MaxAuthTries', line: 'MaxAuthTries 3' }
+  notify: Restart SSH
+  when: not (security_bootstrap_only | default(false) | bool)
+
+- name: Configure UFW defaults
+  ufw:
+    direction: "{{ item.direction }}"
+    policy: "{{ item.policy }}"
+  loop:
+    - { direction: incoming, policy: deny }
+    - { direction: outgoing, policy: allow }
+  when: not (security_bootstrap_only | default(false) | bool)
+
+- name: Allow SSH through UFW
+  ufw:
+    rule: allow
+    port: '22'
+    proto: tcp
+  when: not (security_bootstrap_only | default(false) | bool)
+
+- name: Allow HTTP through UFW
+  ufw:
+    rule: allow
+    port: '80'
+    proto: tcp
+  when: not (security_bootstrap_only | default(false) | bool)
+
+- name: Allow HTTPS through UFW
+  ufw:
+    rule: allow
+    port: '443'
+    proto: tcp
+  when: not (security_bootstrap_only | default(false) | bool)
+
+- name: Allow Tailscale (WireGuard) through UFW (opt-in)
+  ufw:
+    rule: allow
+    port: '41641'
+    proto: udp
+  when:
+    - not (security_bootstrap_only | default(false) | bool)
+    - (security_enable_tailscale | default(false) | bool)
+
+- name: Enable UFW
+  ufw:
+    state: enabled
+  when: not (security_bootstrap_only | default(false) | bool)
+
+- name: Configure fail2ban for SSH
+  copy:
+    dest: /etc/fail2ban/jail.local
+    content: |
+      [sshd]
+      enabled = true
+      port = ssh
+      filter = sshd
+      logpath = /var/log/auth.log
+      maxretry = 3
+      bantime = 3600
+      findtime = 600
+  notify: Restart fail2ban
+  when: not (security_bootstrap_only | default(false) | bool)
+
+- name: Enable and start fail2ban
+  systemd:
+    name: fail2ban
+    enabled: yes
+    state: started
+  when: not (security_bootstrap_only | default(false) | bool)
+
+- name: Install Tailscale apt keyring
+  shell: |
+    curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/$(lsb_release -cs).gpg | gpg --dearmor -o /usr/share/keyrings/tailscale-archive-keyring.gpg
+  args:
+    creates: /usr/share/keyrings/tailscale-archive-keyring.gpg
+  when:
+    - not ansible_check_mode
+    - not (security_bootstrap_only | default(false) | bool)
+    - (security_enable_tailscale | default(false) | bool)
+
+- name: Configure Tailscale apt repository
+  copy:
+    dest: /etc/apt/sources.list.d/tailscale.list
+    owner: root
+    group: root
+    mode: '0644'
+    content: |
+      deb [signed-by=/usr/share/keyrings/tailscale-archive-keyring.gpg] https://pkgs.tailscale.com/stable/ubuntu {{ ansible_facts['distribution_release'] }} main
+  when:
+    - not (security_bootstrap_only | default(false) | bool)
+    - (security_enable_tailscale | default(false) | bool)
+
+- name: Install Tailscale
+  apt:
+    name: tailscale
+    state: present
+    update_cache: yes
+  when:
+    - not (security_bootstrap_only | default(false) | bool)
+    - (security_enable_tailscale | default(false) | bool)
+
+- name: Enable and start Tailscale
+  systemd:
+    name: tailscaled
+    enabled: yes
+    state: started
+  when:
+    - not (security_bootstrap_only | default(false) | bool)
+    - (security_enable_tailscale | default(false) | bool)

@@ -1,0 +1,27 @@
+# VPS-safe default .gitconfig (sanitized)
+# - No user identity
+# - No credential helpers
+
+[init]
+    defaultBranch = main
+
+[core]
+    editor = vim
+    autocrlf = input
+    pager = less -F -X -R
+
+[color]
+    ui = auto
+
+[pull]
+    rebase = true
+
+[push]
+    default = current
+    autoSetupRemote = true
+
+[fetch]
+    prune = true
+
+[help]
+    autocorrect = 1

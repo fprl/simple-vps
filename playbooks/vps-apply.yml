@@ -1,0 +1,18 @@
+---
+# Full converge. Run as admin after verifying admin SSH works.
+
+- name: VPS apply
+  hosts: "{{ target | default('vps') }}"
+  become: true
+
+  vars:
+    admin_user: "{{ openvps_admin_user | default('admin') }}"
+    openvps_timezone: "{{ openvps_timezone | default('UTC') }}"
+    openvps_locale: "{{ openvps_locale | default('en_US.UTF-8') }}"
+    openvps_ssh_public_keys: "{{ openvps_ssh_public_keys | default([]) }}"
+
+  roles:
+    - { role: system }
+    - { role: security }
+    - { role: infra }
+    - { role: dev }

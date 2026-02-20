@@ -1,0 +1,102 @@
+---
+# OS fundamentals + admin access.
+
+- name: Update apt cache
+  apt:
+    update_cache: yes
+    cache_valid_time: 3600
+
+- name: Install essential packages
+  apt:
+    name:
+      - zsh
+      - git
+      - curl
+      - wget
+      - vim
+      - htop
+      - tmux
+      - unzip
+      - jq
+      - tree
+      - ncdu
+      - rsync
+      - build-essential
+      - python3-pip
+      - ca-certificates
+      - gnupg
+      - apt-transport-https
+    state: present
+
+- name: Create admin user
+  user:
+    name: "{{ admin_user }}"
+    shell: /bin/zsh
+    groups: sudo
+    append: yes
+    create_home: yes
+
+- name: Allow admin user passwordless sudo
+  lineinfile:
+    path: /etc/sudoers.d/{{ admin_user }}
+    line: "{{ admin_user }} ALL=(ALL) NOPASSWD:ALL"
+    create: yes
+    mode: '0440'
+    validate: 'visudo -cf %s'
+
+- name: Normalize provided SSH key list
+  set_fact:
+    openvps_provided_ssh_public_keys: "{{ openvps_ssh_public_keys | default([]) }}"
+
+- name: Check if root authorized_keys exists
+  stat:
+    path: /root/.ssh/authorized_keys
+  register: openvps_root_authorized_keys
+  when: openvps_provided_ssh_public_keys | length == 0
+
+- name: Read root authorized_keys when no explicit keys were provided
+  slurp:
+    path: /root/.ssh/authorized_keys
+  register: openvps_root_keys_raw
+  when:
+    - openvps_provided_ssh_public_keys | length == 0
+    - openvps_root_authorized_keys.stat.exists
+
+- name: Build effective SSH key list for admin user
+  set_fact:
+    openvps_effective_ssh_public_keys: >-
+      {{
+        openvps_provided_ssh_public_keys
+        if (openvps_provided_ssh_public_keys | length > 0)
+        else (
+          (openvps_root_keys_raw.content | default('') | b64decode).splitlines()
+          | map('trim')
+          | reject('equalto', '')
+          | reject('match', '^#')
+          | list
+        )
+      }}
+
+- name: Add SSH authorized keys to admin user
+  authorized_key:
+    user: "{{ admin_user }}"
+    key: "{{ item }}"
+    state: present
+  loop: "{{ openvps_effective_ssh_public_keys }}"
+  when: not ansible_check_mode
+
+- name: Warn when no SSH keys are available for admin user
+  debug:
+    msg: >-
+      No SSH public keys were found for admin user provisioning.
+      Set openvps_ssh_public_keys explicitly if root has no authorized keys.
+  when: openvps_effective_ssh_public_keys | length == 0
+
+- name: Set timezone
+  timezone:
+    name: "{{ openvps_timezone | default('UTC') }}"
+
+- name: Set locale
+  locale_gen:
+    name: "{{ openvps_locale | default('en_US.UTF-8') }}"
+    state: present
