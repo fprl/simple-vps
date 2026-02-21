@@ -2,6 +2,12 @@
 
 Use local mode when you are already on the target VPS.
 
+You can also start the guided wizard and choose local mode in-menu:
+
+```bash
+./install.sh --interactive
+```
+
 ## Requirements
 
 - Ubuntu 22.04 or 24.04

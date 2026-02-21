@@ -2,6 +2,12 @@
 
 Use remote mode when running from your laptop/workstation against a VPS target.
 
+You can also start the guided wizard and choose remote mode in-menu:
+
+```bash
+./install.sh --interactive
+```
+
 ## Requirements
 
 - Ansible installed locally

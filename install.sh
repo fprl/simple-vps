@@ -14,7 +14,9 @@ LOCALE="en_US.UTF-8"
 TAILSCALE="false"
 CHECK_MODE="false"
 ASSUME_YES="false"
+INTERACTIVE_MODE="auto"
 PASSTHROUGH_ARGS=()
+ORIGINAL_ARGC=0
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -41,12 +43,15 @@ Options:
   --tailscale                    Enable Tailscale setup
   --no-tailscale                 Disable Tailscale setup (default)
   --check                        Run Ansible in check mode
+  --interactive                  Force interactive wizard
+  --no-interactive               Disable interactive wizard
   --yes                          Non-interactive mode (fail if required values are missing)
   -h, --help                     Show help
 
 Examples:
   ./install.sh --mode remote --host 203.0.113.10 --ssh-key ~/.ssh/id_ed25519 --admin-user dev
   ./install.sh --mode local --admin-user dev --tailscale
+  ./install.sh --interactive
 USAGE
 }
 
@@ -60,6 +65,10 @@ warn() {
 
 info() {
   echo -e "${GREEN}==>${NC} $*"
+}
+
+can_prompt() {
+  [[ -t 0 && -t 1 ]]
 }
 
 prepare_ansible_env() {
@@ -114,6 +123,11 @@ confirm_or_prompt() {
     exit 1
   fi
 
+  if ! can_prompt; then
+    err "$var_name is required but interactive input is not available."
+    exit 1
+  fi
+
   if [[ -n "$default_value" ]]; then
     read -r -p "$prompt [$default_value]: " current_value
     current_value="${current_value:-$default_value}"
@@ -127,6 +141,171 @@ confirm_or_prompt() {
   fi
 
   printf -v "$var_name" '%s' "$current_value"
+}
+
+prompt_yes_no() {
+  local var_name="$1"
+  local prompt="$2"
+  local default_value="${3:-false}"
+  local current_value="${!var_name:-}"
+  local answer=""
+  local suffix="[y/N]"
+
+  if [[ -n "$current_value" && "$current_value" != "auto" ]]; then
+    return
+  fi
+
+  if ! can_prompt; then
+    err "Cannot prompt for $var_name in non-interactive terminal."
+    exit 1
+  fi
+
+  if [[ "$default_value" == "true" ]]; then
+    suffix="[Y/n]"
+  fi
+
+  while true; do
+    read -r -p "$prompt $suffix: " answer
+    answer="${answer,,}"
+    if [[ -z "$answer" ]]; then
+      printf -v "$var_name" '%s' "$default_value"
+      return
+    fi
+    case "$answer" in
+      y|yes)
+        printf -v "$var_name" '%s' "true"
+        return
+        ;;
+      n|no)
+        printf -v "$var_name" '%s' "false"
+        return
+        ;;
+    esac
+    echo "Please answer y or n."
+  done
+}
+
+prompt_mode() {
+  local default_mode="$1"
+  local choice=""
+
+  if [[ "$MODE" != "auto" ]]; then
+    return
+  fi
+
+  if ! can_prompt; then
+    return
+  fi
+
+  echo "Select installation mode:"
+  echo "  1) remote  (run from this machine against a VPS host)"
+  echo "  2) local   (run directly on the target VPS)"
+
+  while true; do
+    if [[ "$default_mode" == "local" ]]; then
+      read -r -p "Choice [2]: " choice
+      choice="${choice:-2}"
+    else
+      read -r -p "Choice [1]: " choice
+      choice="${choice:-1}"
+    fi
+    case "$choice" in
+      1)
+        MODE="remote"
+        return
+        ;;
+      2)
+        MODE="local"
+        return
+        ;;
+    esac
+    echo "Please enter 1 or 2."
+  done
+}
+
+interactive_wizard() {
+  local default_mode="remote"
+  local proceed="true"
+  local set_ssh_key="false"
+
+  if ! can_prompt; then
+    err "Interactive wizard requested, but terminal is not interactive."
+    exit 1
+  fi
+
+  echo ""
+  echo "OpenVPS Setup Wizard"
+  echo "--------------------"
+
+  if [[ "$(id -u)" -eq 0 ]] && [[ -f /etc/os-release ]]; then
+    default_mode="local"
+  fi
+  prompt_mode "$default_mode"
+
+  if [[ "$MODE" == "remote" ]]; then
+    confirm_or_prompt TARGET_HOST "Target VPS host (IP or DNS name)"
+    confirm_or_prompt BOOTSTRAP_USER "Bootstrap SSH user" "root"
+
+    if [[ -z "$SSH_KEY" ]]; then
+      prompt_yes_no set_ssh_key "Use SSH private key file?" "false"
+      if [[ "$set_ssh_key" == "true" ]]; then
+        confirm_or_prompt SSH_KEY "Path to SSH private key (for example ~/.ssh/id_ed25519)"
+      fi
+    fi
+  fi
+
+  confirm_or_prompt ADMIN_USER "Admin username" "admin"
+  confirm_or_prompt TIMEZONE "Server timezone" "UTC"
+  confirm_or_prompt LOCALE "Server locale" "en_US.UTF-8"
+  prompt_yes_no TAILSCALE "Enable Tailscale?" "$TAILSCALE"
+  prompt_yes_no CHECK_MODE "Run in check (dry-run) mode?" "$CHECK_MODE"
+
+  echo ""
+  echo "Summary:"
+  echo "  mode: $MODE"
+  if [[ "$MODE" == "remote" ]]; then
+    echo "  host: $TARGET_HOST"
+    echo "  bootstrap_user: $BOOTSTRAP_USER"
+    if [[ -n "$SSH_KEY" ]]; then
+      echo "  ssh_key: $SSH_KEY"
+    else
+      echo "  ssh_key: <default SSH config>"
+    fi
+  fi
+  echo "  admin_user: $ADMIN_USER"
+  echo "  timezone: $TIMEZONE"
+  echo "  locale: $LOCALE"
+  echo "  tailscale: $TAILSCALE"
+  echo "  check_mode: $CHECK_MODE"
+
+  prompt_yes_no proceed "Proceed with provisioning?" "true"
+  if [[ "$proceed" != "true" ]]; then
+    err "Aborted by user."
+    exit 1
+  fi
+}
+
+maybe_run_interactive_wizard() {
+  if [[ "$ASSUME_YES" == "true" ]]; then
+    return
+  fi
+
+  case "$INTERACTIVE_MODE" in
+    true)
+      interactive_wizard
+      ;;
+    false)
+      ;;
+    auto)
+      if [[ "$ORIGINAL_ARGC" -eq 0 ]] && can_prompt; then
+        interactive_wizard
+      fi
+      ;;
+    *)
+      err "Invalid interactive mode: $INTERACTIVE_MODE"
+      exit 1
+      ;;
+  esac
 }
 
 parse_args() {
@@ -174,6 +353,14 @@ parse_args() {
         ;;
       --check)
         CHECK_MODE="true"
+        shift
+        ;;
+      --interactive)
+        INTERACTIVE_MODE="true"
+        shift
+        ;;
+      --no-interactive)
+        INTERACTIVE_MODE="false"
         shift
         ;;
       --yes)
@@ -312,7 +499,23 @@ preflight_ssh() {
   fi
 }
 
-run_local() {
+run_ansible_playbook() {
+  local playbook="$1"
+  shift
+  local cmd=()
+
+  cmd=(ansible-playbook "$@")
+  if [[ "$CHECK_MODE" == "true" ]]; then
+    cmd+=(--check)
+  fi
+  if [[ ${#PASSTHROUGH_ARGS[@]} -gt 0 ]]; then
+    cmd+=("${PASSTHROUGH_ARGS[@]}")
+  fi
+  cmd+=("$playbook")
+  "${cmd[@]}"
+}
+
+run_remote() {
   ensure_ansible_local
 
   confirm_or_prompt TARGET_HOST "Target VPS host (IP or DNS name)"
@@ -336,18 +539,18 @@ run_local() {
   tmp_inventory="$(mktemp)"
   tmp_vars="$(mktemp)"
 
-  trap 'rm -f "$tmp_inventory" "$tmp_vars"' EXIT
+  trap "rm -f '$tmp_inventory' '$tmp_vars'" EXIT
 
   cat > "$tmp_inventory" <<INVENTORY
-[target]
-target ansible_host=${TARGET_HOST} ansible_python_interpreter=/usr/bin/python3
+[openvps]
+openvps_host ansible_host=${TARGET_HOST} ansible_python_interpreter=/usr/bin/python3
 INVENTORY
 
   write_extra_vars_file "$tmp_vars" "$ssh_public_key_value"
 
   local common_args=(
     -i "$tmp_inventory"
-    -e "target=target"
+    -e "target=openvps"
     -e "@$tmp_vars"
   )
 
@@ -358,25 +561,20 @@ INVENTORY
     apply_ssh_args+=( --private-key "$SSH_KEY" )
   fi
 
-  local check_args=()
-  if [[ "$CHECK_MODE" == "true" ]]; then
-    check_args+=( --check )
-  fi
-
   info "Phase 1/2: bootstrap"
-  ansible-playbook "${common_args[@]}" "${bootstrap_ssh_args[@]}" "${check_args[@]}" \
-    "${PASSTHROUGH_ARGS[@]}" "$SCRIPT_DIR/playbooks/vps-bootstrap.yml"
+  run_ansible_playbook "$SCRIPT_DIR/playbooks/vps-bootstrap.yml" \
+    "${common_args[@]}" "${bootstrap_ssh_args[@]}"
 
   info "Phase 2/2: apply"
-  if ! ansible-playbook "${common_args[@]}" "${apply_ssh_args[@]}" "${check_args[@]}" \
-      "${PASSTHROUGH_ARGS[@]}" "$SCRIPT_DIR/playbooks/vps-apply.yml"; then
+  if ! run_ansible_playbook "$SCRIPT_DIR/playbooks/vps-apply.yml" \
+      "${common_args[@]}" "${apply_ssh_args[@]}"; then
     warn "Apply phase as '${ADMIN_USER}' failed; retrying as '${BOOTSTRAP_USER}'."
-    ansible-playbook "${common_args[@]}" "${bootstrap_ssh_args[@]}" "${check_args[@]}" \
-      "${PASSTHROUGH_ARGS[@]}" "$SCRIPT_DIR/playbooks/vps-apply.yml"
+    run_ansible_playbook "$SCRIPT_DIR/playbooks/vps-apply.yml" \
+      "${common_args[@]}" "${bootstrap_ssh_args[@]}"
   fi
 }
 
-run_inplace() {
+run_local() {
   if [[ "$(id -u)" -ne 0 ]]; then
     err "Local mode must run as root."
     exit 1
@@ -394,37 +592,34 @@ run_inplace() {
   tmp_inventory="$(mktemp)"
   tmp_vars="$(mktemp)"
 
-  trap 'rm -f "$tmp_inventory" "$tmp_vars"' EXIT
+  trap "rm -f '$tmp_inventory' '$tmp_vars'" EXIT
 
   cat > "$tmp_inventory" <<INVENTORY
-[target]
-localhost ansible_connection=local ansible_python_interpreter=/usr/bin/python3
+[openvps]
+openvps_local ansible_connection=local ansible_python_interpreter=/usr/bin/python3
 INVENTORY
 
   write_extra_vars_file "$tmp_vars" "$ssh_public_key_value"
 
   local common_args=(
     -i "$tmp_inventory"
-    -e "target=target"
+    -e "target=openvps"
     -e "@$tmp_vars"
   )
 
-  local check_args=()
-  if [[ "$CHECK_MODE" == "true" ]]; then
-    check_args+=( --check )
-  fi
-
   info "Phase 1/2: bootstrap"
-  ansible-playbook "${common_args[@]}" "${check_args[@]}" \
-    "${PASSTHROUGH_ARGS[@]}" "$SCRIPT_DIR/playbooks/vps-bootstrap.yml"
+  run_ansible_playbook "$SCRIPT_DIR/playbooks/vps-bootstrap.yml" \
+    "${common_args[@]}"
 
   info "Phase 2/2: apply"
-  ansible-playbook "${common_args[@]}" "${check_args[@]}" \
-    "${PASSTHROUGH_ARGS[@]}" "$SCRIPT_DIR/playbooks/vps-apply.yml"
+  run_ansible_playbook "$SCRIPT_DIR/playbooks/vps-apply.yml" \
+    "${common_args[@]}"
 }
 
 main() {
+  ORIGINAL_ARGC=$#
   parse_args "$@"
+  maybe_run_interactive_wizard
   auto_detect_mode
   validate_mode
   prepare_ansible_env
@@ -438,10 +633,10 @@ main() {
 
   case "$MODE" in
     remote)
-      run_local
+      run_remote
       ;;
     local)
-      run_inplace
+      run_local
       ;;
   esac
 

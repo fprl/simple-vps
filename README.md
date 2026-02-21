@@ -45,6 +45,16 @@ If running from a local checkout on the VPS:
 ./install.sh --mode local --admin-user admin
 ```
 
+### Guided Terminal Wizard
+
+For a full interactive setup flow:
+
+```bash
+./install.sh --interactive
+```
+
+If you run `./install.sh` with no arguments in an interactive terminal, the wizard starts automatically.
+
 ## Installer Options
 
 ```text
@@ -58,6 +68,7 @@ If running from a local checkout on the VPS:
 --locale <locale>              # default: en_US.UTF-8
 --tailscale / --no-tailscale
 --check
+--interactive / --no-interactive
 --yes
 ```
 
