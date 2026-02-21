@@ -55,6 +55,25 @@ For a full interactive setup flow:
 
 If you run `./install.sh` with no arguments in an interactive terminal, the wizard starts automatically.
 
+## Password-Only VPS Credentials
+
+Some VPS providers initially give only `root + password`.
+
+- `remote` mode expects SSH key-based auth.
+- If you only have password auth, first SSH into the VPS and run `local` mode there.
+
+Safe first-run pattern for password-only access:
+
+1. SSH into VPS with password as root.
+2. Add your public key to `/root/.ssh/authorized_keys` or pass `--ssh-public-key-file`.
+3. Run OpenVPS locally on the VPS:
+
+```bash
+./install.sh --mode local --admin-user admin
+```
+
+OpenVPS will block local mode if no key source is available, to avoid lockout after SSH hardening.
+
 ## Installer Options
 
 ```text
@@ -64,8 +83,6 @@ If you run `./install.sh` with no arguments in an interactive terminal, the wiza
 --ssh-key <path>
 --ssh-public-key-file <path>
 --admin-user <name>            # default: admin
---timezone <tz>                # default: UTC
---locale <locale>              # default: en_US.UTF-8
 --tailscale / --no-tailscale
 --check
 --interactive / --no-interactive
@@ -114,10 +131,10 @@ Advanced extension mechanics (for example custom role injection) are intentional
 
 ```bash
 ansible-playbook -i inventory/hosts.ini playbooks/vps-bootstrap.yml \
-  -e "target=vps openvps_admin_user=admin openvps_timezone=UTC"
+  -e "target=vps openvps_admin_user=admin"
 
 ansible-playbook -i inventory/hosts.ini playbooks/vps-apply.yml \
-  -e "target=vps openvps_admin_user=admin openvps_timezone=UTC"
+  -e "target=vps openvps_admin_user=admin"
 ```
 
 ## Tailscale (Optional)

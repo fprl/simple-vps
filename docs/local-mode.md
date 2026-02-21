@@ -22,8 +22,6 @@ You can also start the guided wizard and choose local mode in-menu:
 ## Optional Flags
 
 - `--tailscale`
-- `--timezone UTC`
-- `--locale en_US.UTF-8`
 - `--check`
 
 ## Notes

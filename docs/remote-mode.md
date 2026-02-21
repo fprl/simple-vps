@@ -27,7 +27,6 @@ You can also start the guided wizard and choose remote mode in-menu:
 ## Optional Flags
 
 - `--tailscale` to enable Tailscale setup
-- `--timezone UTC`
 - `--check` for dry-run
 - `--yes` for non-interactive runs
 

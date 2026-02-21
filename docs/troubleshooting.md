@@ -5,6 +5,21 @@
 - Verify host/IP and reachable port 22.
 - Verify bootstrap user (`--bootstrap-user`) is correct.
 - Verify key path and permissions (`--ssh-key`).
+- Remote mode does not use password prompts. For password-only credentials, use local mode on the VPS first.
+
+## Provider gave only password credentials
+
+Use this bootstrapping sequence:
+
+1. SSH into the VPS as root using password.
+2. Add your SSH public key to `/root/.ssh/authorized_keys` (or prepare a public key file).
+3. Run:
+
+```bash
+./install.sh --mode local --admin-user admin
+```
+
+OpenVPS prevents local-mode execution when no key source is available, to avoid lockout after SSH hardening.
 
 ## Apply fails as admin user
 

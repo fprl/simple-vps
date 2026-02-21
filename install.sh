@@ -17,10 +17,22 @@ ASSUME_YES="false"
 INTERACTIVE_MODE="auto"
 PASSTHROUGH_ARGS=()
 ORIGINAL_ARGC=0
+MODE_SET="false"
+TARGET_HOST_SET="false"
+BOOTSTRAP_USER_SET="false"
+SSH_KEY_SET="false"
+SSH_PUBLIC_KEY_FILE_SET="false"
+ADMIN_USER_SET="false"
+TAILSCALE_SET="false"
+CHECK_MODE_SET="false"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+DIM='\033[2m'
 NC='\033[0m'
 
 usage() {
@@ -38,8 +50,6 @@ Options:
   --ssh-key <path>               SSH private key for remote mode
   --ssh-public-key-file <path>   Explicit public key to add for admin user
   --admin-user <name>            Admin user to create/configure (default: admin)
-  --timezone <tz>                Server timezone (default: UTC)
-  --locale <locale>              Server locale (default: en_US.UTF-8)
   --tailscale                    Enable Tailscale setup
   --no-tailscale                 Disable Tailscale setup (default)
   --check                        Run Ansible in check mode
@@ -67,8 +77,42 @@ info() {
   echo -e "${GREEN}==>${NC} $*"
 }
 
+step() {
+  echo -e "${BLUE}-->${NC} $*"
+}
+
 can_prompt() {
   [[ -t 0 && -t 1 ]]
+}
+
+setup_colors() {
+  if [[ ! -t 1 ]]; then
+    RED=''
+    GREEN=''
+    YELLOW=''
+    BLUE=''
+    CYAN=''
+    BOLD=''
+    DIM=''
+    NC=''
+  fi
+}
+
+ui_hr() {
+  printf "%b%s%b\n" "$DIM" "------------------------------------------------------------" "$NC"
+}
+
+ui_title() {
+  printf "\n%b%s%b\n" "${BOLD}${BLUE}" "$1" "$NC"
+  ui_hr
+}
+
+ui_section() {
+  printf "\n%b%s%b\n" "${BOLD}${CYAN}" "$1" "$NC"
+}
+
+ui_kv() {
+  printf "  %b%-16s%b %s\n" "$DIM" "$1" "$NC" "$2"
 }
 
 prepare_ansible_env() {
@@ -112,9 +156,10 @@ confirm_or_prompt() {
   local var_name="$1"
   local prompt="$2"
   local default_value="${3:-}"
+  local force_prompt="${4:-false}"
   local current_value="${!var_name:-}"
 
-  if [[ -n "$current_value" ]]; then
+  if [[ "$force_prompt" != "true" ]] && [[ -n "$current_value" ]]; then
     return
   fi
 
@@ -129,10 +174,12 @@ confirm_or_prompt() {
   fi
 
   if [[ -n "$default_value" ]]; then
-    read -r -p "$prompt [$default_value]: " current_value
+    printf "%b?%b %s [%s]: " "$CYAN" "$NC" "$prompt" "$default_value"
+    read -r current_value
     current_value="${current_value:-$default_value}"
   else
-    read -r -p "$prompt: " current_value
+    printf "%b?%b %s: " "$CYAN" "$NC" "$prompt"
+    read -r current_value
   fi
 
   if [[ -z "$current_value" ]]; then
@@ -147,11 +194,12 @@ prompt_yes_no() {
   local var_name="$1"
   local prompt="$2"
   local default_value="${3:-false}"
+  local force_prompt="${4:-false}"
   local current_value="${!var_name:-}"
   local answer=""
   local suffix="[y/N]"
 
-  if [[ -n "$current_value" && "$current_value" != "auto" ]]; then
+  if [[ "$force_prompt" != "true" ]] && [[ -n "$current_value" && "$current_value" != "auto" ]]; then
     return
   fi
 
@@ -165,8 +213,9 @@ prompt_yes_no() {
   fi
 
   while true; do
-    read -r -p "$prompt $suffix: " answer
-    answer="${answer,,}"
+    printf "%b?%b %s %s: " "$CYAN" "$NC" "$prompt" "$suffix"
+    read -r answer
+    answer="$(printf '%s' "$answer" | tr '[:upper:]' '[:lower:]')"
     if [[ -z "$answer" ]]; then
       printf -v "$var_name" '%s' "$default_value"
       return
@@ -197,16 +246,18 @@ prompt_mode() {
     return
   fi
 
-  echo "Select installation mode:"
-  echo "  1) remote  (run from this machine against a VPS host)"
-  echo "  2) local   (run directly on the target VPS)"
+  ui_section "Installation mode"
+  echo "  1) remote   Run from this machine against a VPS host"
+  echo "  2) local    Run directly on the target VPS"
 
   while true; do
     if [[ "$default_mode" == "local" ]]; then
-      read -r -p "Choice [2]: " choice
+      printf "%b?%b Choice [2]: " "$CYAN" "$NC"
+      read -r choice
       choice="${choice:-2}"
     else
-      read -r -p "Choice [1]: " choice
+      printf "%b?%b Choice [1]: " "$CYAN" "$NC"
+      read -r choice
       choice="${choice:-1}"
     fi
     case "$choice" in
@@ -227,15 +278,15 @@ interactive_wizard() {
   local default_mode="remote"
   local proceed="true"
   local set_ssh_key="false"
+  local force_tailscale_prompt="false"
+  local force_check_prompt="false"
 
   if ! can_prompt; then
     err "Interactive wizard requested, but terminal is not interactive."
     exit 1
   fi
 
-  echo ""
-  echo "OpenVPS Setup Wizard"
-  echo "--------------------"
+  ui_title "OpenVPS Setup Wizard"
 
   if [[ "$(id -u)" -eq 0 ]] && [[ -f /etc/os-release ]]; then
     default_mode="local"
@@ -243,42 +294,59 @@ interactive_wizard() {
   prompt_mode "$default_mode"
 
   if [[ "$MODE" == "remote" ]]; then
+    ui_section "Remote target"
     confirm_or_prompt TARGET_HOST "Target VPS host (IP or DNS name)"
+    if [[ "$BOOTSTRAP_USER_SET" != "true" ]]; then
+      BOOTSTRAP_USER=""
+    fi
     confirm_or_prompt BOOTSTRAP_USER "Bootstrap SSH user" "root"
 
     if [[ -z "$SSH_KEY" ]]; then
-      prompt_yes_no set_ssh_key "Use SSH private key file?" "false"
+      prompt_yes_no set_ssh_key "Use SSH private key file?" "false" "true"
       if [[ "$set_ssh_key" == "true" ]]; then
         confirm_or_prompt SSH_KEY "Path to SSH private key (for example ~/.ssh/id_ed25519)"
       fi
     fi
   fi
 
-  confirm_or_prompt ADMIN_USER "Admin username" "admin"
-  confirm_or_prompt TIMEZONE "Server timezone" "UTC"
-  confirm_or_prompt LOCALE "Server locale" "en_US.UTF-8"
-  prompt_yes_no TAILSCALE "Enable Tailscale?" "$TAILSCALE"
-  prompt_yes_no CHECK_MODE "Run in check (dry-run) mode?" "$CHECK_MODE"
+  ui_section "Server settings"
+  if [[ "$ADMIN_USER_SET" != "true" ]]; then
+    ADMIN_USER=""
+  fi
 
-  echo ""
-  echo "Summary:"
-  echo "  mode: $MODE"
+  if [[ "$TAILSCALE_SET" != "true" ]]; then
+    force_tailscale_prompt="true"
+  fi
+  if [[ "$CHECK_MODE_SET" != "true" ]]; then
+    force_check_prompt="true"
+  fi
+
+  confirm_or_prompt ADMIN_USER "Admin username" "admin"
+  ui_kv "timezone" "$TIMEZONE (fixed)"
+  ui_kv "locale" "$LOCALE (fixed)"
+
+  prompt_yes_no TAILSCALE "Enable Tailscale?" "$TAILSCALE" "$force_tailscale_prompt"
+  prompt_yes_no CHECK_MODE "Run in check (dry-run) mode?" "$CHECK_MODE" "$force_check_prompt"
+
+  ui_title "Provisioning Summary"
+  ui_kv "mode" "$MODE"
   if [[ "$MODE" == "remote" ]]; then
-    echo "  host: $TARGET_HOST"
-    echo "  bootstrap_user: $BOOTSTRAP_USER"
+    ui_kv "host" "$TARGET_HOST"
+    ui_kv "bootstrap_user" "$BOOTSTRAP_USER"
     if [[ -n "$SSH_KEY" ]]; then
-      echo "  ssh_key: $SSH_KEY"
+      ui_kv "ssh_key" "$SSH_KEY"
     else
-      echo "  ssh_key: <default SSH config>"
+      ui_kv "ssh_key" "<default SSH config>"
     fi
   fi
-  echo "  admin_user: $ADMIN_USER"
-  echo "  timezone: $TIMEZONE"
-  echo "  locale: $LOCALE"
-  echo "  tailscale: $TAILSCALE"
-  echo "  check_mode: $CHECK_MODE"
+  ui_kv "admin_user" "$ADMIN_USER"
+  ui_kv "timezone" "$TIMEZONE"
+  ui_kv "locale" "$LOCALE"
+  ui_kv "tailscale" "$TAILSCALE"
+  ui_kv "check_mode" "$CHECK_MODE"
+  ui_hr
 
-  prompt_yes_no proceed "Proceed with provisioning?" "true"
+  prompt_yes_no proceed "Proceed with provisioning?" "true" "true"
   if [[ "$proceed" != "true" ]]; then
     err "Aborted by user."
     exit 1
@@ -313,46 +381,47 @@ parse_args() {
     case "$1" in
       --mode)
         MODE="${2:-}"
+        MODE_SET="true"
         shift 2
         ;;
       --host|--ip)
         TARGET_HOST="${2:-}"
+        TARGET_HOST_SET="true"
         shift 2
         ;;
       --bootstrap-user)
         BOOTSTRAP_USER="${2:-}"
+        BOOTSTRAP_USER_SET="true"
         shift 2
         ;;
       --ssh-key)
         SSH_KEY="${2:-}"
+        SSH_KEY_SET="true"
         shift 2
         ;;
       --ssh-public-key-file)
         SSH_PUBLIC_KEY_FILE="${2:-}"
+        SSH_PUBLIC_KEY_FILE_SET="true"
         shift 2
         ;;
       --admin-user)
         ADMIN_USER="${2:-}"
-        shift 2
-        ;;
-      --timezone)
-        TIMEZONE="${2:-}"
-        shift 2
-        ;;
-      --locale)
-        LOCALE="${2:-}"
+        ADMIN_USER_SET="true"
         shift 2
         ;;
       --tailscale)
         TAILSCALE="true"
+        TAILSCALE_SET="true"
         shift
         ;;
       --no-tailscale)
         TAILSCALE="false"
+        TAILSCALE_SET="true"
         shift
         ;;
       --check)
         CHECK_MODE="true"
+        CHECK_MODE_SET="true"
         shift
         ;;
       --interactive)
@@ -494,6 +563,10 @@ preflight_ssh() {
 
   if ! "${cmd[@]}" "${user}@${host}" "echo connected" >/dev/null 2>&1; then
     err "SSH preflight failed for ${user}@${host}."
+    if [[ -z "$key" ]]; then
+      err "Remote mode expects SSH key-based auth (via ssh config/agent/default keys)."
+      err "If you only have password credentials, SSH to the VPS first and use --mode local."
+    fi
     err "Check host, credentials, and key access."
     exit 1
   fi
@@ -561,11 +634,11 @@ INVENTORY
     apply_ssh_args+=( --private-key "$SSH_KEY" )
   fi
 
-  info "Phase 1/2: bootstrap"
+  step "Phase 1/2: bootstrap"
   run_ansible_playbook "$SCRIPT_DIR/playbooks/vps-bootstrap.yml" \
     "${common_args[@]}" "${bootstrap_ssh_args[@]}"
 
-  info "Phase 2/2: apply"
+  step "Phase 2/2: apply"
   if ! run_ansible_playbook "$SCRIPT_DIR/playbooks/vps-apply.yml" \
       "${common_args[@]}" "${apply_ssh_args[@]}"; then
     warn "Apply phase as '${ADMIN_USER}' failed; retrying as '${BOOTSTRAP_USER}'."
@@ -583,7 +656,17 @@ run_local() {
   ensure_ansible_inplace
 
   local ssh_public_key_value=""
+  local root_keys_path="/root/.ssh/authorized_keys"
   read_public_key_file ssh_public_key_value
+
+  # Prevent lockout: local mode with password-only first login needs an explicit
+  # key file or existing root authorized_keys before SSH hardening is applied.
+  if [[ -z "$ssh_public_key_value" && ! -s "$root_keys_path" ]]; then
+    err "No SSH public key source found for admin user."
+    err "Provide --ssh-public-key-file, or create $root_keys_path first."
+    err "This protects against locking yourself out when password auth is disabled."
+    exit 1
+  fi
 
   info "Running in local mode on localhost"
 
@@ -607,11 +690,11 @@ INVENTORY
     -e "@$tmp_vars"
   )
 
-  info "Phase 1/2: bootstrap"
+  step "Phase 1/2: bootstrap"
   run_ansible_playbook "$SCRIPT_DIR/playbooks/vps-bootstrap.yml" \
     "${common_args[@]}"
 
-  info "Phase 2/2: apply"
+  step "Phase 2/2: apply"
   run_ansible_playbook "$SCRIPT_DIR/playbooks/vps-apply.yml" \
     "${common_args[@]}"
 }
@@ -619,6 +702,7 @@ INVENTORY
 main() {
   ORIGINAL_ARGC=$#
   parse_args "$@"
+  setup_colors
   maybe_run_interactive_wizard
   auto_detect_mode
   validate_mode

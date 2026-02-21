@@ -27,8 +27,8 @@
     - ansible_facts['architecture'] == 'x86_64'
     - not ansible_check_mode
 
-- name: Install zoxide
-  shell: curl -sS https://raw.githubusercontent.com/ajeetdsouza/zoxide/main/install.sh | bash
+- name: Install zoxide (system-wide)
+  shell: curl -sS https://raw.githubusercontent.com/ajeetdsouza/zoxide/main/install.sh | bash -s -- --bin-dir /usr/local/bin
   args:
     creates: /usr/local/bin/zoxide
   when: not ansible_check_mode
@@ -81,9 +81,12 @@
 
 - name: Install Node.js LTS (NodeSource)
   shell: |
+    set -e
     curl -fsSL https://deb.nodesource.com/setup_lts.x | bash -
+    install -d /etc/openvps
+    touch /etc/openvps/.nodesource_lts_configured
   args:
-    creates: /etc/apt/sources.list.d/nodesource.list
+    creates: /etc/openvps/.nodesource_lts_configured
   when: not ansible_check_mode
 
 - name: Install Node.js
