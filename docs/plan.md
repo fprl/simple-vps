@@ -41,7 +41,6 @@
 - [ ] Implement precedence rules (CLI > env > config > defaults).
 - [ ] Support initial v1 keys:
 - [ ] `admin_user`
-- [ ] `timezone`
 - [ ] `security.tailscale`
 - [ ] optional package additions (without full custom role system yet)
 - [ ] Validate config with friendly errors before execution.
@@ -53,21 +52,21 @@
 - [x] Add docs page for local mode quickstart.
 - [x] Add docs page for security modes (with and without Tailscale).
 - [x] Add troubleshooting page (SSH failures, auth issues, package/network failures).
-- [ ] Add "what changed on your server" audit-oriented summary docs.
+- [x] Add "what changed on your server" audit-oriented summary docs.
 
 ## Phase 6: Quality Gates and CI
 
 - [x] Add `ansible-lint` and syntax checks in CI.
 - [ ] Add idempotency check in CI (run apply twice and assert no changes on second pass).
 - [ ] Add minimal integration smoke test for both installer modes.
-- [ ] Add shell linting (`shellcheck`) for scripts.
+- [x] Add shell linting (`shellcheck`) for scripts.
 - [ ] Establish release checklist before tagging versions.
 
 ## Phase 7: Release and OSS Readiness
 
 - [ ] Create versioning strategy and changelog process.
 - [ ] Publish first v1 milestone with clear supported scope.
-- [ ] Add contribution guide focused on reproducibility and idempotency.
+- [x] Add contribution guide focused on reproducibility and idempotency.
 - [ ] Add issue templates for install failures and environment reports.
 
 ## Phase 8: Post-v1 Extensions

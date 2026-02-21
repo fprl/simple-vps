@@ -125,6 +125,7 @@ Advanced extension mechanics (for example custom role injection) are intentional
 - `docs/remote-mode.md`
 - `docs/security-modes.md`
 - `docs/troubleshooting.md`
+- `docs/server-audit.md`
 - `docs/plan.md`
 
 ## From Source (Direct Ansible)
@@ -170,3 +171,5 @@ PRs are welcome. Current priorities:
 - hardening the base installer flow
 - improving idempotency and tests
 - documentation accuracy vs runtime behavior
+
+See `CONTRIBUTING.md` for validation and test matrix details.
