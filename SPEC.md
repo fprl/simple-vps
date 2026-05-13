@@ -59,6 +59,8 @@ The default install should create:
 - Node.js LTS
 - pnpm
 - PM2
+- `/usr/local/bin/simple-vps`
+- `/etc/simple-vps/state.json`
 - Basic server packages: `git`, `curl`, `jq`, `htop`, `tmux`, `rsync`, `unzip`, `ncdu`
 - `/usr/local/bin/simple-vps` for server-local management
 
@@ -250,10 +252,21 @@ Current Cloudflare Tunnel behavior:
 - Until Cloudflare API automation lands, configure the tunnel public hostname in
   Cloudflare Zero Trust to route to `http://127.0.0.1:8080`.
 
+Current CLI behavior:
+
+- `simple-vps status` prints state path, route count, and service status.
+- `simple-vps routes` lists host-to-port routes from state.
+- `simple-vps publish --host HOST --port PORT` writes state and regenerates
+  `/etc/caddy/Caddyfile`.
+- `simple-vps unpublish --host HOST` removes a route and regenerates Caddy.
+- `simple-vps generate-caddy` regenerates Caddy from state.
+- Mutating commands require root, validate the generated Caddyfile, keep
+  backups under `/etc/simple-vps/backups`, and reload Caddy.
+
 Known gaps:
 
 - Cloudflare Tunnel API automation is not implemented yet.
-- `/usr/local/bin/simple-vps` CLI is not implemented yet.
+- Cloudflare config generation is not implemented yet.
 - Hosted installer needs fresh-VPS validation.
 - Public SSH is still needed during bootstrap unless Tailscale auth succeeds.
 - Static inventory/direct Ansible path is legacy and should not drive the product.
@@ -265,7 +278,7 @@ Known gaps:
 3. Make Tailscale part of the secure baseline.
 4. Add Cloudflare Tunnel install and service setup.
 5. Add `/usr/local/bin/simple-vps`.
-6. Add `simple-vps publish` / `unpublish` with generated Caddy/cloudflared config.
+6. Add Cloudflare API/config automation for tunnel public hostnames.
 7. Add fresh Ubuntu 24.04 smoke testing and idempotency testing.
 8. Only then tag v1.
 

@@ -26,6 +26,7 @@ Default install path:
 - cloudflared installed for Cloudflare Tunnel ingress
 - Caddy listening on `127.0.0.1:8080`
 - Node.js LTS, pnpm, PM2
+- `/usr/local/bin/simple-vps` for status and route management
 
 Explicit optional installs:
 
@@ -40,6 +41,15 @@ Cloudflare Tunnel is installed by default. Provide
 `SIMPLE_VPS_CLOUDFLARE_TUNNEL_TOKEN` or `--cloudflare-tunnel-token` to enable
 the `cloudflared` service. The tunnel public hostname should route to
 `http://127.0.0.1:8080`.
+
+Server-local route management:
+
+```bash
+simple-vps status
+simple-vps routes
+simple-vps publish --host example.com --port 3000
+simple-vps unpublish --host example.com
+```
 
 ## Quick Start
 

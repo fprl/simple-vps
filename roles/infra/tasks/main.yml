@@ -51,6 +51,43 @@
       notify: Restart Docker
   when: simple_vps_install_docker | default(false) | bool
 
+- name: Create Simple VPS state directory
+  file:
+    path: /etc/simple-vps
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Create Simple VPS backup directory
+  file:
+    path: /etc/simple-vps/backups
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Initialize Simple VPS state file
+  copy:
+    dest: /etc/simple-vps/state.json
+    owner: root
+    group: root
+    mode: '0644'
+    force: no
+    content: |
+      {
+        "routes": [],
+        "version": 1
+      }
+
+- name: Install Simple VPS CLI
+  copy:
+    src: simple-vps
+    dest: /usr/local/bin/simple-vps
+    owner: root
+    group: root
+    mode: '0755'
+
 - name: Add Caddy GPG key
   apt_key:
     url: https://dl.cloudsmith.io/public/caddy/stable/gpg.key
