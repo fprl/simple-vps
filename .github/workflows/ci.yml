@@ -14,10 +14,9 @@ jobs:
       - name: Bash syntax checks
         run: |
           bash -n install.sh
-          bash -n scripts/host-ip
       - name: Shellcheck
         run: |
-          shellcheck install.sh scripts/host-ip
+          shellcheck install.sh
 
   ansible:
     runs-on: ubuntu-latest

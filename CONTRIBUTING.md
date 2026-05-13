@@ -8,7 +8,6 @@ Run these checks from repo root:
 
 ```bash
 bash -n install.sh
-bash -n scripts/host-ip
 ansible-playbook --syntax-check playbooks/vps-bootstrap.yml
 ansible-playbook --syntax-check playbooks/vps-apply.yml
 ansible-lint playbooks/vps-bootstrap.yml playbooks/vps-apply.yml
@@ -50,4 +49,4 @@ Please prioritize:
 - Idempotency
 - Reproducibility
 - Clear errors and recovery paths
-- Documentation accuracy
+- Keeping `SPEC.md` accurate
