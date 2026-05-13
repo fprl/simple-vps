@@ -3,6 +3,10 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+OPENVPS_REPO_TARBALL_URL="${OPENVPS_REPO_TARBALL_URL:-https://github.com/fprl/openvps/archive/refs/heads/main.tar.gz}"
+OPENVPS_BOOTSTRAP_DOWNLOAD="${OPENVPS_BOOTSTRAP_DOWNLOAD:-true}"
+OPENVPS_BOOTSTRAPPED="${OPENVPS_BOOTSTRAPPED:-false}"
+
 MODE="auto"
 TARGET_HOST=""
 BOOTSTRAP_USER="root"
@@ -137,11 +141,51 @@ ensure_openvps_layout() {
 
   for file in "${required_files[@]}"; do
     if [[ ! -f "$file" ]]; then
-      err "Required OpenVPS file not found: $file"
-      err "Run install.sh from an OpenVPS checkout that includes playbooks and roles."
-      exit 1
+      bootstrap_openvps_checkout "$@"
     fi
   done
+}
+
+bootstrap_openvps_checkout() {
+  local tmp_dir
+  local source_dir
+  local archive_path
+
+  if [[ "$OPENVPS_BOOTSTRAP_DOWNLOAD" != "true" ]]; then
+    err "Required OpenVPS files were not found beside install.sh."
+    err "Run from a checkout, or allow bootstrap download with OPENVPS_BOOTSTRAP_DOWNLOAD=true."
+    exit 1
+  fi
+
+  if [[ "$OPENVPS_BOOTSTRAPPED" == "true" ]]; then
+    err "OpenVPS bootstrap download completed, but required files are still missing."
+    err "Check OPENVPS_REPO_TARBALL_URL: $OPENVPS_REPO_TARBALL_URL"
+    exit 1
+  fi
+
+  require_cmd curl
+  require_cmd tar
+  require_cmd mktemp
+
+  tmp_dir="$(mktemp -d)"
+  source_dir="$tmp_dir/openvps"
+  archive_path="$tmp_dir/openvps.tar.gz"
+  mkdir -p "$source_dir"
+
+  info "OpenVPS checkout not found beside install.sh."
+  info "Downloading OpenVPS from $OPENVPS_REPO_TARBALL_URL"
+
+  curl -fsSL "$OPENVPS_REPO_TARBALL_URL" -o "$archive_path"
+  tar -xzf "$archive_path" -C "$source_dir" --strip-components=1
+
+  if [[ ! -f "$source_dir/install.sh" ]]; then
+    err "Downloaded OpenVPS archive did not contain install.sh."
+    exit 1
+  fi
+
+  info "Re-running installer from downloaded checkout."
+  export OPENVPS_BOOTSTRAPPED=true
+  exec "$source_dir/install.sh" "$@"
 }
 
 require_cmd() {
@@ -707,7 +751,7 @@ main() {
   auto_detect_mode
   validate_mode
   prepare_ansible_env
-  ensure_openvps_layout
+  ensure_openvps_layout "$@"
 
   info "OpenVPS installer starting"
   info "Mode: $MODE"
