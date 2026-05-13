@@ -1,10 +1,189 @@
 # OpenVPS
 
-One-command provisioning for developer-ready VPS instances.
+Opinionated production VPS setup for Franco's Hetzner servers.
 
-OpenVPS gives you a secure, modern baseline on a fresh Ubuntu VPS, with Ansible as the converge engine and `install.sh` as the user-facing entrypoint.
+OpenVPS is not trying to become a generic VPS framework. The goal is simpler:
 
-## What You Get
+```text
+fresh Ubuntu VPS -> run one script -> secure production box ready for apps
+```
+
+The current implementation uses Ansible as the converge engine and `install.sh` as
+the user-facing entrypoint. The next version should become more opinionated:
+Tailscale for private admin access, Cloudflare Tunnel for public ingress, Caddy as
+a local-only reverse proxy, Docker for apps, and a small `openvps` CLI for day-2
+operations.
+
+## Product Direction
+
+### Production Default
+
+The default install should create a secure production baseline:
+
+- Admin user with key-based access
+- SSH hardened and reachable only through Tailscale
+- UFW deny-all inbound by default
+- Optional Hetzner firewall automation, also deny-all inbound
+- Tailscale installed for private admin access
+- Cloudflare Tunnel installed for public web ingress
+- Caddy listening locally, not exposed directly to the internet
+- Docker + Compose plugin
+- Basic server packages: `git`, `curl`, `jq`, `htop`, `tmux`, `rsync`, `unzip`, `ncdu`
+- `/usr/local/bin/openvps` installed for server-local management
+
+Public traffic should flow like this:
+
+```text
+Browser
+  -> Cloudflare
+  -> Cloudflare Tunnel
+  -> Caddy on 127.0.0.1
+  -> Docker app on 127.0.0.1/private network
+```
+
+Admin traffic should flow like this:
+
+```text
+Laptop
+  -> Tailscale
+  -> VPS SSH
+```
+
+The VPS should not expose public `22`, `80`, `443`, or random Docker ports.
+
+### What Stays Optional
+
+Personal comfort tools should not be able to break the production baseline. They
+belong behind the CLI, not in the default install:
+
+```bash
+openvps devtools install
+```
+
+That can install the shell and agent setup:
+
+- Zsh + Oh My Zsh
+- Powerlevel10k
+- Zsh autosuggestions/highlighting
+- `fzf`, `zoxide`, `atuin`, `lsd`, `bat`
+- Node.js/pnpm extras
+- AI CLIs: Codex, Claude, Gemini, OpenCode
+
+### Day-2 CLI
+
+The CLI should stay tiny and boring:
+
+```bash
+openvps status
+openvps publish --host example.com --port 3000
+openvps unpublish --host example.com
+openvps routes
+openvps devtools install
+```
+
+`publish` means: expose this local service through the production ingress stack.
+
+For example:
+
+```bash
+openvps publish --host example.com --port 3000
+openvps publish --host api.example.com --port 8080
+```
+
+Internally, OpenVPS should maintain one source of truth:
+
+```text
+/etc/openvps/state.json
+```
+
+Then generate:
+
+```text
+/etc/cloudflared/config.yml
+/etc/caddy/Caddyfile
+```
+
+The command should be idempotent and defensive:
+
+- Existing matching route: no-op
+- Existing conflicting route: fail unless `--force`
+- Existing Caddy host: fail unless `--replace`
+- Validate Caddy before reload
+- Validate Cloudflare/cloudflared config before reload where possible
+- Keep backups before changing generated files
+
+### Cloudflare Model
+
+One Cloudflare Tunnel per server:
+
+```text
+prod-1 tunnel -> apps on prod-1
+prod-2 tunnel -> apps on prod-2
+staging-1 tunnel -> apps on staging-1
+```
+
+Many domains can live on the same server:
+
+```text
+example.com        -> prod-1 tunnel -> Caddy -> app on :3000
+www.example.com    -> prod-1 tunnel -> Caddy -> app on :3000
+anotherapp.com     -> prod-1 tunnel -> Caddy -> app on :3001
+api.anotherapp.com -> prod-1 tunnel -> Caddy -> app on :3002
+```
+
+Cloudflare dashboard setup should be one-time only:
+
+- Domain on Cloudflare DNS
+- Cloudflare account secured with passkeys/2FA
+- API token for OpenVPS automation
+- Optional Cloudflare Zero Trust/Access policies for private dashboards
+
+Per-server setup should be automated by OpenVPS.
+
+## Implementation Plan
+
+1. Make the hosted installer real.
+   - `curl .../install.sh | bash` must work without a local checkout.
+   - The bootstrap script should download a pinned repo release/tarball, then run the real installer from that extracted directory.
+
+2. Simplify the default install.
+   - Keep production essentials only.
+   - Move terminal comfort tools and AI CLIs out of the default role.
+   - Keep dev tooling available through `openvps devtools install`.
+
+3. Add the secure ingress baseline.
+   - Install Tailscale.
+   - Install Cloudflare Tunnel.
+   - Configure Caddy local-only.
+   - Set UFW to deny inbound by default.
+   - Allow SSH only through Tailscale.
+
+4. Add the server-local CLI.
+   - Start as a small Python or Bash script at `/usr/local/bin/openvps`.
+   - Use `/etc/openvps/state.json` as the source of truth.
+   - Support `status`, `routes`, `publish`, and `unpublish`.
+
+5. Automate app publishing safely.
+   - Create/update Cloudflare DNS/tunnel routes through API tokens.
+   - Generate Caddy and cloudflared config.
+   - Validate before reload.
+   - Fail on conflicts unless explicitly forced.
+
+6. Add real validation.
+   - Syntax checks for shell and Ansible.
+   - Caddy config validation.
+   - Installer smoke test on fresh Ubuntu 24.04.
+   - Idempotency test: run installer twice and verify low/no drift.
+
+7. Only then polish docs and release.
+   - Document the exact expected server state.
+   - Document recovery paths when Cloudflare/Tailscale breaks.
+   - Tag a v1 once the fresh Hetzner flow is boring.
+
+## Current Implementation
+
+This section describes the code that exists today, before the refactor described
+above.
 
 A fresh Ubuntu VPS becomes a productive development environment with:
 
@@ -15,7 +194,10 @@ A fresh Ubuntu VPS becomes a productive development environment with:
 - **Languages**: Node.js LTS, Bun, Python (`uv`), Go, Rust
 - **AI CLIs**: Claude Code, OpenAI Codex, Google Gemini CLI, OpenCode
 
-## Quick Start
+The plan is to move shell comfort tools, language extras, and AI CLIs behind
+`openvps devtools install` so they cannot break the default production install.
+
+## Current Quick Start
 
 OpenVPS supports two flows with the same installer interface.
 
@@ -31,19 +213,14 @@ From this repository:
   --admin-user admin
 ```
 
-### Option B: Run directly on the VPS (local mode)
-
-If using hosted installer:
-
-```bash
-curl -fsSL https://openvps.dev/install.sh | bash -s -- --mode local --admin-user admin
-```
-
-If running from a local checkout on the VPS:
+### Option B: Run directly on the VPS from a checkout
 
 ```bash
 ./install.sh --mode local --admin-user admin
 ```
+
+The hosted installer is part of the plan above. Today, `install.sh` expects the
+repo playbooks and roles to exist beside it.
 
 ### Guided Terminal Wizard
 
