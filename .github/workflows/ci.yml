@@ -18,6 +18,17 @@ jobs:
         run: |
           shellcheck install.sh
 
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Python syntax checks
+        run: |
+          PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile roles/infra/files/simple-vps
+      - name: Python tests
+        run: |
+          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests
+
   ansible:
     runs-on: ubuntu-latest
     steps:
