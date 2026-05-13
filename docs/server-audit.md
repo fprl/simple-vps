@@ -20,22 +20,36 @@ Expected:
 ## Core Services
 
 ```bash
-sudo systemctl is-active docker caddy
-docker --version
+sudo systemctl is-active caddy
 caddy version
+node -v
+pnpm -v
+pm2 -v
 ```
 
 Expected:
 
-- Docker active
 - Caddy active
+- Node.js, pnpm, and PM2 installed
+
+## Optional Docker Runtime
+
+Docker is part of the current implementation, but the target production runtime is
+Node.js + PM2 with Docker available as an explicit optional install.
+
+```bash
+sudo systemctl is-active docker
+docker --version
+```
+
+Expected when Docker is installed:
+
+- Docker active
 
 ## Developer Toolchain
 
 ```bash
 zsh --version
-node -v
-pnpm -v
 bun --version
 uv --version
 go version

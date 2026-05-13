@@ -1,6 +1,6 @@
 # OpenVPS
 
-Opinionated production VPS setup for Franco's Hetzner servers.
+Opinionated production VPS setup for getting apps online quickly and securely.
 
 OpenVPS is not trying to become a generic VPS framework. The goal is simpler:
 
@@ -11,8 +11,8 @@ fresh Ubuntu VPS -> run one script -> secure production box ready for apps
 The current implementation uses Ansible as the converge engine and `install.sh` as
 the user-facing entrypoint. The next version should become more opinionated:
 Tailscale for private admin access, Cloudflare Tunnel for public ingress, Caddy as
-a local-only reverse proxy, Docker for apps, and a small `openvps` CLI for day-2
-operations.
+a local-only reverse proxy, PM2 as the default Node app runner, and a small
+`openvps` CLI for day-2 operations.
 
 ## Product Direction
 
@@ -27,7 +27,8 @@ The default install should create a secure production baseline:
 - Tailscale installed for private admin access
 - Cloudflare Tunnel installed for public web ingress
 - Caddy listening locally, not exposed directly to the internet
-- Docker + Compose plugin
+- Node.js LTS + pnpm
+- PM2 as the default process manager for Node apps
 - Basic server packages: `git`, `curl`, `jq`, `htop`, `tmux`, `rsync`, `unzip`, `ncdu`
 - `/usr/local/bin/openvps` installed for server-local management
 
@@ -38,7 +39,7 @@ Browser
   -> Cloudflare
   -> Cloudflare Tunnel
   -> Caddy on 127.0.0.1
-  -> Docker app on 127.0.0.1/private network
+  -> PM2 app on 127.0.0.1
 ```
 
 Admin traffic should flow like this:
@@ -49,7 +50,7 @@ Laptop
   -> VPS SSH
 ```
 
-The VPS should not expose public `22`, `80`, `443`, or random Docker ports.
+The VPS should not expose public `22`, `80`, `443`, or random app ports.
 
 ### What Stays Optional
 
@@ -66,8 +67,13 @@ That can install the shell and agent setup:
 - Powerlevel10k
 - Zsh autosuggestions/highlighting
 - `fzf`, `zoxide`, `atuin`, `lsd`, `bat`
-- Node.js/pnpm extras
 - AI CLIs: Codex, Claude, Gemini, OpenCode
+
+Docker should be optional too:
+
+```bash
+openvps docker install
+```
 
 ### Day-2 CLI
 
@@ -148,7 +154,8 @@ Per-server setup should be automated by OpenVPS.
 
 2. Simplify the default install.
    - Keep production essentials only.
-   - Move terminal comfort tools and AI CLIs out of the default role.
+   - Include Node.js, pnpm, and PM2 because they are the default app runtime.
+   - Move terminal comfort tools, AI CLIs, and Docker out of the default role.
    - Keep dev tooling available through `openvps devtools install`.
 
 3. Add the secure ingress baseline.
@@ -194,8 +201,9 @@ A fresh Ubuntu VPS becomes a productive development environment with:
 - **Languages**: Node.js LTS, Bun, Python (`uv`), Go, Rust
 - **AI CLIs**: Claude Code, OpenAI Codex, Google Gemini CLI, OpenCode
 
-The plan is to move shell comfort tools, language extras, and AI CLIs behind
-`openvps devtools install` so they cannot break the default production install.
+The plan is to make Node.js, pnpm, and PM2 the default runtime, then move shell
+comfort tools, AI CLIs, and Docker behind explicit CLI commands so they cannot
+break the default production install.
 
 ## Current Quick Start
 
@@ -282,7 +290,7 @@ OpenVPS converges in two phases:
 
 2. **Apply** (`playbooks/vps-apply.yml`)
 - Applies security hardening
-- Installs Docker, Caddy, developer tooling, and AI CLIs
+- Installs Docker, Caddy, developer tooling, and AI CLIs in the current implementation
 
 `install.sh` orchestrates both phases with shared variables.
 

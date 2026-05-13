@@ -31,7 +31,7 @@
 - [ ] Validate bootstrap/apply role order and idempotency.
 - [x] Ensure security baseline is always applied in base profile (SSH hardening, UFW, fail2ban, unattended upgrades).
 - [x] Keep Tailscale opt-in for base profile.
-- [ ] Verify Docker/Caddy/dev tool installation behavior across supported Ubuntu versions.
+- [ ] Verify Node.js/PM2/Caddy installation behavior across supported Ubuntu versions.
 - [ ] Ensure reruns are safe and do not regress access (admin user and SSH key handling).
 - [x] Add `--check` workflow guidance for dry-run usage.
 
@@ -42,7 +42,7 @@
 - [ ] Support initial v1 keys:
 - [ ] `admin_user`
 - [ ] `security.tailscale`
-- [ ] optional package additions (without full custom role system yet)
+- [ ] optional package/runtime additions (without full custom role system yet)
 - [ ] Validate config with friendly errors before execution.
 
 ## Phase 5: Documentation and Onboarding
