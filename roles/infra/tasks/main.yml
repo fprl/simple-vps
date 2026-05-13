@@ -95,3 +95,141 @@
     name: caddy
     enabled: yes
     state: started
+
+- name: Set Cloudflare Tunnel service mode
+  set_fact:
+    infra_cloudflare_tunnel_service_mode: >-
+      {{
+        'token'
+        if (simple_vps_cloudflare_tunnel_token | default('') | length) > 0
+        else (
+          'config'
+          if (simple_vps_cloudflare_tunnel_config_path | default('') | length) > 0
+          else 'none'
+        )
+      }}
+  when: simple_vps_enable_cloudflare_tunnel | default(true) | bool
+
+- name: Add Cloudflare package key
+  get_url:
+    url: https://pkg.cloudflare.com/cloudflare-main.gpg
+    dest: /usr/share/keyrings/cloudflare-main.gpg
+    owner: root
+    group: root
+    mode: '0644'
+  when: simple_vps_enable_cloudflare_tunnel | default(true) | bool
+
+- name: Add cloudflared repository
+  copy:
+    dest: /etc/apt/sources.list.d/cloudflared.list
+    owner: root
+    group: root
+    mode: '0644'
+    content: |
+      deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared any main
+  when: simple_vps_enable_cloudflare_tunnel | default(true) | bool
+
+- name: Install cloudflared
+  apt:
+    name: cloudflared
+    state: present
+    update_cache: yes
+  when: simple_vps_enable_cloudflare_tunnel | default(true) | bool
+
+- name: Create cloudflared group
+  group:
+    name: cloudflared
+    system: yes
+  when: simple_vps_enable_cloudflare_tunnel | default(true) | bool
+
+- name: Create cloudflared user
+  user:
+    name: cloudflared
+    group: cloudflared
+    home: /var/lib/cloudflared
+    shell: /usr/sbin/nologin
+    system: yes
+    create_home: yes
+  when: simple_vps_enable_cloudflare_tunnel | default(true) | bool
+
+- name: Create cloudflared config directory
+  file:
+    path: /etc/cloudflared
+    state: directory
+    owner: root
+    group: cloudflared
+    mode: '0750'
+  when: simple_vps_enable_cloudflare_tunnel | default(true) | bool
+
+- name: Write Cloudflare Tunnel token file
+  copy:
+    dest: /etc/cloudflared/tunnel-token
+    owner: root
+    group: cloudflared
+    mode: '0640'
+    content: "{{ simple_vps_cloudflare_tunnel_token | trim }}\n"
+  no_log: true
+  notify: Restart cloudflared
+  when:
+    - simple_vps_enable_cloudflare_tunnel | default(true) | bool
+    - infra_cloudflare_tunnel_service_mode | default('none') == 'token'
+
+- name: Install cloudflared systemd service
+  copy:
+    dest: /etc/systemd/system/cloudflared.service
+    owner: root
+    group: root
+    mode: '0644'
+    content: |
+      [Unit]
+      Description=Cloudflare Tunnel
+      After=network-online.target
+      Wants=network-online.target
+
+      [Service]
+      Type=simple
+      User=cloudflared
+      Group=cloudflared
+      ExecStart={{ infra_cloudflare_tunnel_exec_start }}
+      Restart=on-failure
+      RestartSec=5s
+      TimeoutStartSec=0
+      NoNewPrivileges=true
+      PrivateTmp=true
+      ProtectSystem=full
+
+      [Install]
+      WantedBy=multi-user.target
+  vars:
+    infra_cloudflare_tunnel_exec_start: >-
+      {% if infra_cloudflare_tunnel_service_mode == 'token' -%}
+      /usr/bin/cloudflared tunnel --no-autoupdate run --token-file /etc/cloudflared/tunnel-token
+      {%- else -%}
+      /usr/bin/cloudflared --config {{ simple_vps_cloudflare_tunnel_config_path }} tunnel run
+      {%- endif %}
+  notify: Restart cloudflared
+  when:
+    - simple_vps_enable_cloudflare_tunnel | default(true) | bool
+    - infra_cloudflare_tunnel_service_mode | default('none') != 'none'
+
+- name: Enable and start cloudflared
+  systemd:
+    name: cloudflared
+    daemon_reload: yes
+    enabled: yes
+    state: started
+  when:
+    - simple_vps_enable_cloudflare_tunnel | default(true) | bool
+    - infra_cloudflare_tunnel_service_mode | default('none') != 'none'
+
+- name: Warn when Cloudflare Tunnel service is not configured
+  debug:
+    msg: >-
+      cloudflared is installed, but no tunnel token or config path was provided.
+      The systemd service is not enabled yet. Provide
+      SIMPLE_VPS_CLOUDFLARE_TUNNEL_TOKEN for a remotely-managed tunnel, or
+      SIMPLE_VPS_CLOUDFLARE_TUNNEL_CONFIG for an existing local config.
+      Cloudflare public hostnames should route to http://127.0.0.1:8080.
+  when:
+    - simple_vps_enable_cloudflare_tunnel | default(true) | bool
+    - infra_cloudflare_tunnel_service_mode | default('none') == 'none'

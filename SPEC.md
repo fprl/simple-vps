@@ -215,6 +215,7 @@ Current default apply path installs:
 - Admin user
 - Security baseline
 - Tailscale package and `tailscaled`
+- `cloudflared` package for Cloudflare Tunnel ingress
 - Caddy local-only
 - Node.js LTS
 - pnpm
@@ -225,6 +226,8 @@ Current optional variables:
 - `simple_vps_install_docker=true`
 - `simple_vps_install_devtools=true`
 - `security_enable_tailscale=false` or `--no-tailscale` to disable Tailscale
+- `simple_vps_enable_cloudflare_tunnel=false` or `--no-cloudflare-tunnel`
+  to disable Cloudflare Tunnel setup
 
 Current Tailscale behavior:
 
@@ -235,9 +238,21 @@ Current Tailscale behavior:
 - Once Tailscale is authenticated, UFW allows SSH on `tailscale0` and removes
   the public SSH allow rule.
 
+Current Cloudflare Tunnel behavior:
+
+- `cloudflared` is installed by default from Cloudflare's apt repository.
+- `SIMPLE_VPS_CLOUDFLARE_TUNNEL_TOKEN` or `--cloudflare-tunnel-token` enables
+  a remotely-managed tunnel service using `/etc/cloudflared/tunnel-token`.
+- `SIMPLE_VPS_CLOUDFLARE_TUNNEL_CONFIG` or `--cloudflare-tunnel-config`
+  enables a service using an existing local `cloudflared` config path.
+- If neither token nor config path is provided, `cloudflared` is installed but
+  the service is not enabled.
+- Until Cloudflare API automation lands, configure the tunnel public hostname in
+  Cloudflare Zero Trust to route to `http://127.0.0.1:8080`.
+
 Known gaps:
 
-- Cloudflare Tunnel is not implemented yet.
+- Cloudflare Tunnel API automation is not implemented yet.
 - `/usr/local/bin/simple-vps` CLI is not implemented yet.
 - Hosted installer needs fresh-VPS validation.
 - Public SSH is still needed during bootstrap unless Tailscale auth succeeds.

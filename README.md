@@ -23,6 +23,7 @@ Default install path:
 - Admin user with key-based access
 - SSH hardening, UFW, fail2ban, unattended upgrades
 - Tailscale installed and started for private admin access
+- cloudflared installed for Cloudflare Tunnel ingress
 - Caddy listening on `127.0.0.1:8080`
 - Node.js LTS, pnpm, PM2
 
@@ -34,6 +35,11 @@ Explicit optional installs:
 Tailscale is on by default. Provide `SIMPLE_VPS_TAILSCALE_AUTH_KEY` or
 `--tailscale-auth-key` for unattended login. Public SSH is only removed after
 Tailscale is authenticated, so bootstrap runs do not lock themselves out.
+
+Cloudflare Tunnel is installed by default. Provide
+`SIMPLE_VPS_CLOUDFLARE_TUNNEL_TOKEN` or `--cloudflare-tunnel-token` to enable
+the `cloudflared` service. The tunnel public hostname should route to
+`http://127.0.0.1:8080`.
 
 ## Quick Start
 

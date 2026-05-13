@@ -18,6 +18,9 @@ LOCALE="en_US.UTF-8"
 TAILSCALE="true"
 TAILSCALE_AUTH_KEY="${SIMPLE_VPS_TAILSCALE_AUTH_KEY:-}"
 TAILSCALE_HOSTNAME="${SIMPLE_VPS_TAILSCALE_HOSTNAME:-}"
+CLOUDFLARE_TUNNEL="true"
+CLOUDFLARE_TUNNEL_TOKEN="${SIMPLE_VPS_CLOUDFLARE_TUNNEL_TOKEN:-}"
+CLOUDFLARE_TUNNEL_CONFIG="${SIMPLE_VPS_CLOUDFLARE_TUNNEL_CONFIG:-}"
 CHECK_MODE="false"
 ASSUME_YES="false"
 INTERACTIVE_MODE="auto"
@@ -30,6 +33,7 @@ SSH_KEY_SET="false"
 SSH_PUBLIC_KEY_FILE_SET="false"
 ADMIN_USER_SET="false"
 TAILSCALE_SET="false"
+CLOUDFLARE_TUNNEL_SET="false"
 CHECK_MODE_SET="false"
 
 RED='\033[0;31m'
@@ -60,6 +64,10 @@ Options:
   --no-tailscale                 Disable Tailscale setup
   --tailscale-auth-key <key>     Tailscale auth key for non-interactive login
   --tailscale-hostname <name>    Optional Tailscale device hostname
+  --cloudflare-tunnel            Enable Cloudflare Tunnel setup (default)
+  --no-cloudflare-tunnel         Disable Cloudflare Tunnel setup
+  --cloudflare-tunnel-token <t>  Cloudflare Tunnel token for managed tunnels
+  --cloudflare-tunnel-config <p> Existing cloudflared config path
   --check                        Run Ansible in check mode
   --interactive                  Force interactive wizard
   --no-interactive               Disable interactive wizard
@@ -69,6 +77,7 @@ Options:
 Examples:
   ./install.sh --mode remote --host 203.0.113.10 --ssh-key ~/.ssh/id_ed25519 --admin-user dev
   SIMPLE_VPS_TAILSCALE_AUTH_KEY=tskey-auth-... ./install.sh --mode local --admin-user dev
+  SIMPLE_VPS_CLOUDFLARE_TUNNEL_TOKEN=... ./install.sh --mode local --admin-user dev
   ./install.sh --interactive
 USAGE
 }
@@ -339,6 +348,7 @@ interactive_wizard() {
   local proceed="true"
   local set_ssh_key="false"
   local force_tailscale_prompt="false"
+  local force_cloudflare_tunnel_prompt="false"
   local force_check_prompt="false"
 
   if ! can_prompt; then
@@ -377,6 +387,9 @@ interactive_wizard() {
   if [[ "$TAILSCALE_SET" != "true" ]]; then
     force_tailscale_prompt="true"
   fi
+  if [[ "$CLOUDFLARE_TUNNEL_SET" != "true" ]]; then
+    force_cloudflare_tunnel_prompt="true"
+  fi
   if [[ "$CHECK_MODE_SET" != "true" ]]; then
     force_check_prompt="true"
   fi
@@ -386,6 +399,7 @@ interactive_wizard() {
   ui_kv "locale" "$LOCALE (fixed)"
 
   prompt_yes_no TAILSCALE "Enable Tailscale?" "$TAILSCALE" "$force_tailscale_prompt"
+  prompt_yes_no CLOUDFLARE_TUNNEL "Enable Cloudflare Tunnel?" "$CLOUDFLARE_TUNNEL" "$force_cloudflare_tunnel_prompt"
   prompt_yes_no CHECK_MODE "Run in check (dry-run) mode?" "$CHECK_MODE" "$force_check_prompt"
 
   ui_title "Provisioning Summary"
@@ -407,6 +421,13 @@ interactive_wizard() {
     ui_kv "tailscale_auth" "$(present_or_missing "$TAILSCALE_AUTH_KEY" "auth key provided" "manual login required")"
     if [[ -n "$TAILSCALE_HOSTNAME" ]]; then
       ui_kv "tailscale_name" "$TAILSCALE_HOSTNAME"
+    fi
+  fi
+  ui_kv "cf_tunnel" "$CLOUDFLARE_TUNNEL"
+  if [[ "$CLOUDFLARE_TUNNEL" == "true" ]]; then
+    ui_kv "cf_tunnel_auth" "$(present_or_missing "$CLOUDFLARE_TUNNEL_TOKEN" "token provided" "service not enabled")"
+    if [[ -n "$CLOUDFLARE_TUNNEL_CONFIG" ]]; then
+      ui_kv "cf_tunnel_cfg" "$CLOUDFLARE_TUNNEL_CONFIG"
     fi
   fi
   ui_kv "check_mode" "$CHECK_MODE"
@@ -493,6 +514,24 @@ parse_args() {
         TAILSCALE_HOSTNAME="${2:-}"
         shift 2
         ;;
+      --cloudflare-tunnel)
+        CLOUDFLARE_TUNNEL="true"
+        CLOUDFLARE_TUNNEL_SET="true"
+        shift
+        ;;
+      --no-cloudflare-tunnel)
+        CLOUDFLARE_TUNNEL="false"
+        CLOUDFLARE_TUNNEL_SET="true"
+        shift
+        ;;
+      --cloudflare-tunnel-token)
+        CLOUDFLARE_TUNNEL_TOKEN="${2:-}"
+        shift 2
+        ;;
+      --cloudflare-tunnel-config)
+        CLOUDFLARE_TUNNEL_CONFIG="${2:-}"
+        shift 2
+        ;;
       --check)
         CHECK_MODE="true"
         CHECK_MODE_SET="true"
@@ -577,6 +616,32 @@ validate_tailscale_options() {
   fi
 }
 
+validate_cloudflare_tunnel_options() {
+  case "$CLOUDFLARE_TUNNEL" in
+    true|false)
+      ;;
+    *)
+      err "Invalid Cloudflare Tunnel value: $CLOUDFLARE_TUNNEL (expected true or false)"
+      exit 1
+      ;;
+  esac
+
+  if [[ "$CLOUDFLARE_TUNNEL" != "true" && -n "$CLOUDFLARE_TUNNEL_TOKEN" ]]; then
+    err "--cloudflare-tunnel-token requires Cloudflare Tunnel to be enabled."
+    exit 1
+  fi
+
+  if [[ "$CLOUDFLARE_TUNNEL" != "true" && -n "$CLOUDFLARE_TUNNEL_CONFIG" ]]; then
+    err "--cloudflare-tunnel-config requires Cloudflare Tunnel to be enabled."
+    exit 1
+  fi
+
+  if [[ -n "$CLOUDFLARE_TUNNEL_TOKEN" && -n "$CLOUDFLARE_TUNNEL_CONFIG" ]]; then
+    err "Use either --cloudflare-tunnel-token or --cloudflare-tunnel-config, not both."
+    exit 1
+  fi
+}
+
 ensure_ansible_local() {
   require_cmd ansible-playbook
 }
@@ -631,6 +696,8 @@ write_extra_vars_file() {
   local ssh_public_key_value="$2"
   local escaped_tailscale_auth_key="${TAILSCALE_AUTH_KEY//\'/\'\"\'\"\'}"
   local escaped_tailscale_hostname="${TAILSCALE_HOSTNAME//\'/\'\"\'\"\'}"
+  local escaped_cloudflare_tunnel_token="${CLOUDFLARE_TUNNEL_TOKEN//\'/\'\"\'\"\'}"
+  local escaped_cloudflare_tunnel_config="${CLOUDFLARE_TUNNEL_CONFIG//\'/\'\"\'\"\'}"
 
   {
     printf 'simple_vps_admin_user: "%s"\n' "$ADMIN_USER"
@@ -639,6 +706,9 @@ write_extra_vars_file() {
     printf 'security_enable_tailscale: %s\n' "$TAILSCALE"
     printf "simple_vps_tailscale_auth_key: '%s'\n" "$escaped_tailscale_auth_key"
     printf "simple_vps_tailscale_hostname: '%s'\n" "$escaped_tailscale_hostname"
+    printf 'simple_vps_enable_cloudflare_tunnel: %s\n' "$CLOUDFLARE_TUNNEL"
+    printf "simple_vps_cloudflare_tunnel_token: '%s'\n" "$escaped_cloudflare_tunnel_token"
+    printf "simple_vps_cloudflare_tunnel_config_path: '%s'\n" "$escaped_cloudflare_tunnel_config"
 
     if [[ -n "$ssh_public_key_value" ]]; then
       local escaped_key="${ssh_public_key_value//\'/\'\"\'\"\'}"
@@ -808,6 +878,7 @@ main() {
   auto_detect_mode
   validate_mode
   validate_tailscale_options
+  validate_cloudflare_tunnel_options
   prepare_ansible_env
   ensure_simple_vps_layout "$@"
 
@@ -818,6 +889,14 @@ main() {
   info "Tailscale: $TAILSCALE"
   if [[ "$TAILSCALE" == "true" ]]; then
     info "Tailscale auth: $(present_or_missing "$TAILSCALE_AUTH_KEY" "auth key provided" "manual login required")"
+  fi
+  info "Cloudflare Tunnel: $CLOUDFLARE_TUNNEL"
+  if [[ "$CLOUDFLARE_TUNNEL" == "true" ]]; then
+    if [[ -n "$CLOUDFLARE_TUNNEL_CONFIG" ]]; then
+      info "Cloudflare Tunnel config: $CLOUDFLARE_TUNNEL_CONFIG"
+    else
+      info "Cloudflare Tunnel auth: $(present_or_missing "$CLOUDFLARE_TUNNEL_TOKEN" "token provided" "service not enabled")"
+    fi
   fi
 
   case "$MODE" in
