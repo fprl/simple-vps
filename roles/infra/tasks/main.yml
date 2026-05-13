@@ -49,7 +49,7 @@
             }
           }
       notify: Restart Docker
-  when: openvps_install_docker | default(false) | bool
+  when: simple_vps_install_docker | default(false) | bool
 
 - name: Add Caddy GPG key
   apt_key:
@@ -74,11 +74,11 @@
     mode: '0644'
     force: no
     content: |
-      # OpenVPS local ingress.
+      # Simple VPS local ingress.
       # Public traffic should arrive through Cloudflare Tunnel and hit this
       # listener on localhost, not the server's public network interface.
       127.0.0.1:8080 {
-          respond "OpenVPS Caddy ready"
+          respond "Simple VPS Caddy ready"
       }
   notify: Reload Caddy
 

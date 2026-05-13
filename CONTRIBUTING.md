@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for helping improve OpenVPS.
+Thanks for helping improve Simple VPS.
 
 ## Local Validation Before PR
 
@@ -40,7 +40,7 @@ If provider gives only password credentials first:
 ./install.sh --mode local --admin-user admin
 ```
 
-OpenVPS intentionally blocks local mode when no key source exists to avoid lockout after SSH hardening.
+Simple VPS intentionally blocks local mode when no key source exists to avoid lockout after SSH hardening.
 
 ## PR Focus
 

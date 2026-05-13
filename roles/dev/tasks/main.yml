@@ -9,10 +9,10 @@
   shell: |
     set -e
     curl -fsSL https://deb.nodesource.com/setup_lts.x | bash -
-    install -d /etc/openvps
-    touch /etc/openvps/.nodesource_lts_configured
+    install -d /etc/simple-vps
+    touch /etc/simple-vps/.nodesource_lts_configured
   args:
-    creates: /etc/openvps/.nodesource_lts_configured
+    creates: /etc/simple-vps/.nodesource_lts_configured
   when: not ansible_check_mode
 
 - name: Install Node.js
@@ -128,7 +128,7 @@
         group: "{{ admin_user }}"
         mode: '0644'
         force: no
-  when: openvps_install_devtools | default(false) | bool
+  when: simple_vps_install_devtools | default(false) | bool
 
 - name: Install optional language extras
   block:
@@ -162,7 +162,7 @@
       apt:
         name: golang-go
         state: present
-  when: openvps_install_devtools | default(false) | bool
+  when: simple_vps_install_devtools | default(false) | bool
 
 - name: Install optional AI agent CLIs
   block:
@@ -322,4 +322,4 @@
       when:
         - not ansible_check_mode
         - claude_local_bin.stat.exists
-  when: openvps_install_devtools | default(false) | bool
+  when: simple_vps_install_devtools | default(false) | bool

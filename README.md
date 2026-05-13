@@ -1,4 +1,4 @@
-# OpenVPS
+# Simple VPS
 
 Opinionated production VPS setup for getting apps online quickly and securely.
 
@@ -8,7 +8,7 @@ Goal:
 fresh Ubuntu VPS -> run one script -> secure production box ready for apps
 ```
 
-OpenVPS is intentionally narrow. It is not a VPS framework.
+Simple VPS is intentionally narrow. It is not a VPS framework.
 
 Read [SPEC.md](SPEC.md) for the product direction, security model, architecture,
 CLI shape, implementation decisions, and current status.
@@ -27,8 +27,8 @@ Default install path:
 
 Explicit optional installs:
 
-- Docker: `openvps_install_docker=true`
-- Dev tools / shell / AI CLIs: `openvps_install_devtools=true`
+- Docker: `simple_vps_install_docker=true`
+- Dev tools / shell / AI CLIs: `simple_vps_install_devtools=true`
 - Tailscale: currently `--tailscale`, target is default private admin access
 
 ## Quick Start

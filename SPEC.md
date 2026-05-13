@@ -1,11 +1,11 @@
-# OpenVPS Spec
+# Simple VPS Spec
 
 This is the source of truth for the project. Keep this file updated before
 spreading details into code comments, README snippets, or release notes.
 
 ## Goal
 
-OpenVPS should turn a fresh Ubuntu VPS into a secure production app host:
+Simple VPS should turn a fresh Ubuntu VPS into a secure production app host:
 
 ```text
 fresh Ubuntu VPS -> run one script -> secure production box ready for apps
@@ -60,7 +60,7 @@ The default install should create:
 - pnpm
 - PM2
 - Basic server packages: `git`, `curl`, `jq`, `htop`, `tmux`, `rsync`, `unzip`, `ncdu`
-- `/usr/local/bin/openvps` for server-local management
+- `/usr/local/bin/simple-vps` for server-local management
 
 ## Optional Installs
 
@@ -69,7 +69,7 @@ Personal comfort tools should not be able to break the production baseline.
 Dev tools:
 
 ```bash
-openvps devtools install
+simple-vps devtools install
 ```
 
 This can install:
@@ -84,7 +84,7 @@ This can install:
 Docker:
 
 ```bash
-openvps docker install
+simple-vps docker install
 ```
 
 Docker is useful, but it is not the default runtime for this tool.
@@ -94,12 +94,12 @@ Docker is useful, but it is not the default runtime for this tool.
 Keep the CLI tiny:
 
 ```bash
-openvps status
-openvps publish --host example.com --port 3000
-openvps unpublish --host example.com
-openvps routes
-openvps devtools install
-openvps docker install
+simple-vps status
+simple-vps publish --host example.com --port 3000
+simple-vps unpublish --host example.com
+simple-vps routes
+simple-vps devtools install
+simple-vps docker install
 ```
 
 `publish` means expose a local service through the production ingress stack.
@@ -107,16 +107,16 @@ openvps docker install
 Examples:
 
 ```bash
-openvps publish --host example.com --port 3000
-openvps publish --host api.example.com --port 8080
+simple-vps publish --host example.com --port 3000
+simple-vps publish --host api.example.com --port 8080
 ```
 
 ## Routing State
 
-OpenVPS should maintain one source of truth on the server:
+Simple VPS should maintain one source of truth on the server:
 
 ```text
-/etc/openvps/state.json
+/etc/simple-vps/state.json
 ```
 
 Generated files:
@@ -158,10 +158,10 @@ One-time Cloudflare setup:
 
 - Domain on Cloudflare DNS
 - Cloudflare account secured with passkeys/2FA
-- API token for OpenVPS automation
+- API token for Simple VPS automation
 - Optional Cloudflare Zero Trust/Access policies for private dashboards
 
-Per-server Cloudflare setup should be automated by OpenVPS.
+Per-server Cloudflare setup should be automated by Simple VPS.
 
 ## Installer Model
 
@@ -170,7 +170,7 @@ Per-server Cloudflare setup should be automated by OpenVPS.
 Target one-liner:
 
 ```bash
-curl -fsSL https://openvps.dev/install.sh | bash
+curl -fsSL https://simple-vps.dev/install.sh | bash
 ```
 
 The hosted script should download a pinned release/tarball, then run the real
@@ -221,15 +221,15 @@ Current default apply path installs:
 
 Current optional variables:
 
-- `openvps_install_docker=true`
-- `openvps_install_devtools=true`
+- `simple_vps_install_docker=true`
+- `simple_vps_install_devtools=true`
 - `security_enable_tailscale=true`
 
 Known gaps:
 
 - Tailscale is still opt-in; target is default private admin access.
 - Cloudflare Tunnel is not implemented yet.
-- `/usr/local/bin/openvps` CLI is not implemented yet.
+- `/usr/local/bin/simple-vps` CLI is not implemented yet.
 - Hosted installer needs fresh-VPS validation.
 - Public SSH is still needed during bootstrap.
 - Static inventory/direct Ansible path is legacy and should not drive the product.
@@ -240,8 +240,8 @@ Known gaps:
 2. Make the hosted one-liner real and tested.
 3. Make Tailscale part of the secure baseline.
 4. Add Cloudflare Tunnel install and service setup.
-5. Add `/usr/local/bin/openvps`.
-6. Add `openvps publish` / `unpublish` with generated Caddy/cloudflared config.
+5. Add `/usr/local/bin/simple-vps`.
+6. Add `simple-vps publish` / `unpublish` with generated Caddy/cloudflared config.
 7. Add fresh Ubuntu 24.04 smoke testing and idempotency testing.
 8. Only then tag v1.
 

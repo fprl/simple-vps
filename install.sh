@@ -3,9 +3,9 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-OPENVPS_REPO_TARBALL_URL="${OPENVPS_REPO_TARBALL_URL:-https://github.com/fprl/openvps/archive/refs/heads/main.tar.gz}"
-OPENVPS_BOOTSTRAP_DOWNLOAD="${OPENVPS_BOOTSTRAP_DOWNLOAD:-true}"
-OPENVPS_BOOTSTRAPPED="${OPENVPS_BOOTSTRAPPED:-false}"
+SIMPLE_VPS_REPO_TARBALL_URL="${SIMPLE_VPS_REPO_TARBALL_URL:-https://github.com/fprl/simple-vps/archive/refs/heads/main.tar.gz}"
+SIMPLE_VPS_BOOTSTRAP_DOWNLOAD="${SIMPLE_VPS_BOOTSTRAP_DOWNLOAD:-true}"
+SIMPLE_VPS_BOOTSTRAPPED="${SIMPLE_VPS_BOOTSTRAPPED:-false}"
 
 MODE="auto"
 TARGET_HOST=""
@@ -41,7 +41,7 @@ NC='\033[0m'
 
 usage() {
   cat <<USAGE
-OpenVPS installer
+Simple VPS installer
 
 Usage:
   ./install.sh [options]
@@ -126,12 +126,12 @@ prepare_ansible_env() {
     export ANSIBLE_CONFIG="$SCRIPT_DIR/ansible.cfg"
   fi
 
-  ansible_tmp_dir="${ANSIBLE_LOCAL_TEMP:-${TMPDIR:-/tmp}/openvps-ansible-tmp}"
+  ansible_tmp_dir="${ANSIBLE_LOCAL_TEMP:-${TMPDIR:-/tmp}/simple-vps-ansible-tmp}"
   mkdir -p "$ansible_tmp_dir"
   export ANSIBLE_LOCAL_TEMP="$ansible_tmp_dir"
 }
 
-ensure_openvps_layout() {
+ensure_simple_vps_layout() {
   local required_files=(
     "$SCRIPT_DIR/playbooks/vps-bootstrap.yml"
     "$SCRIPT_DIR/playbooks/vps-apply.yml"
@@ -141,25 +141,25 @@ ensure_openvps_layout() {
 
   for file in "${required_files[@]}"; do
     if [[ ! -f "$file" ]]; then
-      bootstrap_openvps_checkout "$@"
+      bootstrap_simple_vps_checkout "$@"
     fi
   done
 }
 
-bootstrap_openvps_checkout() {
+bootstrap_simple_vps_checkout() {
   local tmp_dir
   local source_dir
   local archive_path
 
-  if [[ "$OPENVPS_BOOTSTRAP_DOWNLOAD" != "true" ]]; then
-    err "Required OpenVPS files were not found beside install.sh."
-    err "Run from a checkout, or allow bootstrap download with OPENVPS_BOOTSTRAP_DOWNLOAD=true."
+  if [[ "$SIMPLE_VPS_BOOTSTRAP_DOWNLOAD" != "true" ]]; then
+    err "Required Simple VPS files were not found beside install.sh."
+    err "Run from a checkout, or allow bootstrap download with SIMPLE_VPS_BOOTSTRAP_DOWNLOAD=true."
     exit 1
   fi
 
-  if [[ "$OPENVPS_BOOTSTRAPPED" == "true" ]]; then
-    err "OpenVPS bootstrap download completed, but required files are still missing."
-    err "Check OPENVPS_REPO_TARBALL_URL: $OPENVPS_REPO_TARBALL_URL"
+  if [[ "$SIMPLE_VPS_BOOTSTRAPPED" == "true" ]]; then
+    err "Simple VPS bootstrap download completed, but required files are still missing."
+    err "Check SIMPLE_VPS_REPO_TARBALL_URL: $SIMPLE_VPS_REPO_TARBALL_URL"
     exit 1
   fi
 
@@ -168,23 +168,23 @@ bootstrap_openvps_checkout() {
   require_cmd mktemp
 
   tmp_dir="$(mktemp -d)"
-  source_dir="$tmp_dir/openvps"
-  archive_path="$tmp_dir/openvps.tar.gz"
+  source_dir="$tmp_dir/simple-vps"
+  archive_path="$tmp_dir/simple-vps.tar.gz"
   mkdir -p "$source_dir"
 
-  info "OpenVPS checkout not found beside install.sh."
-  info "Downloading OpenVPS from $OPENVPS_REPO_TARBALL_URL"
+  info "Simple VPS checkout not found beside install.sh."
+  info "Downloading Simple VPS from $SIMPLE_VPS_REPO_TARBALL_URL"
 
-  curl -fsSL "$OPENVPS_REPO_TARBALL_URL" -o "$archive_path"
+  curl -fsSL "$SIMPLE_VPS_REPO_TARBALL_URL" -o "$archive_path"
   tar -xzf "$archive_path" -C "$source_dir" --strip-components=1
 
   if [[ ! -f "$source_dir/install.sh" ]]; then
-    err "Downloaded OpenVPS archive did not contain install.sh."
+    err "Downloaded Simple VPS archive did not contain install.sh."
     exit 1
   fi
 
   info "Re-running installer from downloaded checkout."
-  export OPENVPS_BOOTSTRAPPED=true
+  export SIMPLE_VPS_BOOTSTRAPPED=true
   exec "$source_dir/install.sh" "$@"
 }
 
@@ -330,7 +330,7 @@ interactive_wizard() {
     exit 1
   fi
 
-  ui_title "OpenVPS Setup Wizard"
+  ui_title "Simple VPS Setup Wizard"
 
   if [[ "$(id -u)" -eq 0 ]] && [[ -f /etc/os-release ]]; then
     default_mode="local"
@@ -580,17 +580,17 @@ write_extra_vars_file() {
   local ssh_public_key_value="$2"
 
   {
-    printf 'openvps_admin_user: "%s"\n' "$ADMIN_USER"
-    printf 'openvps_timezone: "%s"\n' "$TIMEZONE"
-    printf 'openvps_locale: "%s"\n' "$LOCALE"
+    printf 'simple_vps_admin_user: "%s"\n' "$ADMIN_USER"
+    printf 'simple_vps_timezone: "%s"\n' "$TIMEZONE"
+    printf 'simple_vps_locale: "%s"\n' "$LOCALE"
     printf 'security_enable_tailscale: %s\n' "$TAILSCALE"
 
     if [[ -n "$ssh_public_key_value" ]]; then
       local escaped_key="${ssh_public_key_value//\'/\'\"\'\"\'}"
-      printf 'openvps_ssh_public_keys:\n'
+      printf 'simple_vps_ssh_public_keys:\n'
       printf "  - '%s'\n" "$escaped_key"
     else
-      printf 'openvps_ssh_public_keys: []\n'
+      printf 'simple_vps_ssh_public_keys: []\n'
     fi
   } > "$file_path"
 }
@@ -659,15 +659,15 @@ run_remote() {
   trap "rm -f '$tmp_inventory' '$tmp_vars'" EXIT
 
   cat > "$tmp_inventory" <<INVENTORY
-[openvps]
-openvps_host ansible_host=${TARGET_HOST} ansible_python_interpreter=/usr/bin/python3
+[simple_vps]
+simple_vps_host ansible_host=${TARGET_HOST} ansible_python_interpreter=/usr/bin/python3
 INVENTORY
 
   write_extra_vars_file "$tmp_vars" "$ssh_public_key_value"
 
   local common_args=(
     -i "$tmp_inventory"
-    -e "target=openvps"
+    -e "target=simple_vps"
     -e "@$tmp_vars"
   )
 
@@ -722,15 +722,15 @@ run_local() {
   trap "rm -f '$tmp_inventory' '$tmp_vars'" EXIT
 
   cat > "$tmp_inventory" <<INVENTORY
-[openvps]
-openvps_local ansible_connection=local ansible_python_interpreter=/usr/bin/python3
+[simple_vps]
+simple_vps_local ansible_connection=local ansible_python_interpreter=/usr/bin/python3
 INVENTORY
 
   write_extra_vars_file "$tmp_vars" "$ssh_public_key_value"
 
   local common_args=(
     -i "$tmp_inventory"
-    -e "target=openvps"
+    -e "target=simple_vps"
     -e "@$tmp_vars"
   )
 
@@ -751,9 +751,9 @@ main() {
   auto_detect_mode
   validate_mode
   prepare_ansible_env
-  ensure_openvps_layout "$@"
+  ensure_simple_vps_layout "$@"
 
-  info "OpenVPS installer starting"
+  info "Simple VPS installer starting"
   info "Mode: $MODE"
   info "Admin user: $ADMIN_USER"
   info "Timezone: $TIMEZONE"
