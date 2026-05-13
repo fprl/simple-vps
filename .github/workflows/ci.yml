@@ -14,9 +14,13 @@ jobs:
       - name: Bash syntax checks
         run: |
           bash -n install.sh
+          bash -n tests/bootstrap_tarball_smoke.sh
       - name: Shellcheck
         run: |
-          shellcheck install.sh
+          shellcheck install.sh tests/bootstrap_tarball_smoke.sh
+      - name: Bootstrap tarball smoke test
+        run: |
+          tests/bootstrap_tarball_smoke.sh
 
   python:
     runs-on: ubuntu-latest

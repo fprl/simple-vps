@@ -76,6 +76,8 @@ part of the work tracked in [SPEC.md](SPEC.md).
 
 ```bash
 bash -n install.sh
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests
+tests/bootstrap_tarball_smoke.sh
 ansible-playbook --syntax-check playbooks/vps-bootstrap.yml
 ansible-playbook --syntax-check playbooks/vps-apply.yml
 ```
