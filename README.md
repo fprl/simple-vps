@@ -22,6 +22,7 @@ Default install path:
 
 - Admin user with key-based access
 - SSH hardening, UFW, fail2ban, unattended upgrades
+- Tailscale installed and started for private admin access
 - Caddy listening on `127.0.0.1:8080`
 - Node.js LTS, pnpm, PM2
 
@@ -29,7 +30,10 @@ Explicit optional installs:
 
 - Docker: `simple_vps_install_docker=true`
 - Dev tools / shell / AI CLIs: `simple_vps_install_devtools=true`
-- Tailscale: currently `--tailscale`, target is default private admin access
+
+Tailscale is on by default. Provide `SIMPLE_VPS_TAILSCALE_AUTH_KEY` or
+`--tailscale-auth-key` for unattended login. Public SSH is only removed after
+Tailscale is authenticated, so bootstrap runs do not lock themselves out.
 
 ## Quick Start
 

@@ -214,6 +214,7 @@ Current default apply path installs:
 - System essentials
 - Admin user
 - Security baseline
+- Tailscale package and `tailscaled`
 - Caddy local-only
 - Node.js LTS
 - pnpm
@@ -223,15 +224,23 @@ Current optional variables:
 
 - `simple_vps_install_docker=true`
 - `simple_vps_install_devtools=true`
-- `security_enable_tailscale=true`
+- `security_enable_tailscale=false` or `--no-tailscale` to disable Tailscale
+
+Current Tailscale behavior:
+
+- Tailscale is enabled by default.
+- `SIMPLE_VPS_TAILSCALE_AUTH_KEY` or `--tailscale-auth-key` enables
+  non-interactive `tailscale up`.
+- Public SSH remains allowed until the server has a Tailscale IP.
+- Once Tailscale is authenticated, UFW allows SSH on `tailscale0` and removes
+  the public SSH allow rule.
 
 Known gaps:
 
-- Tailscale is still opt-in; target is default private admin access.
 - Cloudflare Tunnel is not implemented yet.
 - `/usr/local/bin/simple-vps` CLI is not implemented yet.
 - Hosted installer needs fresh-VPS validation.
-- Public SSH is still needed during bootstrap.
+- Public SSH is still needed during bootstrap unless Tailscale auth succeeds.
 - Static inventory/direct Ansible path is legacy and should not drive the product.
 
 ## Implementation Plan

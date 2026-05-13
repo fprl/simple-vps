@@ -66,6 +66,113 @@
   notify: Restart SSH
   when: not (security_bootstrap_only | default(false) | bool)
 
+- name: Install Tailscale apt keyring
+  get_url:
+    url: "https://pkgs.tailscale.com/stable/ubuntu/{{ ansible_facts['distribution_release'] }}.noarmor.gpg"
+    dest: /usr/share/keyrings/tailscale-archive-keyring.gpg
+    owner: root
+    group: root
+    mode: '0644'
+  when:
+    - not (security_bootstrap_only | default(false) | bool)
+    - (security_enable_tailscale | default(true) | bool)
+
+- name: Configure Tailscale apt repository
+  get_url:
+    url: "https://pkgs.tailscale.com/stable/ubuntu/{{ ansible_facts['distribution_release'] }}.tailscale-keyring.list"
+    dest: /etc/apt/sources.list.d/tailscale.list
+    owner: root
+    group: root
+    mode: '0644'
+  when:
+    - not (security_bootstrap_only | default(false) | bool)
+    - (security_enable_tailscale | default(true) | bool)
+
+- name: Install Tailscale
+  apt:
+    name: tailscale
+    state: present
+    update_cache: yes
+  when:
+    - not (security_bootstrap_only | default(false) | bool)
+    - (security_enable_tailscale | default(true) | bool)
+
+- name: Enable and start Tailscale
+  systemd:
+    name: tailscaled
+    enabled: yes
+    state: started
+  when:
+    - not (security_bootstrap_only | default(false) | bool)
+    - (security_enable_tailscale | default(true) | bool)
+
+- name: Check Tailscale IPv4 address before auth
+  command: tailscale ip -4
+  register: security_tailscale_ip_before
+  changed_when: false
+  failed_when: false
+  when:
+    - not ansible_check_mode
+    - not (security_bootstrap_only | default(false) | bool)
+    - (security_enable_tailscale | default(true) | bool)
+
+- name: Authenticate Tailscale with auth key
+  command: >-
+    tailscale up --auth-key={{ simple_vps_tailscale_auth_key | default('') }}
+    {% if (simple_vps_tailscale_hostname | default('') | length) > 0 %}--hostname={{ simple_vps_tailscale_hostname }}{% endif %}
+  changed_when: true
+  no_log: true
+  when:
+    - not ansible_check_mode
+    - not (security_bootstrap_only | default(false) | bool)
+    - (security_enable_tailscale | default(true) | bool)
+    - (simple_vps_tailscale_auth_key | default('') | length) > 0
+    - (security_tailscale_ip_before.stdout | default('') | trim | length) == 0
+
+- name: Check Tailscale IPv4 address after auth
+  command: tailscale ip -4
+  register: security_tailscale_ip_after
+  changed_when: false
+  failed_when: false
+  when:
+    - not ansible_check_mode
+    - not (security_bootstrap_only | default(false) | bool)
+    - (security_enable_tailscale | default(true) | bool)
+
+- name: Set Tailscale IP fact
+  set_fact:
+    security_tailscale_ip: >-
+      {{
+        (
+          security_tailscale_ip_after.stdout
+          | default(security_tailscale_ip_before.stdout | default(''))
+        ) | trim
+      }}
+  when: not (security_bootstrap_only | default(false) | bool)
+
+- name: Set Tailscale readiness facts
+  set_fact:
+    security_tailscale_ready: "{{ (security_tailscale_ip | length) > 0 }}"
+    security_restrict_ssh_to_tailscale_effective: >-
+      {{
+        (security_restrict_ssh_to_tailscale | default(true) | bool)
+        and ((security_tailscale_ip | length) > 0)
+      }}
+  when: not (security_bootstrap_only | default(false) | bool)
+
+- name: Warn when Tailscale is not authenticated
+  debug:
+    msg: >-
+      Tailscale is installed and tailscaled is running, but this node is not
+      authenticated yet. Public SSH remains allowed to avoid locking out the
+      bootstrap session. Provide SIMPLE_VPS_TAILSCALE_AUTH_KEY, or authenticate
+      Tailscale manually and rerun Simple VPS to restrict SSH to Tailscale.
+  when:
+    - not ansible_check_mode
+    - not (security_bootstrap_only | default(false) | bool)
+    - (security_enable_tailscale | default(true) | bool)
+    - not (security_tailscale_ready | default(false) | bool)
+
 - name: Configure UFW defaults
   ufw:
     direction: "{{ item.direction }}"
@@ -75,35 +182,57 @@
     - { direction: outgoing, policy: allow }
   when: not (security_bootstrap_only | default(false) | bool)
 
-- name: Allow SSH through UFW
+- name: Allow SSH from Tailscale through UFW
   ufw:
     rule: allow
     port: '22'
     proto: tcp
-  when: not (security_bootstrap_only | default(false) | bool)
+    interface: tailscale0
+    direction: in
+  when:
+    - not (security_bootstrap_only | default(false) | bool)
+    - (security_tailscale_ready | default(false) | bool)
 
-- name: Allow HTTP through UFW
+- name: Allow public SSH through UFW while Tailscale is not ready
   ufw:
     rule: allow
-    port: '80'
+    port: '22'
     proto: tcp
-  when: not (security_bootstrap_only | default(false) | bool)
+  when:
+    - not (security_bootstrap_only | default(false) | bool)
+    - not (security_restrict_ssh_to_tailscale_effective | default(false) | bool)
 
-- name: Allow HTTPS through UFW
+- name: Remove public SSH UFW rule when Tailscale is ready
   ufw:
     rule: allow
-    port: '443'
+    port: '22'
     proto: tcp
+    delete: true
+  failed_when: false
+  when:
+    - not (security_bootstrap_only | default(false) | bool)
+    - (security_restrict_ssh_to_tailscale_effective | default(false) | bool)
+
+- name: Remove public web UFW rules
+  ufw:
+    rule: allow
+    port: "{{ item }}"
+    proto: tcp
+    delete: true
+  loop:
+    - '80'
+    - '443'
+  failed_when: false
   when: not (security_bootstrap_only | default(false) | bool)
 
-- name: Allow Tailscale (WireGuard) through UFW (opt-in)
+- name: Allow Tailscale WireGuard UDP through UFW
   ufw:
     rule: allow
     port: '41641'
     proto: udp
   when:
     - not (security_bootstrap_only | default(false) | bool)
-    - (security_enable_tailscale | default(false) | bool)
+    - (security_enable_tailscale | default(true) | bool)
 
 - name: Enable UFW
   ufw:
@@ -113,6 +242,9 @@
 - name: Configure fail2ban for SSH
   copy:
     dest: /etc/fail2ban/jail.local
+    owner: root
+    group: root
+    mode: '0644'
     content: |
       [sshd]
       enabled = true
@@ -131,43 +263,3 @@
     enabled: yes
     state: started
   when: not (security_bootstrap_only | default(false) | bool)
-
-- name: Install Tailscale apt keyring
-  shell: |
-    curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/$(lsb_release -cs).gpg | gpg --dearmor -o /usr/share/keyrings/tailscale-archive-keyring.gpg
-  args:
-    creates: /usr/share/keyrings/tailscale-archive-keyring.gpg
-  when:
-    - not ansible_check_mode
-    - not (security_bootstrap_only | default(false) | bool)
-    - (security_enable_tailscale | default(false) | bool)
-
-- name: Configure Tailscale apt repository
-  copy:
-    dest: /etc/apt/sources.list.d/tailscale.list
-    owner: root
-    group: root
-    mode: '0644'
-    content: |
-      deb [signed-by=/usr/share/keyrings/tailscale-archive-keyring.gpg] https://pkgs.tailscale.com/stable/ubuntu {{ ansible_facts['distribution_release'] }} main
-  when:
-    - not (security_bootstrap_only | default(false) | bool)
-    - (security_enable_tailscale | default(false) | bool)
-
-- name: Install Tailscale
-  apt:
-    name: tailscale
-    state: present
-    update_cache: yes
-  when:
-    - not (security_bootstrap_only | default(false) | bool)
-    - (security_enable_tailscale | default(false) | bool)
-
-- name: Enable and start Tailscale
-  systemd:
-    name: tailscaled
-    enabled: yes
-    state: started
-  when:
-    - not (security_bootstrap_only | default(false) | bool)
-    - (security_enable_tailscale | default(false) | bool)

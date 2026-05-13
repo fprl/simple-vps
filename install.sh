@@ -15,7 +15,9 @@ SSH_PUBLIC_KEY_FILE=""
 ADMIN_USER="admin"
 TIMEZONE="UTC"
 LOCALE="en_US.UTF-8"
-TAILSCALE="false"
+TAILSCALE="true"
+TAILSCALE_AUTH_KEY="${SIMPLE_VPS_TAILSCALE_AUTH_KEY:-}"
+TAILSCALE_HOSTNAME="${SIMPLE_VPS_TAILSCALE_HOSTNAME:-}"
 CHECK_MODE="false"
 ASSUME_YES="false"
 INTERACTIVE_MODE="auto"
@@ -54,8 +56,10 @@ Options:
   --ssh-key <path>               SSH private key for remote mode
   --ssh-public-key-file <path>   Explicit public key to add for admin user
   --admin-user <name>            Admin user to create/configure (default: admin)
-  --tailscale                    Enable Tailscale setup
-  --no-tailscale                 Disable Tailscale setup (default)
+  --tailscale                    Enable Tailscale setup (default)
+  --no-tailscale                 Disable Tailscale setup
+  --tailscale-auth-key <key>     Tailscale auth key for non-interactive login
+  --tailscale-hostname <name>    Optional Tailscale device hostname
   --check                        Run Ansible in check mode
   --interactive                  Force interactive wizard
   --no-interactive               Disable interactive wizard
@@ -64,7 +68,7 @@ Options:
 
 Examples:
   ./install.sh --mode remote --host 203.0.113.10 --ssh-key ~/.ssh/id_ed25519 --admin-user dev
-  ./install.sh --mode local --admin-user dev --tailscale
+  SIMPLE_VPS_TAILSCALE_AUTH_KEY=tskey-auth-... ./install.sh --mode local --admin-user dev
   ./install.sh --interactive
 USAGE
 }
@@ -117,6 +121,18 @@ ui_section() {
 
 ui_kv() {
   printf "  %b%-16s%b %s\n" "$DIM" "$1" "$NC" "$2"
+}
+
+present_or_missing() {
+  local value="$1"
+  local present_label="${2:-provided}"
+  local missing_label="${3:-not provided}"
+
+  if [[ -n "$value" ]]; then
+    printf '%s' "$present_label"
+  else
+    printf '%s' "$missing_label"
+  fi
 }
 
 prepare_ansible_env() {
@@ -387,6 +403,12 @@ interactive_wizard() {
   ui_kv "timezone" "$TIMEZONE"
   ui_kv "locale" "$LOCALE"
   ui_kv "tailscale" "$TAILSCALE"
+  if [[ "$TAILSCALE" == "true" ]]; then
+    ui_kv "tailscale_auth" "$(present_or_missing "$TAILSCALE_AUTH_KEY" "auth key provided" "manual login required")"
+    if [[ -n "$TAILSCALE_HOSTNAME" ]]; then
+      ui_kv "tailscale_name" "$TAILSCALE_HOSTNAME"
+    fi
+  fi
   ui_kv "check_mode" "$CHECK_MODE"
   ui_hr
 
@@ -463,6 +485,14 @@ parse_args() {
         TAILSCALE_SET="true"
         shift
         ;;
+      --tailscale-auth-key)
+        TAILSCALE_AUTH_KEY="${2:-}"
+        shift 2
+        ;;
+      --tailscale-hostname)
+        TAILSCALE_HOSTNAME="${2:-}"
+        shift 2
+        ;;
       --check)
         CHECK_MODE="true"
         CHECK_MODE_SET="true"
@@ -526,6 +556,27 @@ validate_mode() {
   esac
 }
 
+validate_tailscale_options() {
+  case "$TAILSCALE" in
+    true|false)
+      ;;
+    *)
+      err "Invalid Tailscale value: $TAILSCALE (expected true or false)"
+      exit 1
+      ;;
+  esac
+
+  if [[ "$TAILSCALE" != "true" && -n "$TAILSCALE_AUTH_KEY" ]]; then
+    err "--tailscale-auth-key requires Tailscale to be enabled."
+    exit 1
+  fi
+
+  if [[ "$TAILSCALE" != "true" && -n "$TAILSCALE_HOSTNAME" ]]; then
+    err "--tailscale-hostname requires Tailscale to be enabled."
+    exit 1
+  fi
+}
+
 ensure_ansible_local() {
   require_cmd ansible-playbook
 }
@@ -578,12 +629,16 @@ read_public_key_file() {
 write_extra_vars_file() {
   local file_path="$1"
   local ssh_public_key_value="$2"
+  local escaped_tailscale_auth_key="${TAILSCALE_AUTH_KEY//\'/\'\"\'\"\'}"
+  local escaped_tailscale_hostname="${TAILSCALE_HOSTNAME//\'/\'\"\'\"\'}"
 
   {
     printf 'simple_vps_admin_user: "%s"\n' "$ADMIN_USER"
     printf 'simple_vps_timezone: "%s"\n' "$TIMEZONE"
     printf 'simple_vps_locale: "%s"\n' "$LOCALE"
     printf 'security_enable_tailscale: %s\n' "$TAILSCALE"
+    printf "simple_vps_tailscale_auth_key: '%s'\n" "$escaped_tailscale_auth_key"
+    printf "simple_vps_tailscale_hostname: '%s'\n" "$escaped_tailscale_hostname"
 
     if [[ -n "$ssh_public_key_value" ]]; then
       local escaped_key="${ssh_public_key_value//\'/\'\"\'\"\'}"
@@ -655,6 +710,7 @@ run_remote() {
   local tmp_vars
   tmp_inventory="$(mktemp)"
   tmp_vars="$(mktemp)"
+  chmod 600 "$tmp_vars"
 
   trap "rm -f '$tmp_inventory' '$tmp_vars'" EXIT
 
@@ -718,6 +774,7 @@ run_local() {
   local tmp_vars
   tmp_inventory="$(mktemp)"
   tmp_vars="$(mktemp)"
+  chmod 600 "$tmp_vars"
 
   trap "rm -f '$tmp_inventory' '$tmp_vars'" EXIT
 
@@ -750,6 +807,7 @@ main() {
   maybe_run_interactive_wizard
   auto_detect_mode
   validate_mode
+  validate_tailscale_options
   prepare_ansible_env
   ensure_simple_vps_layout "$@"
 
@@ -758,6 +816,9 @@ main() {
   info "Admin user: $ADMIN_USER"
   info "Timezone: $TIMEZONE"
   info "Tailscale: $TAILSCALE"
+  if [[ "$TAILSCALE" == "true" ]]; then
+    info "Tailscale auth: $(present_or_missing "$TAILSCALE_AUTH_KEY" "auth key provided" "manual login required")"
+  fi
 
   case "$MODE" in
     remote)
