@@ -91,6 +91,10 @@ class SimpleVpsCliTest(unittest.TestCase):
     def test_failed_reload_restores_previous_caddyfile(self):
         with tempfile.TemporaryDirectory() as tmp:
             cli = load_cli(Path(tmp))
+            cli.STATE_PATH.write_text(
+                json.dumps({"version": 1, "routes": [{"host": "old.example.com", "port": 3000}]}),
+                encoding="utf-8",
+            )
             cli.SYSTEMCTL_BIN = "false"
             cli.CADDYFILE_PATH.write_text("old caddyfile\n", encoding="utf-8")
 
@@ -98,6 +102,8 @@ class SimpleVpsCliTest(unittest.TestCase):
                 call_quiet(cli.cmd_publish, argparse.Namespace(host="example.com", port="3000", force=False))
 
             self.assertEqual(cli.CADDYFILE_PATH.read_text(encoding="utf-8"), "old caddyfile\n")
+            state = json.loads(cli.STATE_PATH.read_text(encoding="utf-8"))
+            self.assertEqual(state["routes"], [{"host": "old.example.com", "port": 3000}])
             self.assertEqual(len(list(cli.BACKUP_DIR.iterdir())), 1)
 
 
