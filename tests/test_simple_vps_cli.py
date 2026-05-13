@@ -4,6 +4,7 @@ import importlib.machinery
 import importlib.util
 import io
 import json
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -32,6 +33,13 @@ def call_quiet(func, *args, **kwargs):
         return func(*args, **kwargs)
 
 
+def capture_quiet(func, *args, **kwargs):
+    stdout = io.StringIO()
+    with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(io.StringIO()):
+        func(*args, **kwargs)
+    return stdout.getvalue()
+
+
 class SimpleVpsCliTest(unittest.TestCase):
     def test_publish_writes_state_and_caddyfile(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -50,7 +58,8 @@ class SimpleVpsCliTest(unittest.TestCase):
             )
 
             caddyfile = cli.CADDYFILE_PATH.read_text(encoding="utf-8")
-            self.assertIn("127.0.0.1:8080 {", caddyfile)
+            self.assertIn("http://:8080 {", caddyfile)
+            self.assertIn("bind 127.0.0.1", caddyfile)
             self.assertIn("@route_0 host api.example.com", caddyfile)
             self.assertIn("reverse_proxy 127.0.0.1:3001", caddyfile)
             self.assertIn("@route_1 host example.com", caddyfile)
@@ -105,6 +114,33 @@ class SimpleVpsCliTest(unittest.TestCase):
             state = json.loads(cli.STATE_PATH.read_text(encoding="utf-8"))
             self.assertEqual(state["routes"], [{"host": "old.example.com", "port": 3000}])
             self.assertEqual(len(list(cli.BACKUP_DIR.iterdir())), 1)
+
+    def test_validate_uses_caddyfile_adapter(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cli = load_cli(Path(tmp))
+            commands = []
+
+            def fake_run(command, text=False, capture_output=False, check=False):
+                commands.append(command)
+                return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+            cli.subprocess.run = fake_run
+            call_quiet(cli.cmd_generate_caddy, argparse.Namespace())
+
+            self.assertIn(
+                ["true", "validate", "--config", str(commands[0][3]), "--adapter", "caddyfile"],
+                commands,
+            )
+
+    def test_generate_caddy_is_idempotent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cli = load_cli(Path(tmp))
+
+            first = capture_quiet(cli.cmd_generate_caddy, argparse.Namespace())
+            second = capture_quiet(cli.cmd_generate_caddy, argparse.Namespace())
+
+            self.assertIn("Generated", first)
+            self.assertIn("already up to date", second)
 
 
 if __name__ == "__main__":

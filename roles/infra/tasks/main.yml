@@ -105,20 +105,6 @@
     state: present
     update_cache: yes
 
-- name: Create default local-only Caddyfile
-  copy:
-    dest: /etc/caddy/Caddyfile
-    mode: '0644'
-    force: no
-    content: |
-      # Simple VPS local ingress.
-      # Public traffic should arrive through Cloudflare Tunnel and hit this
-      # listener on localhost, not the server's public network interface.
-      127.0.0.1:8080 {
-          respond "Simple VPS Caddy ready"
-      }
-  notify: Reload Caddy
-
 - name: Create www directory
   file:
     path: /var/www/html
@@ -132,6 +118,11 @@
     name: caddy
     enabled: yes
     state: started
+
+- name: Generate Simple VPS Caddyfile from state
+  command: simple-vps generate-caddy
+  register: infra_generate_caddy
+  changed_when: "'Generated ' in infra_generate_caddy.stdout"
 
 - name: Set Cloudflare Tunnel service mode
   set_fact:
