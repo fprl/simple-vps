@@ -1,52 +1,55 @@
 ---
-# Docker + Caddy.
+# Caddy by default, Docker only when explicitly requested.
 
-- name: Add Docker GPG key
-  apt_key:
-    url: https://download.docker.com/linux/ubuntu/gpg
-    state: present
+- name: Install optional Docker runtime
+  block:
+    - name: Add Docker GPG key
+      apt_key:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        state: present
 
-- name: Add Docker repository
-  apt_repository:
-    repo: "deb [arch=amd64] https://download.docker.com/linux/ubuntu {{ ansible_facts['distribution_release'] }} stable"
-    state: present
-    filename: docker
+    - name: Add Docker repository
+      apt_repository:
+        repo: "deb [arch=amd64] https://download.docker.com/linux/ubuntu {{ ansible_facts['distribution_release'] }} stable"
+        state: present
+        filename: docker
 
-- name: Install Docker
-  apt:
-    name:
-      - docker-ce
-      - docker-ce-cli
-      - containerd.io
-      - docker-buildx-plugin
-      - docker-compose-plugin
-    state: present
-    update_cache: yes
+    - name: Install Docker
+      apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-buildx-plugin
+          - docker-compose-plugin
+        state: present
+        update_cache: yes
 
-- name: Add admin user to docker group
-  user:
-    name: "{{ admin_user }}"
-    groups: docker
-    append: yes
+    - name: Add admin user to docker group
+      user:
+        name: "{{ admin_user }}"
+        groups: docker
+        append: yes
 
-- name: Enable and start Docker
-  systemd:
-    name: docker
-    enabled: yes
-    state: started
+    - name: Enable and start Docker
+      systemd:
+        name: docker
+        enabled: yes
+        state: started
 
-- name: Create Docker daemon config
-  copy:
-    dest: /etc/docker/daemon.json
-    content: |
-      {
-        "log-driver": "json-file",
-        "log-opts": {
-          "max-size": "10m",
-          "max-file": "3"
-        }
-      }
-  notify: Restart Docker
+    - name: Create Docker daemon config
+      copy:
+        dest: /etc/docker/daemon.json
+        content: |
+          {
+            "log-driver": "json-file",
+            "log-opts": {
+              "max-size": "10m",
+              "max-file": "3"
+            }
+          }
+      notify: Restart Docker
+  when: openvps_install_docker | default(false) | bool
 
 - name: Add Caddy GPG key
   apt_key:
@@ -65,16 +68,17 @@
     state: present
     update_cache: yes
 
-- name: Create default Caddyfile
+- name: Create default local-only Caddyfile
   copy:
     dest: /etc/caddy/Caddyfile
     mode: '0644'
     force: no
     content: |
-      # Default Caddyfile
-      # Edit this file to add your domains
-      :80 {
-          respond "Hello from Caddy!"
+      # OpenVPS local ingress.
+      # Public traffic should arrive through Cloudflare Tunnel and hit this
+      # listener on localhost, not the server's public network interface.
+      127.0.0.1:8080 {
+          respond "OpenVPS Caddy ready"
       }
   notify: Reload Caddy
 

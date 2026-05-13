@@ -34,8 +34,7 @@ Expected:
 
 ## Optional Docker Runtime
 
-Docker is part of the current implementation, but the target production runtime is
-Node.js + PM2 with Docker available as an explicit optional install.
+Docker is optional. It is installed only when `openvps_install_docker=true`.
 
 ```bash
 sudo systemctl is-active docker
@@ -46,7 +45,9 @@ Expected when Docker is installed:
 
 - Docker active
 
-## Developer Toolchain
+## Optional Developer Toolchain
+
+Developer comfort tools are installed only when `openvps_install_devtools=true`.
 
 ```bash
 zsh --version
@@ -60,7 +61,7 @@ Expected:
 
 - Commands resolve and return versions
 
-## Agent CLIs
+## Optional Agent CLIs
 
 ```bash
 codex --version || npx @openai/codex --version

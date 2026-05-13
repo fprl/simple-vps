@@ -9,7 +9,6 @@
 - name: Install essential packages
   apt:
     name:
-      - zsh
       - git
       - curl
       - wget
@@ -31,7 +30,7 @@
 - name: Create admin user
   user:
     name: "{{ admin_user }}"
-    shell: /bin/zsh
+    shell: "{{ openvps_admin_shell | default('/bin/bash') }}"
     groups: sudo
     append: yes
     create_home: yes

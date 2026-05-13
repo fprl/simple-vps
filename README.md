@@ -192,18 +192,16 @@ Per-server setup should be automated by OpenVPS.
 This section describes the code that exists today, before the refactor described
 above.
 
-A fresh Ubuntu VPS becomes a productive development environment with:
+A fresh Ubuntu VPS becomes a lean production app host with:
 
 - **Security**: UFW firewall, fail2ban, SSH hardening, unattended upgrades
-- **Container Runtime**: Docker + Docker Compose plugin
-- **Web Server**: Caddy with automatic HTTPS support
-- **Shell UX**: Zsh + Oh My Zsh + Powerlevel10k + modern CLI tooling
-- **Languages**: Node.js LTS, Bun, Python (`uv`), Go, Rust
-- **AI CLIs**: Claude Code, OpenAI Codex, Google Gemini CLI, OpenCode
+- **Web Server**: Caddy listening locally by default
+- **Runtime**: Node.js LTS, pnpm, PM2
+- **Optional Docker**: gated behind `openvps_install_docker=true`
+- **Optional Dev Tools**: gated behind `openvps_install_devtools=true`
 
-The plan is to make Node.js, pnpm, and PM2 the default runtime, then move shell
-comfort tools, AI CLIs, and Docker behind explicit CLI commands so they cannot
-break the default production install.
+Shell comfort tools, AI CLIs, language extras, and Docker are no longer part of
+the default production path.
 
 ## Current Quick Start
 
@@ -290,7 +288,8 @@ OpenVPS converges in two phases:
 
 2. **Apply** (`playbooks/vps-apply.yml`)
 - Applies security hardening
-- Installs Docker, Caddy, developer tooling, and AI CLIs in the current implementation
+- Installs Caddy, Node.js, pnpm, and PM2 by default
+- Can install Docker and dev tooling through explicit variables
 
 `install.sh` orchestrates both phases with shared variables.
 
