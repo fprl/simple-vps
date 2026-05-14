@@ -48,10 +48,15 @@ Server-local route management:
 
 ```bash
 simple-vps status
-simple-vps routes
-simple-vps publish --host example.com --port 3000
-simple-vps unpublish --host example.com
+simple-vps route list
+simple-vps route proxy example.com --port 3000
+simple-vps route static data.example.com --root /var/apps/data/current/public
+simple-vps route redirect old.example.com --to https://new.example.com
+simple-vps route remove example.com
 ```
+
+`publish`, `unpublish`, and `routes` remain compatibility aliases for simple
+proxy routes.
 
 ## Quick Start
 

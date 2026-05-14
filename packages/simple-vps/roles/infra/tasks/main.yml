@@ -127,7 +127,7 @@
     content: |
       {
         "routes": [],
-        "version": 1
+        "version": 2
       }
 
 - name: Install Simple VPS CLI
@@ -154,6 +154,22 @@
     name: caddy
     state: present
     update_cache: yes
+
+- name: Create Simple VPS Caddy directory
+  file:
+    path: /etc/caddy/simple-vps
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Create user Caddy snippets directory
+  file:
+    path: /etc/caddy/conf.d
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
 
 - name: Create www directory
   file:

@@ -111,20 +111,27 @@ Keep the CLI tiny:
 
 ```bash
 simple-vps status
-simple-vps publish --host example.com --port 3000
-simple-vps unpublish --host example.com
-simple-vps routes
+simple-vps route list
+simple-vps route list --json
+simple-vps route proxy example.com --port 3000
+simple-vps route static data.example.com --root /var/apps/data/current/public
+simple-vps route redirect old.example.com --to https://new.example.com
+simple-vps route remove example.com
 simple-vps devtools install
 ```
 
-`publish` means expose a local service through the production ingress stack.
+`route proxy` means expose a local service through the production ingress stack.
 
 Examples:
 
 ```bash
-simple-vps publish --host example.com --port 3000
-simple-vps publish --host api.example.com --port 8080
+simple-vps route proxy example.com --port 3000
+simple-vps route proxy api.example.com --port 8080
+simple-vps route static data.example.com --root /var/apps/data-feed/current/public
 ```
+
+`publish`, `unpublish`, and `routes` remain compatibility aliases for simple
+proxy routes.
 
 ## Routing State
 
@@ -137,18 +144,22 @@ Simple VPS should maintain one source of truth on the server:
 Generated files:
 
 ```text
-/etc/cloudflared/config.yml
 /etc/caddy/Caddyfile
+/etc/caddy/simple-vps/routes.caddy
+/etc/cloudflared/config.yml
 ```
 
 Rules:
 
 - Existing matching route: no-op
 - Existing conflicting route: fail unless `--force`
-- Existing Caddy host: fail unless `--replace`
+- Existing Caddy host: fail unless `--force`
 - Validate Caddy before reload
 - Validate Cloudflare/cloudflared config before reload where possible
 - Keep backups before changing generated files
+- Preserve user-owned Caddy snippets under `/etc/caddy/conf.d`
+- Detect manual edits in Simple VPS generated Caddy files and fail unless
+  `--force`
 
 ## Cloudflare Model
 
@@ -232,6 +243,8 @@ Current default apply path installs:
 - Tailscale package and `tailscaled`
 - `cloudflared` package for Cloudflare Tunnel ingress
 - Caddy local-only
+- `/etc/caddy/simple-vps` for generated Caddy snippets
+- `/etc/caddy/conf.d` for user-owned Caddy snippets
 - Node.js LTS
 - Bun
 - pnpm
@@ -273,11 +286,19 @@ Current CLI behavior:
 
 - `simple-vps status` prints state path, route count, service status, and
   installed tool status for runtime primitives.
-- `simple-vps routes` lists host-to-port routes from state.
-- `simple-vps publish --host HOST --port PORT` writes state and regenerates
-  `/etc/caddy/Caddyfile`.
-- `simple-vps unpublish --host HOST` removes a route and regenerates Caddy.
-- `simple-vps generate-caddy` regenerates Caddy from state.
+- `simple-vps route list` lists routes from state.
+- `simple-vps route list --json` emits route state as JSON.
+- `simple-vps route proxy HOST --port PORT` writes a proxy route and regenerates
+  managed Caddy files.
+- `simple-vps route static HOST --root PATH` writes a static file route and
+  regenerates managed Caddy files.
+- `simple-vps route redirect HOST --to URL` writes a redirect route and
+  regenerates managed Caddy files.
+- `simple-vps route remove HOST` removes a route and regenerates managed Caddy
+  files.
+- `simple-vps publish`, `simple-vps unpublish`, and `simple-vps routes` remain
+  compatibility aliases.
+- `simple-vps generate-caddy` regenerates managed Caddy files from state.
 - Mutating commands require root, validate the generated Caddyfile, keep
   backups under `/etc/simple-vps/backups`, and reload Caddy.
 

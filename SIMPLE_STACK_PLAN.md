@@ -63,7 +63,7 @@ Status markers:
 - [x] `packages/simple-deploy` exists with a README-level contract.
 - [x] Docker is opt-in for Simple VPS.
 - [x] Bun is installed as part of the Simple VPS runtime baseline.
-- [ ] Route primitives are still the next major Simple VPS feature.
+- [~] Route primitives are partially implemented in Simple VPS.
 - [ ] Simple Deploy has no implementation yet.
 
 ## Repository Layout
@@ -245,16 +245,16 @@ user explicitly forces regeneration.
 
 ### Route Primitives
 
-- [ ] Redesign route state schema for proxy/static/redirect.
-- [ ] Add managed Caddy file ownership boundaries.
-- [ ] Preserve user-owned Caddy snippets under `conf.d`.
-- [ ] Detect manual edits in generated files.
-- [ ] Add `simple-vps route proxy`.
-- [ ] Add `simple-vps route static`.
-- [ ] Add `simple-vps route redirect`.
-- [ ] Add route deletion by app/host.
-- [ ] Add JSON output for route listing.
-- [ ] Add tests for route conflicts and generated Caddy validation.
+- [x] Redesign route state schema for proxy/static/redirect.
+- [x] Add managed Caddy file ownership boundaries.
+- [x] Preserve user-owned Caddy snippets under `conf.d`.
+- [x] Detect manual edits in generated files.
+- [x] Add `simple-vps route proxy`.
+- [x] Add `simple-vps route static`.
+- [x] Add `simple-vps route redirect`.
+- [~] Add route deletion by app/host.
+- [x] Add JSON output for route listing.
+- [x] Add tests for route conflicts and generated Caddy validation.
 
 ### Simple Deploy Contract
 
