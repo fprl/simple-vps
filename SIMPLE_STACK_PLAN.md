@@ -63,7 +63,7 @@ SSH hardening
 Tailscale admin access
 Cloudflare Tunnel ingress
 Caddy bound to 127.0.0.1
-Node runtime primitives
+Node and Bun runtime primitives
 Litestream binary
 simple-vps CLI
 ```

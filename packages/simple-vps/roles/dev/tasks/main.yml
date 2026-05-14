@@ -29,6 +29,15 @@
     - pnpm
     - pm2
 
+- name: Install Bun runtime
+  shell: |
+    set -e
+    export BUN_INSTALL=/usr/local
+    curl -fsSL https://bun.com/install | bash
+  args:
+    creates: /usr/local/bin/bun
+  when: not ansible_check_mode
+
 # -----------------------------------------------------------------------------
 # Optional dev comfort tools
 # -----------------------------------------------------------------------------
@@ -132,15 +141,6 @@
 
 - name: Install optional language extras
   block:
-    - name: Install Bun (system-wide)
-      shell: |
-        set -e
-        export BUN_INSTALL=/usr/local
-        curl -fsSL https://bun.com/install | bash
-      args:
-        creates: /usr/local/bin/bun
-      when: not ansible_check_mode
-
     - name: Install uv (system-wide)
       shell: |
         set -e

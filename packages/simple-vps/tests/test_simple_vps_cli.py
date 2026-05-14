@@ -155,6 +155,7 @@ class SimpleVpsCliTest(unittest.TestCase):
             self.assertNotIn("  docker:", output)
             self.assertIn("tools:", output)
             self.assertIn("  litestream: litestream-installed", output)
+            self.assertIn("  bun: bun-installed", output)
 
 
 if __name__ == "__main__":

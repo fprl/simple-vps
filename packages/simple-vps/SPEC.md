@@ -65,6 +65,7 @@ The default install should create:
 - Cloudflare Tunnel for public web ingress
 - Caddy listening locally, not on the public interface
 - Node.js LTS
+- Bun
 - pnpm
 - PM2
 - Litestream binary for SQLite backup workflows
@@ -97,7 +98,7 @@ This can install:
 - Powerlevel10k
 - Zsh autosuggestions/highlighting
 - `fzf`, `zoxide`, `atuin`, `lsd`, `bat`
-- Bun, uv, Go, Rust
+- uv, Go, Rust
 - AI CLIs: Codex, Claude, Gemini, OpenCode
 
 Litestream is installed by default because SQLite backup/restore is part of the
@@ -232,6 +233,7 @@ Current default apply path installs:
 - `cloudflared` package for Cloudflare Tunnel ingress
 - Caddy local-only
 - Node.js LTS
+- Bun
 - pnpm
 - PM2
 - Litestream
