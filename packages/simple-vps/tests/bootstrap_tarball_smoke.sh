@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TMP_DIR="$(mktemp -d)"
+ROOT_NAME="$(basename "$ROOT_DIR")"
 
 cleanup() {
   rm -rf "$TMP_DIR"
@@ -12,7 +13,7 @@ trap cleanup EXIT
 ARCHIVE_PATH="$TMP_DIR/simple-vps.tar.gz"
 BARE_DIR="$TMP_DIR/bare"
 
-git -C "$ROOT_DIR" archive --format=tar.gz --prefix=simple-vps-main/ --output "$ARCHIVE_PATH" HEAD
+tar -czf "$ARCHIVE_PATH" -C "$(dirname "$ROOT_DIR")" "$ROOT_NAME"
 mkdir -p "$BARE_DIR"
 cp "$ROOT_DIR/install.sh" "$BARE_DIR/install.sh"
 
