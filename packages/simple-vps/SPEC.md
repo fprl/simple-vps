@@ -45,13 +45,13 @@ Laptop
 
 The VPS should not expose public `22`, `80`, `443`, or random app ports.
 
-Default local ingress is Caddy on `127.0.0.1:8080`. Docker/Kamal-style app
-deploys may use their own local proxy instead, but Simple VPS should still
-prepare the box and keep public ports closed.
+Default local ingress is Caddy on `127.0.0.1:8080`. Container-based deploy
+tools are outside the v1 product direction, but Simple VPS should still prepare
+the box and keep public ports closed.
 
 Simple VPS owns server readiness. App repositories own app deployment,
-environment variables, migrations, app-specific users, containers/processes,
-and database backup configuration.
+environment variables, migrations, app-specific users, processes, and database
+backup configuration.
 
 ## Default Install
 
@@ -67,7 +67,6 @@ The default install should create:
 - Node.js LTS
 - pnpm
 - PM2
-- Docker
 - Litestream binary for SQLite backup workflows
 - `/usr/local/bin/simple-vps`
 - `/etc/simple-vps/state.json`
@@ -77,6 +76,14 @@ The default install should create:
 ## Optional Installs
 
 Personal comfort tools should not be able to break the production baseline.
+
+Docker is optional and off by default:
+
+```bash
+./install.sh --docker
+```
+
+Simple VPS does not require apps to use Docker.
 
 Dev tools:
 
@@ -92,10 +99,6 @@ This can install:
 - `fzf`, `zoxide`, `atuin`, `lsd`, `bat`
 - Bun, uv, Go, Rust
 - AI CLIs: Codex, Claude, Gemini, OpenCode
-
-Docker is installed by default because it is the standard packaging contract for
-Kamal, Dokploy, Fly-style portability, and many self-hosted deploy paths.
-Simple VPS does not require apps to use Docker.
 
 Litestream is installed by default because SQLite backup/restore is part of the
 intended production story. Simple VPS installs the binary, but app repositories
@@ -231,12 +234,11 @@ Current default apply path installs:
 - Node.js LTS
 - pnpm
 - PM2
-- Docker
 - Litestream
 
 Current optional variables:
 
-- `simple_vps_install_docker=false` or `--no-docker` to disable Docker
+- `simple_vps_install_docker=true` or `--docker` to install Docker
 - `simple_vps_install_litestream=false` or `--no-litestream` to disable
   Litestream binary installation
 - `simple_vps_install_devtools=true`

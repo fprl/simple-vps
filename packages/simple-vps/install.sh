@@ -21,7 +21,7 @@ TAILSCALE_HOSTNAME="${SIMPLE_VPS_TAILSCALE_HOSTNAME:-}"
 CLOUDFLARE_TUNNEL="true"
 CLOUDFLARE_TUNNEL_TOKEN="${SIMPLE_VPS_CLOUDFLARE_TUNNEL_TOKEN:-}"
 CLOUDFLARE_TUNNEL_CONFIG="${SIMPLE_VPS_CLOUDFLARE_TUNNEL_CONFIG:-}"
-INSTALL_DOCKER="${SIMPLE_VPS_INSTALL_DOCKER:-true}"
+INSTALL_DOCKER="${SIMPLE_VPS_INSTALL_DOCKER:-false}"
 INSTALL_LITESTREAM="${SIMPLE_VPS_INSTALL_LITESTREAM:-true}"
 CHECK_MODE="false"
 ASSUME_YES="false"
@@ -72,8 +72,8 @@ Options:
   --no-cloudflare-tunnel         Disable Cloudflare Tunnel setup
   --cloudflare-tunnel-token <t>  Cloudflare Tunnel token for managed tunnels
   --cloudflare-tunnel-config <p> Existing cloudflared config path
-  --docker                       Install Docker runtime (default)
-  --no-docker                    Skip Docker runtime installation
+  --docker                       Install optional Docker runtime
+  --no-docker                    Skip Docker runtime installation (default)
   --litestream                   Install Litestream binary (default)
   --no-litestream                Skip Litestream installation
   --check                        Run Ansible in check mode

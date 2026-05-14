@@ -215,11 +215,11 @@ def cmd_status(_args):
     print(f"state: {STATE_PATH}")
     print(f"routes: {len(state['routes'])}")
     print("services:")
-    for service in ("tailscaled", "cloudflared", "caddy", "docker"):
+    for service in ("tailscaled", "cloudflared", "caddy"):
         status = service_status(service)
         print(f"  {service}: {status}")
     print("tools:")
-    for tool in ("docker", "litestream", "node", "pnpm", "pm2"):
+    for tool in ("litestream", "node", "pnpm", "pm2"):
         print(f"  {tool}: {tool_status(tool)}")
 
 

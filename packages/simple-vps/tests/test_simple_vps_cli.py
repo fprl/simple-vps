@@ -152,7 +152,7 @@ class SimpleVpsCliTest(unittest.TestCase):
 
             self.assertIn("routes: 0", output)
             self.assertIn("services:", output)
-            self.assertIn("  docker: docker-active", output)
+            self.assertNotIn("  docker:", output)
             self.assertIn("tools:", output)
             self.assertIn("  litestream: litestream-installed", output)
 

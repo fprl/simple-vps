@@ -26,13 +26,12 @@ Default install path:
 - cloudflared installed for Cloudflare Tunnel ingress
 - Caddy listening on `127.0.0.1:8080`
 - Node.js LTS, pnpm, PM2
-- Docker
 - Litestream binary for SQLite backup workflows
 - `/usr/local/bin/simple-vps` for status and route management
 
 Explicit optional installs:
 
-- Disable Docker: `simple_vps_install_docker=false` or `--no-docker`
+- Install Docker: `simple_vps_install_docker=true` or `--docker`
 - Disable Litestream: `simple_vps_install_litestream=false` or `--no-litestream`
 - Dev tools / shell / AI CLIs: `simple_vps_install_devtools=true`
 

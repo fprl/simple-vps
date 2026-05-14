@@ -1,6 +1,6 @@
 ---
-# Caddy local ingress by default. Docker and Litestream are production
-# primitives, but app deploys own app-specific container and backup config.
+# Caddy local ingress by default. Litestream is a production primitive for
+# SQLite backup workflows. Docker remains available only as an explicit opt-in.
 
 - name: Set Docker apt architecture
   set_fact:
@@ -11,7 +11,7 @@
           'aarch64': 'arm64'
         }.get(ansible_facts['architecture'], ansible_facts['architecture'])
       }}
-  when: simple_vps_install_docker | default(true) | bool
+  when: simple_vps_install_docker | default(false) | bool
 
 - name: Install Docker runtime
   block:
@@ -61,7 +61,7 @@
             }
           }
       notify: Restart Docker
-  when: simple_vps_install_docker | default(true) | bool
+  when: simple_vps_install_docker | default(false) | bool
 
 - name: Set Litestream package facts
   set_fact:

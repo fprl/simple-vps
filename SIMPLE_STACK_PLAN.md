@@ -68,9 +68,8 @@ Litestream binary
 simple-vps CLI
 ```
 
-Current follow-up: Docker is still installed by default in the existing Simple
-VPS package. Under the Simple Stack direction, that should be removed or made
-explicitly opt-in before v1.
+Docker is not part of the default host contract. Simple VPS can still install it
+behind an explicit `--docker` flag, but Simple Deploy v1 should not use it.
 
 ## Simple Deploy
 
@@ -169,9 +168,8 @@ a raw Caddy snippet escape hatch that is validated before reload.
 
 1. Move Simple VPS into `packages/simple-vps` without breaking it.
 2. Add `packages/simple-deploy` with the deploy contract and examples.
-3. Remove or opt-in Docker in Simple VPS.
-4. Add route primitives for proxy/static/redirect.
-5. Build Simple Deploy setup/deploy/logs/status/rollback for native Bun/Node
+3. Add route primitives for proxy/static/redirect.
+4. Build Simple Deploy setup/deploy/logs/status/rollback for native Bun/Node
    apps.
-6. Add static deploys.
-7. Add SQLite/Litestream app examples.
+5. Add static deploys.
+6. Add SQLite/Litestream app examples.
