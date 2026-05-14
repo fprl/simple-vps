@@ -132,7 +132,7 @@ prune old releases
 
 ## App Manifest
 
-The app repo should contain a deploy manifest:
+The app repo should contain `simple-deploy.toml`:
 
 ```toml
 app = "my-app"
@@ -258,7 +258,7 @@ user explicitly forces regeneration.
 
 ### Simple Deploy Contract
 
-- [ ] Pick manifest filename and format.
+- [x] Pick manifest filename and format: `simple-deploy.toml`.
 - [ ] Define app identity rules.
 - [ ] Define environment names.
 - [ ] Define server connection fields.

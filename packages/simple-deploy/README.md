@@ -52,6 +52,8 @@ simple-deploy ssh production
 
 ## Manifest
 
+Simple Deploy reads `simple-deploy.toml` from the app repo root.
+
 ```toml
 app = "my-app"
 
