@@ -117,6 +117,7 @@ simple-vps route proxy example.com --port 3000
 simple-vps route static data.example.com --root /var/apps/data/current/public
 simple-vps route redirect old.example.com --to https://new.example.com
 simple-vps route remove example.com
+simple-vps route remove --app my-app
 simple-vps devtools install
 ```
 
@@ -294,8 +295,10 @@ Current CLI behavior:
   regenerates managed Caddy files.
 - `simple-vps route redirect HOST --to URL` writes a redirect route and
   regenerates managed Caddy files.
-- `simple-vps route remove HOST` removes a route and regenerates managed Caddy
-  files.
+- `simple-vps route remove HOST` removes a route by host and regenerates managed
+  Caddy files.
+- `simple-vps route remove --app APP` removes all routes for an app and
+  regenerates managed Caddy files.
 - `simple-vps publish`, `simple-vps unpublish`, and `simple-vps routes` remain
   compatibility aliases.
 - `simple-vps generate-caddy` regenerates managed Caddy files from state.

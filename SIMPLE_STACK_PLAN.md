@@ -252,7 +252,7 @@ user explicitly forces regeneration.
 - [x] Add `simple-vps route proxy`.
 - [x] Add `simple-vps route static`.
 - [x] Add `simple-vps route redirect`.
-- [~] Add route deletion by app/host.
+- [x] Add route deletion by app/host.
 - [x] Add JSON output for route listing.
 - [x] Add tests for route conflicts and generated Caddy validation.
 

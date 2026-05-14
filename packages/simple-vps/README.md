@@ -53,6 +53,7 @@ simple-vps route proxy example.com --port 3000
 simple-vps route static data.example.com --root /var/apps/data/current/public
 simple-vps route redirect old.example.com --to https://new.example.com
 simple-vps route remove example.com
+simple-vps route remove --app my-app
 ```
 
 `publish`, `unpublish`, and `routes` remain compatibility aliases for simple

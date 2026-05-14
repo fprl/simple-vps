@@ -170,6 +170,56 @@ class SimpleVpsCliTest(unittest.TestCase):
             payload = json.loads(output)
             self.assertEqual(payload["routes"], [{"host": "example.com", "port": 3000, "type": "proxy"}])
 
+    def test_route_remove_by_app_removes_only_matching_routes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cli = load_cli(Path(tmp))
+
+            call_quiet(
+                cli.cmd_route_proxy,
+                argparse.Namespace(
+                    host="app.example.com",
+                    port="3000",
+                    app="my-app",
+                    header=[],
+                    force=False,
+                ),
+            )
+            call_quiet(
+                cli.cmd_route_proxy,
+                argparse.Namespace(
+                    host="api.example.com",
+                    port="3001",
+                    app="my-app",
+                    header=[],
+                    force=False,
+                ),
+            )
+            call_quiet(
+                cli.cmd_route_proxy,
+                argparse.Namespace(
+                    host="other.example.com",
+                    port="3002",
+                    app="other",
+                    header=[],
+                    force=False,
+                ),
+            )
+
+            call_quiet(cli.cmd_route_remove, argparse.Namespace(host=None, app="my-app", force=False))
+
+            state = json.loads(cli.STATE_PATH.read_text(encoding="utf-8"))
+            self.assertEqual(
+                state["routes"],
+                [
+                    {
+                        "app": "other",
+                        "host": "other.example.com",
+                        "port": 3002,
+                        "type": "proxy",
+                    }
+                ],
+            )
+
     def test_invalid_host_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
             cli = load_cli(Path(tmp))
