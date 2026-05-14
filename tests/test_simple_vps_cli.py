@@ -142,6 +142,20 @@ class SimpleVpsCliTest(unittest.TestCase):
             self.assertIn("Generated", first)
             self.assertIn("already up to date", second)
 
+    def test_status_includes_services_and_tools(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cli = load_cli(Path(tmp))
+            cli.service_status = lambda service: f"{service}-active"
+            cli.tool_status = lambda tool: f"{tool}-installed"
+
+            output = capture_quiet(cli.cmd_status, argparse.Namespace())
+
+            self.assertIn("routes: 0", output)
+            self.assertIn("services:", output)
+            self.assertIn("  docker: docker-active", output)
+            self.assertIn("tools:", output)
+            self.assertIn("  litestream: litestream-installed", output)
+
 
 if __name__ == "__main__":
     unittest.main()

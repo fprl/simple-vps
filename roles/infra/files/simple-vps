@@ -214,9 +214,13 @@ def cmd_status(_args):
     print("Simple VPS")
     print(f"state: {STATE_PATH}")
     print(f"routes: {len(state['routes'])}")
-    for service in ("tailscaled", "cloudflared", "caddy"):
+    print("services:")
+    for service in ("tailscaled", "cloudflared", "caddy", "docker"):
         status = service_status(service)
-        print(f"{service}: {status}")
+        print(f"  {service}: {status}")
+    print("tools:")
+    for tool in ("docker", "litestream", "node", "pnpm", "pm2"):
+        print(f"  {tool}: {tool_status(tool)}")
 
 
 def service_status(service):
@@ -228,6 +232,29 @@ def service_status(service):
     )
     value = (result.stdout or result.stderr).strip()
     return value if value else f"exit {result.returncode}"
+
+
+def tool_status(tool):
+    path = shutil.which(tool)
+    if path is None:
+        return "missing"
+
+    command = [tool, "--version"]
+    if tool == "pm2":
+        command = [tool, "-v"]
+
+    result = subprocess.run(
+        command,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    value = (result.stdout or result.stderr).strip().splitlines()
+    if result.returncode == 0 and value:
+        return f"installed ({value[0]})"
+    if result.returncode == 0:
+        return "installed"
+    return f"installed (version check failed: exit {result.returncode})"
 
 
 def cmd_routes(_args):

@@ -31,8 +31,8 @@ Public traffic:
 Browser
   -> Cloudflare
   -> Cloudflare Tunnel
-  -> Caddy on 127.0.0.1
-  -> PM2 app on 127.0.0.1
+  -> local ingress on 127.0.0.1
+  -> app runtime on 127.0.0.1
 ```
 
 Admin traffic:
@@ -44,6 +44,14 @@ Laptop
 ```
 
 The VPS should not expose public `22`, `80`, `443`, or random app ports.
+
+Default local ingress is Caddy on `127.0.0.1:8080`. Docker/Kamal-style app
+deploys may use their own local proxy instead, but Simple VPS should still
+prepare the box and keep public ports closed.
+
+Simple VPS owns server readiness. App repositories own app deployment,
+environment variables, migrations, app-specific users, containers/processes,
+and database backup configuration.
 
 ## Default Install
 
@@ -59,6 +67,8 @@ The default install should create:
 - Node.js LTS
 - pnpm
 - PM2
+- Docker
+- Litestream binary for SQLite backup workflows
 - `/usr/local/bin/simple-vps`
 - `/etc/simple-vps/state.json`
 - Basic server packages: `git`, `curl`, `jq`, `htop`, `tmux`, `rsync`, `unzip`, `ncdu`
@@ -83,13 +93,13 @@ This can install:
 - Bun, uv, Go, Rust
 - AI CLIs: Codex, Claude, Gemini, OpenCode
 
-Docker:
+Docker is installed by default because it is the standard packaging contract for
+Kamal, Dokploy, Fly-style portability, and many self-hosted deploy paths.
+Simple VPS does not require apps to use Docker.
 
-```bash
-simple-vps docker install
-```
-
-Docker is useful, but it is not the default runtime for this tool.
+Litestream is installed by default because SQLite backup/restore is part of the
+intended production story. Simple VPS installs the binary, but app repositories
+own the database path, replica credentials, and systemd service configuration.
 
 ## CLI Shape
 
@@ -101,7 +111,6 @@ simple-vps publish --host example.com --port 3000
 simple-vps unpublish --host example.com
 simple-vps routes
 simple-vps devtools install
-simple-vps docker install
 ```
 
 `publish` means expose a local service through the production ingress stack.
@@ -222,10 +231,14 @@ Current default apply path installs:
 - Node.js LTS
 - pnpm
 - PM2
+- Docker
+- Litestream
 
 Current optional variables:
 
-- `simple_vps_install_docker=true`
+- `simple_vps_install_docker=false` or `--no-docker` to disable Docker
+- `simple_vps_install_litestream=false` or `--no-litestream` to disable
+  Litestream binary installation
 - `simple_vps_install_devtools=true`
 - `security_enable_tailscale=false` or `--no-tailscale` to disable Tailscale
 - `simple_vps_enable_cloudflare_tunnel=false` or `--no-cloudflare-tunnel`
@@ -254,7 +267,8 @@ Current Cloudflare Tunnel behavior:
 
 Current CLI behavior:
 
-- `simple-vps status` prints state path, route count, and service status.
+- `simple-vps status` prints state path, route count, service status, and
+  installed tool status for runtime primitives.
 - `simple-vps routes` lists host-to-port routes from state.
 - `simple-vps publish --host HOST --port PORT` writes state and regenerates
   `/etc/caddy/Caddyfile`.

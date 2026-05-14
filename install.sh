@@ -21,6 +21,8 @@ TAILSCALE_HOSTNAME="${SIMPLE_VPS_TAILSCALE_HOSTNAME:-}"
 CLOUDFLARE_TUNNEL="true"
 CLOUDFLARE_TUNNEL_TOKEN="${SIMPLE_VPS_CLOUDFLARE_TUNNEL_TOKEN:-}"
 CLOUDFLARE_TUNNEL_CONFIG="${SIMPLE_VPS_CLOUDFLARE_TUNNEL_CONFIG:-}"
+INSTALL_DOCKER="${SIMPLE_VPS_INSTALL_DOCKER:-true}"
+INSTALL_LITESTREAM="${SIMPLE_VPS_INSTALL_LITESTREAM:-true}"
 CHECK_MODE="false"
 ASSUME_YES="false"
 INTERACTIVE_MODE="auto"
@@ -34,6 +36,8 @@ SSH_PUBLIC_KEY_FILE_SET="false"
 ADMIN_USER_SET="false"
 TAILSCALE_SET="false"
 CLOUDFLARE_TUNNEL_SET="false"
+INSTALL_DOCKER_SET="false"
+INSTALL_LITESTREAM_SET="false"
 CHECK_MODE_SET="false"
 
 RED='\033[0;31m'
@@ -68,6 +72,10 @@ Options:
   --no-cloudflare-tunnel         Disable Cloudflare Tunnel setup
   --cloudflare-tunnel-token <t>  Cloudflare Tunnel token for managed tunnels
   --cloudflare-tunnel-config <p> Existing cloudflared config path
+  --docker                       Install Docker runtime (default)
+  --no-docker                    Skip Docker runtime installation
+  --litestream                   Install Litestream binary (default)
+  --no-litestream                Skip Litestream installation
   --check                        Run Ansible in check mode
   --interactive                  Force interactive wizard
   --no-interactive               Disable interactive wizard
@@ -349,6 +357,8 @@ interactive_wizard() {
   local set_ssh_key="false"
   local force_tailscale_prompt="false"
   local force_cloudflare_tunnel_prompt="false"
+  local force_docker_prompt="false"
+  local force_litestream_prompt="false"
   local force_check_prompt="false"
 
   if ! can_prompt; then
@@ -390,6 +400,12 @@ interactive_wizard() {
   if [[ "$CLOUDFLARE_TUNNEL_SET" != "true" ]]; then
     force_cloudflare_tunnel_prompt="true"
   fi
+  if [[ "$INSTALL_DOCKER_SET" != "true" ]]; then
+    force_docker_prompt="true"
+  fi
+  if [[ "$INSTALL_LITESTREAM_SET" != "true" ]]; then
+    force_litestream_prompt="true"
+  fi
   if [[ "$CHECK_MODE_SET" != "true" ]]; then
     force_check_prompt="true"
   fi
@@ -400,6 +416,8 @@ interactive_wizard() {
 
   prompt_yes_no TAILSCALE "Enable Tailscale?" "$TAILSCALE" "$force_tailscale_prompt"
   prompt_yes_no CLOUDFLARE_TUNNEL "Enable Cloudflare Tunnel?" "$CLOUDFLARE_TUNNEL" "$force_cloudflare_tunnel_prompt"
+  prompt_yes_no INSTALL_DOCKER "Install Docker?" "$INSTALL_DOCKER" "$force_docker_prompt"
+  prompt_yes_no INSTALL_LITESTREAM "Install Litestream?" "$INSTALL_LITESTREAM" "$force_litestream_prompt"
   prompt_yes_no CHECK_MODE "Run in check (dry-run) mode?" "$CHECK_MODE" "$force_check_prompt"
 
   ui_title "Provisioning Summary"
@@ -430,6 +448,8 @@ interactive_wizard() {
       ui_kv "cf_tunnel_cfg" "$CLOUDFLARE_TUNNEL_CONFIG"
     fi
   fi
+  ui_kv "docker" "$INSTALL_DOCKER"
+  ui_kv "litestream" "$INSTALL_LITESTREAM"
   ui_kv "check_mode" "$CHECK_MODE"
   ui_hr
 
@@ -531,6 +551,26 @@ parse_args() {
       --cloudflare-tunnel-config)
         CLOUDFLARE_TUNNEL_CONFIG="${2:-}"
         shift 2
+        ;;
+      --docker)
+        INSTALL_DOCKER="true"
+        INSTALL_DOCKER_SET="true"
+        shift
+        ;;
+      --no-docker)
+        INSTALL_DOCKER="false"
+        INSTALL_DOCKER_SET="true"
+        shift
+        ;;
+      --litestream)
+        INSTALL_LITESTREAM="true"
+        INSTALL_LITESTREAM_SET="true"
+        shift
+        ;;
+      --no-litestream)
+        INSTALL_LITESTREAM="false"
+        INSTALL_LITESTREAM_SET="true"
+        shift
         ;;
       --check)
         CHECK_MODE="true"
@@ -642,6 +682,26 @@ validate_cloudflare_tunnel_options() {
   fi
 }
 
+validate_install_options() {
+  case "$INSTALL_DOCKER" in
+    true|false)
+      ;;
+    *)
+      err "Invalid Docker value: $INSTALL_DOCKER (expected true or false)"
+      exit 1
+      ;;
+  esac
+
+  case "$INSTALL_LITESTREAM" in
+    true|false)
+      ;;
+    *)
+      err "Invalid Litestream value: $INSTALL_LITESTREAM (expected true or false)"
+      exit 1
+      ;;
+  esac
+}
+
 ensure_ansible_local() {
   require_cmd ansible-playbook
 }
@@ -709,6 +769,8 @@ write_extra_vars_file() {
     printf 'simple_vps_enable_cloudflare_tunnel: %s\n' "$CLOUDFLARE_TUNNEL"
     printf "simple_vps_cloudflare_tunnel_token: '%s'\n" "$escaped_cloudflare_tunnel_token"
     printf "simple_vps_cloudflare_tunnel_config_path: '%s'\n" "$escaped_cloudflare_tunnel_config"
+    printf 'simple_vps_install_docker: %s\n' "$INSTALL_DOCKER"
+    printf 'simple_vps_install_litestream: %s\n' "$INSTALL_LITESTREAM"
 
     if [[ -n "$ssh_public_key_value" ]]; then
       local escaped_key="${ssh_public_key_value//\'/\'\"\'\"\'}"
@@ -879,6 +941,7 @@ main() {
   validate_mode
   validate_tailscale_options
   validate_cloudflare_tunnel_options
+  validate_install_options
   prepare_ansible_env
   ensure_simple_vps_layout "$@"
 
@@ -898,6 +961,8 @@ main() {
       info "Cloudflare Tunnel auth: $(present_or_missing "$CLOUDFLARE_TUNNEL_TOKEN" "token provided" "service not enabled")"
     fi
   fi
+  info "Docker: $INSTALL_DOCKER"
+  info "Litestream: $INSTALL_LITESTREAM"
 
   case "$MODE" in
     remote)
