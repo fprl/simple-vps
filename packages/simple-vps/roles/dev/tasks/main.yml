@@ -21,13 +21,10 @@
     state: present
     update_cache: yes
 
-- name: Install default Node process tooling
+- name: Install pnpm
   npm:
-    name: "{{ item }}"
+    name: pnpm
     global: yes
-  loop:
-    - pnpm
-    - pm2
 
 - name: Install Bun runtime
   shell: |

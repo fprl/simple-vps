@@ -239,9 +239,11 @@ user explicitly forces regeneration.
 - [x] Make Docker opt-in instead of default.
 - [x] Install Bun in the default runtime baseline.
 - [x] Keep Litestream installed by default for SQLite workflows.
+- [x] Remove PM2 from the default baseline.
 - [ ] Fresh VPS validation after the monorepo move.
-- [ ] Decide whether PM2 should remain baseline or become optional once
-  Simple Deploy owns systemd services.
+
+Fresh VPS validation needs a real Ubuntu VPS or VM with systemd, SSH, UFW, and
+service management. A Docker container is not enough for this project.
 
 ### Route Primitives
 

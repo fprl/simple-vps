@@ -67,7 +67,6 @@ The default install should create:
 - Node.js LTS
 - Bun
 - pnpm
-- PM2
 - Litestream binary for SQLite backup workflows
 - `/usr/local/bin/simple-vps`
 - `/etc/simple-vps/state.json`
@@ -249,7 +248,6 @@ Current default apply path installs:
 - Node.js LTS
 - Bun
 - pnpm
-- PM2
 - Litestream
 
 Current optional variables:

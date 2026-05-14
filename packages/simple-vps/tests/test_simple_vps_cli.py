@@ -298,6 +298,7 @@ class SimpleVpsCliTest(unittest.TestCase):
             self.assertIn("tools:", output)
             self.assertIn("  litestream: litestream-installed", output)
             self.assertIn("  bun: bun-installed", output)
+            self.assertNotIn("  pm2:", output)
 
 
 if __name__ == "__main__":

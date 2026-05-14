@@ -25,7 +25,7 @@ Default install path:
 - Tailscale installed and started for private admin access
 - cloudflared installed for Cloudflare Tunnel ingress
 - Caddy listening on `127.0.0.1:8080`
-- Node.js LTS, Bun, pnpm, PM2
+- Node.js LTS, Bun, pnpm
 - Litestream binary for SQLite backup workflows
 - `/usr/local/bin/simple-vps` for status and route management
 

@@ -431,7 +431,7 @@ def cmd_status(_args):
         status = service_status(service)
         print(f"  {service}: {status}")
     print("tools:")
-    for tool in ("litestream", "node", "bun", "pnpm", "pm2"):
+    for tool in ("litestream", "node", "bun", "pnpm"):
         print(f"  {tool}: {tool_status(tool)}")
 
 
@@ -452,9 +452,6 @@ def tool_status(tool):
         return "missing"
 
     command = [tool, "--version"]
-    if tool == "pm2":
-        command = [tool, "-v"]
-
     result = subprocess.run(
         command,
         text=True,
