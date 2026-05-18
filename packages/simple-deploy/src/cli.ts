@@ -10,6 +10,20 @@ export type CheckResult = {
   envs: string[];
 };
 
+export type CommandResult = {
+  code: number;
+  stdout: string;
+  stderr: string;
+};
+
+export type CommandRunner = {
+  run(command: string[]): Promise<CommandResult>;
+};
+
+export type MainOptions = {
+  runner?: CommandRunner;
+};
+
 const APP_RE = /^[a-z][a-z0-9-]{1,40}$/;
 const SERVICE_RE = /^[a-z][a-z0-9-]{0,30}$/;
 const HOST_RE =
@@ -18,6 +32,21 @@ const RUNTIMES = new Set(["bun", "node", "static"]);
 const ROUTE_TYPES = new Set(["proxy", "static", "redirect"]);
 const RESERVED_SERVICES = new Set(["current", "releases", "shared"]);
 const LOCKFILES = ["bun.lock", "bun.lockb", "pnpm-lock.yaml", "package-lock.json", "yarn.lock"];
+
+const defaultRunner: CommandRunner = {
+  async run(command) {
+    const proc = Bun.spawn(command, {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [stdout, stderr, code] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+    return { code, stdout, stderr };
+  },
+};
 
 function isRecord(value: unknown): value is Dict {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -223,6 +252,19 @@ function installNeeded(runtime: string | undefined, build: Dict | undefined): bo
   return build.install !== false;
 }
 
+function requireString(value: unknown, label: string): string {
+  const text = asString(value);
+  if (!text) throw new Error(`${label} is required`);
+  return text;
+}
+
+function resolveEnv(manifest: Dict, envName: string): Dict {
+  const envs = isRecord(manifest.env) ? manifest.env : {};
+  const env = envs[envName];
+  if (!isRecord(env)) throw new Error(`env not found: ${envName}`);
+  return env;
+}
+
 export function checkManifest(root = process.cwd(), envName?: string): CheckResult {
   const manifest = readManifest(root);
   const errors: string[] = [];
@@ -316,14 +358,54 @@ service = "web"
   console.log("3. simple-deploy deploy production");
 }
 
+async function runCommand(runner: CommandRunner, command: string[], failureMessage: string) {
+  const result = await runner.run(command);
+  if (result.code !== 0) {
+    const detail = result.stderr.trim() || result.stdout.trim();
+    throw new Error(detail ? `${failureMessage}: ${detail}` : failureMessage);
+  }
+}
+
+async function runSetup(root: string, envName: string, runner: CommandRunner) {
+  const result = checkManifest(root, envName);
+  if (result.errors.length > 0) {
+    throw new Error(result.errors.join("\n"));
+  }
+
+  const manifest = readManifest(root);
+  const appName = requireString(manifest.name, "name");
+  const env = resolveEnv(manifest, envName);
+  const server = requireString(env.server, `[env.${envName}].server`);
+  const runtime = requireString(env.runtime, `[env.${envName}].runtime`);
+
+  await runCommand(runner, ["ssh", server, "true"], `SSH failed for ${server}`);
+  for (const tool of ["simple-vps", "rsync", runtime]) {
+    if (tool === "static") continue;
+    const message =
+      tool === "simple-vps"
+        ? "missing Simple VPS server API; rerun the Simple VPS install"
+        : `missing required server tool: ${tool}`;
+    await runCommand(runner, ["ssh", server, `command -v ${tool}`], message);
+  }
+  await runCommand(
+    runner,
+    ["ssh", server, `sudo simple-vps app create ${appName}`],
+    "simple-vps app create failed; rerun the Simple VPS install",
+  );
+  console.log(`Setup complete for ${appName} (${envName})`);
+}
+
 function usage() {
   console.error("Usage:");
   console.error("  simple-deploy init");
   console.error("  simple-deploy check [--env <name>]");
+  console.error("  simple-deploy setup <env>");
 }
 
-export async function main(argv = process.argv.slice(2), root = process.cwd()) {
+export async function main(argv = process.argv.slice(2), root = process.cwd(), options: MainOptions = {}) {
+  process.exitCode = undefined;
   const [command, ...args] = argv;
+  const runner = options.runner ?? defaultRunner;
   try {
     if (command === "--help" || command === "-h") {
       usage();
@@ -345,6 +427,12 @@ export async function main(argv = process.argv.slice(2), root = process.cwd()) {
         }
       }
       printCheckResult(checkManifest(root, env));
+      return;
+    }
+    if (command === "setup") {
+      const env = args[0];
+      if (!env || args.length > 1) throw new Error("setup requires exactly one env");
+      await runSetup(root, env, runner);
       return;
     }
     usage();
