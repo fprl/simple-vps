@@ -419,6 +419,7 @@ class SimpleVpsCliTest(unittest.TestCase):
             self.assertEqual(target.read_text(encoding="utf-8"), "API_KEY=secret\n")
             self.assertEqual(target.stat().st_mode & 0o777, 0o600)
             self.assertIn((shared / ".env.new", "app-my-app", "app-my-app"), chowns)
+            self.assertFalse(source.exists())
 
     def test_app_install_env_rejects_shell_export(self):
         with tempfile.TemporaryDirectory() as tmp:

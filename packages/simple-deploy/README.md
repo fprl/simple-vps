@@ -51,6 +51,9 @@ simple-deploy logs production web
 simple-deploy logs production jobs
 simple-deploy restart production jobs
 simple-deploy env push production .env.production
+simple-deploy secret put production API_KEY
+simple-deploy secret list production
+simple-deploy secret rm production API_KEY
 simple-deploy ssh production
 ```
 
@@ -150,6 +153,39 @@ sudo simple-vps route static data.example.com --root /var/apps/data-feed/current
 Simple VPS should own generated ingress config, validation, backups, and reloads.
 It should not try to wrap all Caddy features. Raw Caddy snippets can be an
 escape hatch later.
+
+## GitHub Actions
+
+Store these as repository secrets:
+
+- `SIMPLE_DEPLOY_SSH_KEY`: private key for the deploy SSH user
+- `SIMPLE_DEPLOY_KNOWN_HOSTS`: known_hosts entry for the VPS, from `ssh-keyscan -H <host>`
+
+```yaml
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+
+      - run: bun install --frozen-lockfile
+      - run: bunx simple-deploy deploy production
+        env:
+          SIMPLE_DEPLOY_SSH_KEY: ${{ secrets.SIMPLE_DEPLOY_SSH_KEY }}
+          SIMPLE_DEPLOY_KNOWN_HOSTS: ${{ secrets.SIMPLE_DEPLOY_KNOWN_HOSTS }}
+```
+
+When `SIMPLE_DEPLOY_SSH_KEY` is set, Simple Deploy refuses to run without
+`SIMPLE_DEPLOY_KNOWN_HOSTS` and uses strict host-key checking for both `ssh` and
+`rsync`.
 
 ## Non-Goals For V1
 

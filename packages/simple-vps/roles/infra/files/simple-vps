@@ -885,6 +885,7 @@ def cmd_app_install_env(args):
     content = source.read_text(encoding="utf-8")
     validate_environment_content(content)
     install_env_file(source, name)
+    source.unlink()
     print(f"Installed env for {name}")
 
 

@@ -82,6 +82,38 @@ describe("env and secret commands", () => {
     expect(commands).toHaveLength(0);
   });
 
+  test("env push uses CI SSH auth for rsync uploads", async () => {
+    const root = fixture();
+    const envFile = join(root, "production.env");
+    writeFileSync(envFile, "FEATURE_FLAG=on\n");
+    const commands: string[][] = [];
+    const previousKey = process.env.SIMPLE_DEPLOY_SSH_KEY;
+    const previousKnownHosts = process.env.SIMPLE_DEPLOY_KNOWN_HOSTS;
+    const runner: CommandRunner = {
+      async run(command) {
+        commands.push(command);
+        return { code: 0, stdout: "", stderr: "" };
+      },
+    };
+
+    process.env.SIMPLE_DEPLOY_SSH_KEY = "test-private-key";
+    process.env.SIMPLE_DEPLOY_KNOWN_HOSTS = "100.x.y.z ssh-ed25519 AAAA";
+    try {
+      await main(["env", "push", "production", envFile], root, { runner });
+    } finally {
+      if (previousKey === undefined) delete process.env.SIMPLE_DEPLOY_SSH_KEY;
+      else process.env.SIMPLE_DEPLOY_SSH_KEY = previousKey;
+      if (previousKnownHosts === undefined) delete process.env.SIMPLE_DEPLOY_KNOWN_HOSTS;
+      else process.env.SIMPLE_DEPLOY_KNOWN_HOSTS = previousKnownHosts;
+    }
+
+    const rsync = commands.find((command) => command[0] === "rsync");
+    expect(rsync).toBeDefined();
+    expect(rsync?.[1]).toBe("-e");
+    expect(rsync?.[2]).toContain("StrictHostKeyChecking=yes");
+    expect(rsync?.[2]).toContain("UserKnownHostsFile=");
+  });
+
   test("secret put reads stdin and updates one key without printing the value", async () => {
     const root = fixture();
     const output: string[] = [];
@@ -159,5 +191,32 @@ describe("env and secret commands", () => {
     expect(commands.map((command) => command.join(" ")).some((command) => command.includes("sudo simple-vps app install-env api"))).toBe(
       true,
     );
+  });
+
+  test("secret rm does not upload unchanged env when the key is absent", async () => {
+    const root = fixture();
+    const commands: string[][] = [];
+    const output: string[] = [];
+    const originalLog = console.log;
+    const runner: CommandRunner = {
+      async run(command) {
+        commands.push(command);
+        if (command.join(" ") === "ssh admin@100.x.y.z sudo simple-vps app read-env api") {
+          return { code: 0, stdout: "OTHER=value\n", stderr: "" };
+        }
+        return { code: 0, stdout: "", stderr: "" };
+      },
+    };
+
+    console.log = (message?: unknown) => output.push(String(message));
+    try {
+      await main(["secret", "rm", "production", "API_KEY"], root, { runner });
+    } finally {
+      console.log = originalLog;
+    }
+
+    expect(process.exitCode).toBe(0);
+    expect(commands.map((command) => command[0])).toEqual(["ssh"]);
+    expect(output.join("\n")).toContain("Secret API_KEY was not set");
   });
 });

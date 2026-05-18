@@ -8,6 +8,7 @@ import {
   readdirSync,
   readFileSync,
   readlinkSync,
+  rmSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve as resolvePath } from "node:path";
@@ -309,6 +310,50 @@ function requireString(value: unknown, label: string): string {
 function shellEscape(value: string): string {
   if (/^[A-Za-z0-9_@%+=:,./-]+$/.test(value)) return value;
   return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+function ensureTrailingNewline(value: string): string {
+  return value.endsWith("\n") ? value : `${value}\n`;
+}
+
+function authCommand(command: string[], sshOptions: string[], rsyncRemoteShell: string): string[] {
+  if (command[0] === "ssh") return ["ssh", ...sshOptions, ...command.slice(1)];
+  if (command[0] === "rsync") return ["rsync", "-e", rsyncRemoteShell, ...command.slice(1)];
+  return command;
+}
+
+function prepareCommandRunner(runner: CommandRunner): { runner: CommandRunner; cleanup: () => void } {
+  const key = process.env.SIMPLE_DEPLOY_SSH_KEY;
+  if (!key) return { runner, cleanup: () => {} };
+
+  const knownHosts = process.env.SIMPLE_DEPLOY_KNOWN_HOSTS;
+  if (!knownHosts) throw new Error("SIMPLE_DEPLOY_KNOWN_HOSTS is required when SIMPLE_DEPLOY_SSH_KEY is set");
+
+  const dir = mkdtempSync(join(tmpdir(), "simple-deploy-ssh-"));
+  const keyPath = join(dir, "id");
+  const knownHostsPath = join(dir, "known_hosts");
+  writeFileSync(keyPath, ensureTrailingNewline(key), { encoding: "utf8", mode: 0o600 });
+  writeFileSync(knownHostsPath, ensureTrailingNewline(knownHosts), { encoding: "utf8", mode: 0o600 });
+
+  const sshOptions = [
+    "-i",
+    keyPath,
+    "-o",
+    "IdentitiesOnly=yes",
+    "-o",
+    "StrictHostKeyChecking=yes",
+    "-o",
+    `UserKnownHostsFile=${knownHostsPath}`,
+  ];
+  const rsyncRemoteShell = ["ssh", ...sshOptions].map(shellEscape).join(" ");
+  return {
+    runner: {
+      run(command, options) {
+        return runner.run(authCommand(command, sshOptions, rsyncRemoteShell), options);
+      },
+    },
+    cleanup: () => rmSync(dir, { recursive: true, force: true }),
+  };
 }
 
 function systemdEscape(value: string): string {
@@ -694,7 +739,12 @@ async function runSecretList(root: string, envName: string, runner: CommandRunne
 
 async function runSecretRm(root: string, envName: string, key: string, runner: CommandRunner) {
   const context = loadAppContext(root, envName);
-  const content = removeEnvValue(await readRemoteEnv(runner, context), key);
+  const current = await readRemoteEnv(runner, context);
+  const content = removeEnvValue(current, key);
+  if (content === current) {
+    console.log(`Secret ${key} was not set for ${context.appName} (${envName}).`);
+    return;
+  }
   await uploadEnvContent(runner, context, content);
   console.log(`Removed secret ${key} for ${context.appName} (${envName}). Run simple-deploy restart ${envName} <service> to apply.`);
 }
@@ -1163,8 +1213,9 @@ function usage() {
 export async function main(argv = process.argv.slice(2), root = process.cwd(), options: MainOptions = {}) {
   process.exitCode = 0;
   const [command, ...args] = argv;
-  const runner = options.runner ?? defaultRunner;
+  const baseRunner = options.runner ?? defaultRunner;
   const now = options.now ?? (() => new Date());
+  let cleanupRunner = () => {};
   try {
     if (command === "--help" || command === "-h") {
       usage();
@@ -1188,6 +1239,10 @@ export async function main(argv = process.argv.slice(2), root = process.cwd(), o
       printCheckResult(checkManifest(root, env));
       return;
     }
+    // Local-only commands go above. Commands that touch the server go below.
+    const prepared = prepareCommandRunner(baseRunner);
+    cleanupRunner = prepared.cleanup;
+    const runner = prepared.runner;
     if (command === "setup") {
       const env = args[0];
       if (!env || args.length > 1) throw new Error("setup requires exactly one env");
@@ -1276,6 +1331,8 @@ export async function main(argv = process.argv.slice(2), root = process.cwd(), o
     const message = error instanceof Error ? error.message : String(error);
     console.error(`Error: ${message}`);
     process.exitCode = 1;
+  } finally {
+    cleanupRunner();
   }
 }
 

@@ -625,6 +625,10 @@ when stdin is a TTY. Values are never accepted as CLI arguments.
 `secret rm KEY` removes matching `KEY=...` entries and is a no-op if absent.
 `secret list` prints names only, never values.
 
+Secret writes are read-modify-write and are not lock-protected in v1. Serialize
+concurrent `secret put`/`secret rm` runs from CI; racing writes can lose one
+update.
+
 Writes are atomic:
 
 ```text
