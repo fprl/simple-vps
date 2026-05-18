@@ -24,9 +24,10 @@ RUN useradd -m -s /bin/bash admin \
 
 COPY packages/simple-vps/roles/infra/files/simple-vps /usr/local/bin/simple-vps
 COPY packages/simple-deploy/tests/fake-vps/fake-systemctl /usr/local/bin/systemctl
+COPY packages/simple-deploy/tests/fake-vps/fake-journalctl /usr/local/bin/journalctl
 COPY packages/simple-deploy/tests/fake-vps/fake-caddy /usr/local/bin/caddy
 
-RUN chmod 0755 /usr/local/bin/simple-vps /usr/local/bin/systemctl /usr/local/bin/caddy \
+RUN chmod 0755 /usr/local/bin/simple-vps /usr/local/bin/systemctl /usr/local/bin/journalctl /usr/local/bin/caddy \
   && printf '%s\n' '{"routes":[],"version":2}' > /etc/simple-vps/state.json \
   && printf '%s\n' 'admin ALL=(root) NOPASSWD: /usr/local/bin/simple-vps' > /etc/sudoers.d/simple-deploy \
   && chmod 0440 /etc/sudoers.d/simple-deploy

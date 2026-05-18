@@ -360,7 +360,8 @@ Pipeline:
 16. server: health-check each service with a port
 17. on health failure: stop new, flip current back, restart previous, mark failed
 18. for each route, invoke `sudo simple-vps route ...` on the server
-19. prune releases beyond keep_releases (newest wins, preserves currently-linked)
+19. touch `<release>/.simple-deploy-success`
+20. prune releases beyond keep_releases (newest wins, preserves currently-linked)
 ```
 
 Health check semantics:
@@ -372,6 +373,42 @@ Health check semantics:
 
 Failure mode is **stop-and-replace**. Blue-green is a future
 `[env.<name>] strategy = "blue-green"` and is not in v1.
+
+### status
+
+```bash
+simple-deploy status <env>
+```
+
+Read-only.
+
+Shows:
+
+```text
+- current release (`readlink -f /var/apps/<name>/current`)
+- service state for each declared service
+- routes owned by the app from `sudo simple-vps route list --json`
+```
+
+Service state is whatever `sudo simple-vps app service is-active` prints.
+
+### logs
+
+```bash
+simple-deploy logs <env>
+simple-deploy logs <env> <service>
+simple-deploy logs <env> <service> --tail
+```
+
+Read-only. With one declared service, the service argument is optional. With
+multiple services, the caller must name the service.
+
+Maps directly to:
+
+```bash
+journalctl -u simple-<name>-<service>.service -n 200 --no-pager
+journalctl -u simple-<name>-<service>.service -f    # --tail
+```
 
 ### rollback
 
@@ -388,10 +425,17 @@ Pipeline:
 3.  server: flip current symlink
 4.  server: start services
 5.  server: health-check
-6.  no route changes (routes follow services by name, not by release)
+6.  touch `<release>/.simple-deploy-success`
+7.  no route changes (routes follow services by name, not by release)
 ```
 
-Rollback does not modify Caddy state.
+With no release argument, the target is the newest release directory with a
+`.simple-deploy-success` marker, excluding the current symlink target, sorted
+by mtime. Explicit rollback accepts any existing release directory.
+
+Rollback does not modify Caddy state and does not publish routes. A rollback
+target that passes health is marked successful. Routes follow services by name,
+not by release.
 
 ### destroy
 
@@ -504,7 +548,7 @@ Logs go to the journal. `simple-deploy logs <env> <service>` is a thin wrapper
 around:
 
 ```bash
-journalctl -u simple-<name>-<service>.service --no-pager
+journalctl -u simple-<name>-<service>.service -n 200 --no-pager
 journalctl -u simple-<name>-<service>.service -f    # --tail
 ```
 
@@ -787,7 +831,7 @@ simple-deploy check --env production   # also check SSH, server tooling, setup
 3. Implement `setup` end-to-end against a Simple VPS host.
 4. Implement Mode A deploy end-to-end (smallest viable path).
 5. Add Mode B and Mode C.
-6. Add `rollback`, `destroy`, `logs`, `status`.
+6. Add `destroy` and release pruning.
 7. Add `secret put`, `env push`.
 8. CI examples (GitHub Actions) using `SIMPLE_DEPLOY_SSH_KEY` and
    `SIMPLE_DEPLOY_KNOWN_HOSTS`.

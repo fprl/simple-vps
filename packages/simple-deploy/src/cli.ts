@@ -15,6 +15,19 @@ import { tmpdir } from "node:os";
 
 type Dict = Record<string, unknown>;
 
+type AppContext = {
+  manifest: Dict;
+  appName: string;
+  env: Dict;
+  envName: string;
+  server: string;
+  appRoot: string;
+  runtime: string;
+  build: Dict | undefined;
+  services: Record<string, Dict>;
+  routes: Record<string, Dict>;
+};
+
 export type CheckResult = {
   errors: string[];
   warnings: string[];
@@ -28,7 +41,7 @@ export type CommandResult = {
 };
 
 export type CommandRunner = {
-  run(command: string[]): Promise<CommandResult>;
+  run(command: string[], options?: { passthrough?: boolean }): Promise<CommandResult>;
 };
 
 export type MainOptions = {
@@ -48,11 +61,16 @@ const ALLOWED_DOTENV_FILES = new Set([".env.example", ".env.sample", ".env.defau
 const COPY_OPTIONS = { recursive: true, verbatimSymlinks: true };
 
 const defaultRunner: CommandRunner = {
-  async run(command) {
+  async run(command, options) {
     const proc = Bun.spawn(command, {
-      stdout: "pipe",
-      stderr: "pipe",
+      stdin: options?.passthrough ? "inherit" : "ignore",
+      stdout: options?.passthrough ? "inherit" : "pipe",
+      stderr: options?.passthrough ? "inherit" : "pipe",
     });
+    if (options?.passthrough) {
+      const code = await proc.exited;
+      return { code, stdout: "", stderr: "" };
+    }
     const [stdout, stderr, code] = await Promise.all([
       new Response(proc.stdout).text(),
       new Response(proc.stderr).text(),
@@ -298,6 +316,14 @@ function healthCheckCommand(port: number, path: string, expectedStatus: number, 
   return `for i in $(seq 1 ${timeout}); do status=$(curl -o /dev/null -s -w '%{http_code}' --max-time 2 http://127.0.0.1:${port}${path} || true); [ "$status" = "${expectedStatus}" ] && exit 0; sleep 1; done; exit 1`;
 }
 
+function unitName(appName: string, serviceName: string): string {
+  return `simple-${appName}-${serviceName}.service`;
+}
+
+function releaseNameFromPath(path: string): string {
+  return path.split("/").filter(Boolean).pop() ?? "none";
+}
+
 function blockedDotenvFiles(paths: string[]): string[] {
   return paths.filter((path) => {
     const name = path.split("/").pop() ?? path;
@@ -381,6 +407,22 @@ function resolveEnv(manifest: Dict, envName: string): Dict {
   const env = envs[envName];
   if (!isRecord(env)) throw new Error(`env not found: ${envName}`);
   return env;
+}
+
+function loadAppContext(root: string, envName: string): AppContext {
+  const result = checkManifest(root, envName);
+  if (result.errors.length > 0) throw new Error(result.errors.join("\n"));
+
+  const manifest = readManifest(root);
+  const appName = requireString(manifest.name, "name");
+  const env = resolveEnv(manifest, envName);
+  const server = requireString(env.server, `[env.${envName}].server`);
+  const appRoot = requireString(env.path, `[env.${envName}].path`);
+  const runtime = requireString(env.runtime, `[env.${envName}].runtime`);
+  const build = effectiveBuild(manifest, env);
+  const services = effectiveServices(manifest, env);
+  const routes = effectiveRoutes(manifest, env);
+  return { manifest, appName, env, envName, server, appRoot, runtime, build, services, routes };
 }
 
 export function checkManifest(root = process.cwd(), envName?: string): CheckResult {
@@ -486,16 +528,7 @@ async function runCommand(runner: CommandRunner, command: string[], failureMessa
 }
 
 async function runSetup(root: string, envName: string, runner: CommandRunner) {
-  const result = checkManifest(root, envName);
-  if (result.errors.length > 0) {
-    throw new Error(result.errors.join("\n"));
-  }
-
-  const manifest = readManifest(root);
-  const appName = requireString(manifest.name, "name");
-  const env = resolveEnv(manifest, envName);
-  const server = requireString(env.server, `[env.${envName}].server`);
-  const runtime = requireString(env.runtime, `[env.${envName}].runtime`);
+  const { appName, server, runtime } = loadAppContext(root, envName);
 
   await runCommand(runner, ["ssh", server, "true"], `SSH failed for ${server}`);
   for (const tool of ["simple-vps", "rsync", runtime]) {
@@ -600,22 +633,164 @@ async function prepareArtifact(
   return { artifactDir, lockfiles };
 }
 
+async function healthCheckServices(runner: CommandRunner, server: string, services: Record<string, Dict>) {
+  for (const [serviceName, service] of Object.entries(services)) {
+    const port = servicePort(service);
+    const healthcheck = asString(service.healthcheck);
+    if (port !== undefined && healthcheck) {
+      const expectedStatus = asNumber(service.healthcheck_status) ?? 200;
+      const timeout = asNumber(service.healthcheck_timeout) ?? 10;
+      await runCommand(
+        runner,
+        ["ssh", server, healthCheckCommand(port, healthcheck, expectedStatus, timeout)],
+        `health check failed for ${serviceName}`,
+      );
+    }
+  }
+}
+
+async function stopServices(runner: CommandRunner, server: string, appName: string, services: Record<string, Dict>) {
+  for (const serviceName of Object.keys(services)) {
+    await runCommand(runner, ["ssh", server, `sudo simple-vps app service stop ${appName} ${serviceName}`], "service stop failed");
+  }
+}
+
+async function startServices(runner: CommandRunner, server: string, appName: string, services: Record<string, Dict>) {
+  for (const serviceName of Object.keys(services)) {
+    await runCommand(
+      runner,
+      ["ssh", server, `sudo simple-vps app service start ${appName} ${serviceName}`],
+      `failed to start ${serviceName}`,
+    );
+  }
+}
+
+async function activateRelease(runner: CommandRunner, context: AppContext, releaseDir: string) {
+  const previousCurrentResult = await runner.run(["ssh", context.server, `readlink -f ${context.appRoot}/current`]);
+  const previousCurrent = previousCurrentResult.code === 0 ? previousCurrentResult.stdout.trim() : "";
+  await stopServices(runner, context.server, context.appName, context.services);
+  await runCommand(runner, ["ssh", context.server, `ln -sfn ${releaseDir} ${context.appRoot}/current`], "failed to activate release");
+  await startServices(runner, context.server, context.appName, context.services);
+  try {
+    await healthCheckServices(runner, context.server, context.services);
+  } catch (error) {
+    await stopServices(runner, context.server, context.appName, context.services);
+    if (previousCurrent) {
+      await runCommand(
+        runner,
+        ["ssh", context.server, `ln -sfn ${previousCurrent} ${context.appRoot}/current`],
+        "failed to restore previous release",
+      );
+      await startServices(runner, context.server, context.appName, context.services);
+    }
+    throw error;
+  }
+}
+
+async function markReleaseSuccessful(runner: CommandRunner, server: string, releaseDir: string) {
+  await runCommand(runner, ["ssh", server, `touch ${releaseDir}/.simple-deploy-success`], "failed to mark release successful");
+}
+
+function serviceStatusText(result: CommandResult): string {
+  const text = (result.stdout.trim() || result.stderr.trim()).split("\n")[0];
+  return text || `exit ${result.code}`;
+}
+
+async function runStatus(root: string, envName: string, runner: CommandRunner) {
+  const context = loadAppContext(root, envName);
+  const currentResult = await runner.run(["ssh", context.server, `readlink -f ${context.appRoot}/current 2>/dev/null || true`]);
+  const currentPath = currentResult.stdout.trim();
+  const routesResult = await runCommand(
+    runner,
+    ["ssh", context.server, "sudo simple-vps route list --json"],
+    "failed to read routes",
+  );
+  let routes: Dict[] = [];
+  try {
+    const payload = JSON.parse(routesResult.stdout) as { routes?: unknown };
+    routes = Array.isArray(payload.routes) ? payload.routes.filter((route): route is Dict => isRecord(route)) : [];
+  } catch {
+    routes = [];
+  }
+  const appRoutes = routes.filter((route) => route.app === context.appName);
+
+  console.log(`${context.appName} (${envName})`);
+  console.log(`current: ${currentPath ? releaseNameFromPath(currentPath) : "none"}`);
+  for (const serviceName of Object.keys(context.services)) {
+    const result = await runner.run([
+      "ssh",
+      context.server,
+      `sudo simple-vps app service is-active ${context.appName} ${serviceName}`,
+    ]);
+    console.log(`service ${serviceName}: ${serviceStatusText(result)}`);
+  }
+  if (appRoutes.length === 0) {
+    console.log("routes: none");
+  } else {
+    for (const route of appRoutes) {
+      console.log(`route ${route.host}: ${route.type}`);
+    }
+  }
+}
+
+function chooseLogService(services: Record<string, Dict>, serviceName: string | undefined): string {
+  if (serviceName) {
+    if (!services[serviceName]) throw new Error(`unknown service: ${serviceName}`);
+    return serviceName;
+  }
+  const names = Object.keys(services);
+  if (names.length === 0) throw new Error("no services configured");
+  if (names.length > 1) throw new Error("logs requires a service when multiple services are configured");
+  return names[0];
+}
+
+async function runLogs(root: string, envName: string, serviceName: string | undefined, tail: boolean, runner: CommandRunner) {
+  const context = loadAppContext(root, envName);
+  const selected = chooseLogService(context.services, serviceName);
+  const unit = unitName(context.appName, selected);
+  const command = tail ? `journalctl -u ${unit} -f` : `journalctl -u ${unit} -n 200 --no-pager`;
+  if (tail) {
+    const result = await runner.run(["ssh", context.server, command], { passthrough: true });
+    if (result.code !== 0) throw new Error("journalctl failed");
+    return;
+  }
+  const result = await runCommand(runner, ["ssh", context.server, command], "journalctl failed");
+  if (result.stdout.trim()) console.log(result.stdout.trimEnd());
+}
+
+function validateReleaseArg(release: string) {
+  if (!/^[A-Za-z0-9._-]+$/.test(release)) throw new Error(`invalid release: ${release}`);
+}
+
+async function resolveRollbackTarget(context: AppContext, runner: CommandRunner, release: string | undefined): Promise<string> {
+  const releasesDir = `${context.appRoot}/releases`;
+  if (release) {
+    validateReleaseArg(release);
+    const target = `${releasesDir}/${release}`;
+    await runCommand(runner, ["ssh", context.server, `test -d ${target}`], `release not found: ${release}`);
+    return target;
+  }
+  const command = `current=$(readlink -f ${context.appRoot}/current 2>/dev/null || true); for dir in $(ls -1dt ${releasesDir}/* 2>/dev/null); do [ -f "$dir/.simple-deploy-success" ] || continue; [ "$(readlink -f "$dir")" = "$current" ] && continue; echo "$dir"; exit 0; done; exit 1`;
+  const result = await runCommand(runner, ["ssh", context.server, command], "no previous successful release found");
+  return result.stdout.trim();
+}
+
+async function runRollback(root: string, envName: string, release: string | undefined, runner: CommandRunner) {
+  const context = loadAppContext(root, envName);
+  const target = await resolveRollbackTarget(context, runner, release);
+  await activateRelease(runner, context, target);
+  await markReleaseSuccessful(runner, context.server, target);
+  console.log(`Rolled back ${context.appName} to ${releaseNameFromPath(target)} (${envName})`);
+}
+
 async function runDeploy(
   root: string,
   envName: string,
   runner: CommandRunner,
   options: { dirty: boolean; includeDotenv: boolean; now: () => Date },
 ) {
-  const result = checkManifest(root, envName);
-  if (result.errors.length > 0) throw new Error(result.errors.join("\n"));
-
-  const manifest = readManifest(root);
-  const appName = requireString(manifest.name, "name");
-  const env = resolveEnv(manifest, envName);
-  const server = requireString(env.server, `[env.${envName}].server`);
-  const appRoot = requireString(env.path, `[env.${envName}].path`);
-  const runtime = requireString(env.runtime, `[env.${envName}].runtime`);
-  const build = effectiveBuild(manifest, env);
+  const context = loadAppContext(root, envName);
+  const { appName, appRoot, build, runtime, server, services, routes } = context;
 
   const sha = await gitOutput(root, runner, ["rev-parse", "HEAD"]);
   const dirty = await gitOutput(root, runner, ["status", "--porcelain"]);
@@ -646,20 +821,19 @@ async function runDeploy(
     );
   }
 
-  const services = effectiveServices(manifest, env);
   const localUnitDir = mkdtempSync(join(tmpdir(), "simple-deploy-units-"));
   const remoteUnitDir = `/tmp/simple-deploy/${release}`;
   for (const [serviceName, service] of Object.entries(services)) {
-    const unitName = `simple-${appName}-${serviceName}.service`;
-    const unitPath = join(localUnitDir, unitName);
+    const serviceUnitName = unitName(appName, serviceName);
+    const unitPath = join(localUnitDir, serviceUnitName);
     writeFileSync(unitPath, renderUnit(appName, envName, release, serviceName, service), { encoding: "utf8", mode: 0o644 });
   }
   await runCommand(runner, ["ssh", server, `mkdir -p ${remoteUnitDir}`], "failed to create remote unit directory");
   await runCommand(runner, ["rsync", "-az", `${localUnitDir}/`, `${server}:${remoteUnitDir}/`], "failed to upload unit files");
 
   for (const serviceName of Object.keys(services)) {
-    const unitName = `simple-${appName}-${serviceName}.service`;
-    const remoteUnitPath = `${remoteUnitDir}/${unitName}`;
+    const serviceUnitName = unitName(appName, serviceName);
+    const remoteUnitPath = `${remoteUnitDir}/${serviceUnitName}`;
     await runCommand(
       runner,
       ["ssh", server, `sudo simple-vps app install-unit ${appName} ${serviceName} ${remoteUnitPath}`],
@@ -668,59 +842,8 @@ async function runDeploy(
   }
 
   await runCommand(runner, ["ssh", server, `sudo simple-vps app daemon-reload`], "systemd daemon-reload failed");
-  const previousCurrentResult = await runner.run(["ssh", server, `readlink -f ${appRoot}/current`]);
-  const previousCurrent = previousCurrentResult.code === 0 ? previousCurrentResult.stdout.trim() : "";
-  for (const serviceName of Object.keys(services)) {
-    await runCommand(runner, ["ssh", server, `sudo simple-vps app service stop ${appName} ${serviceName}`], "service stop failed");
-  }
-  await runCommand(runner, ["ssh", server, `ln -sfn ${releaseDir} ${appRoot}/current`], "failed to activate release");
-  for (const serviceName of Object.keys(services)) {
-    await runCommand(
-      runner,
-      ["ssh", server, `sudo simple-vps app service start ${appName} ${serviceName}`],
-      `failed to start ${serviceName}`,
-    );
-  }
-  try {
-    for (const [serviceName, service] of Object.entries(services)) {
-      const port = servicePort(service);
-      const healthcheck = asString(service.healthcheck);
-      if (port !== undefined && healthcheck) {
-        const expectedStatus = asNumber(service.healthcheck_status) ?? 200;
-        const timeout = asNumber(service.healthcheck_timeout) ?? 10;
-        await runCommand(
-          runner,
-          ["ssh", server, healthCheckCommand(port, healthcheck, expectedStatus, timeout)],
-          `health check failed for ${serviceName}`,
-        );
-      }
-    }
-  } catch (error) {
-    for (const serviceName of Object.keys(services)) {
-      await runCommand(
-        runner,
-        ["ssh", server, `sudo simple-vps app service stop ${appName} ${serviceName}`],
-        "failed to stop unhealthy release",
-      );
-    }
-    if (previousCurrent) {
-      await runCommand(
-        runner,
-        ["ssh", server, `ln -sfn ${previousCurrent} ${appRoot}/current`],
-        "failed to restore previous release",
-      );
-      for (const serviceName of Object.keys(services)) {
-        await runCommand(
-          runner,
-          ["ssh", server, `sudo simple-vps app service start ${appName} ${serviceName}`],
-          "failed to restart previous release",
-        );
-      }
-    }
-    throw error;
-  }
+  await activateRelease(runner, context, releaseDir);
 
-  const routes = effectiveRoutes(manifest, env);
   for (const route of Object.values(routes)) {
     const host = requireString(route.host, "route host");
     const type = requireString(route.type, "route type");
@@ -745,6 +868,7 @@ async function runDeploy(
       );
     }
   }
+  await markReleaseSuccessful(runner, server, releaseDir);
 
   console.log(`Deployed ${appName} ${release.slice(0, 7)} to ${envName}`);
 }
@@ -755,6 +879,9 @@ function usage() {
   console.error("  simple-deploy check [--env <name>]");
   console.error("  simple-deploy setup <env>");
   console.error("  simple-deploy deploy <env> [--dirty] [--include-dotenv]");
+  console.error("  simple-deploy status <env>");
+  console.error("  simple-deploy logs <env> [service] [--tail]");
+  console.error("  simple-deploy rollback <env> [release]");
 }
 
 export async function main(argv = process.argv.slice(2), root = process.cwd(), options: MainOptions = {}) {
@@ -789,6 +916,28 @@ export async function main(argv = process.argv.slice(2), root = process.cwd(), o
       const env = args[0];
       if (!env || args.length > 1) throw new Error("setup requires exactly one env");
       await runSetup(root, env, runner);
+      return;
+    }
+    if (command === "status") {
+      const env = args[0];
+      if (!env || args.length > 1) throw new Error("status requires exactly one env");
+      await runStatus(root, env, runner);
+      return;
+    }
+    if (command === "logs") {
+      const env = args[0];
+      const rest = args.slice(1);
+      const tail = rest.includes("--tail");
+      const values = rest.filter((arg) => arg !== "--tail");
+      if (!env || values.length > 1) throw new Error("logs requires env, optional service, and optional --tail");
+      await runLogs(root, env, values[0], tail, runner);
+      return;
+    }
+    if (command === "rollback") {
+      const env = args[0];
+      const release = args[1];
+      if (!env || args.length > 2) throw new Error("rollback requires env and optional release");
+      await runRollback(root, env, release, runner);
       return;
     }
     if (command === "deploy") {

@@ -845,7 +845,15 @@ def cmd_app_service(args):
         die(f"invalid service action: {args.action}")
     name = normalize_app(args.name)
     service = normalize_service(args.service)
-    run_checked([SYSTEMCTL_BIN, action, service_unit_name(name, service)])
+    command = [SYSTEMCTL_BIN, action, service_unit_name(name, service)]
+    if action in {"status", "is-active"}:
+        result = subprocess.run(command, text=True, capture_output=True, check=False)
+        if result.stdout:
+            print(result.stdout, end="")
+        if result.stderr:
+            print(result.stderr, file=sys.stderr, end="")
+        raise SystemExit(result.returncode)
+    run_checked(command)
 
 
 def normalize_cwd(name, value):

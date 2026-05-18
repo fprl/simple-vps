@@ -97,6 +97,7 @@ write_server() {
   cat > "$app_dir/server.js" <<EOF
 const http = require("http");
 const port = Number(process.env.PORT || 3000);
+console.log("server:$body");
 http.createServer((req, res) => {
   if (req.url === "/health") {
     res.writeHead(200, { "content-type": "text/plain" });
@@ -144,10 +145,23 @@ commit_fixture "$mode_a"
 
 (cd "$mode_a" && bun run "$repo_root/packages/simple-deploy/src/cli.ts" setup production)
 (cd "$mode_a" && bun run "$repo_root/packages/simple-deploy/src/cli.ts" deploy production)
+first_api_current="$(ssh fake-vps readlink -f /var/apps/api/current)"
 ssh fake-vps test -L /var/apps/api/current
 ssh fake-vps test -L /var/apps/api/current/db
 ssh fake-vps curl -fsS http://127.0.0.1:3000/health >/dev/null
+ssh fake-vps curl -fsS http://127.0.0.1:3000/ | grep -q '^mode-a$'
 ssh fake-vps sudo simple-vps route list --json | grep -q '"host": "api.example.com"'
+(cd "$mode_a" && bun run "$repo_root/packages/simple-deploy/src/cli.ts" status production) | grep -q 'service web: active'
+(cd "$mode_a" && bun run "$repo_root/packages/simple-deploy/src/cli.ts" logs production web) | grep -q 'server:mode-a'
+
+write_server "$mode_a" "mode-a-v2"
+git -C "$mode_a" add server.js
+git -C "$mode_a" commit -q -m "second fixture"
+(cd "$mode_a" && bun run "$repo_root/packages/simple-deploy/src/cli.ts" deploy production)
+ssh fake-vps curl -fsS http://127.0.0.1:3000/ | grep -q '^mode-a-v2$'
+(cd "$mode_a" && bun run "$repo_root/packages/simple-deploy/src/cli.ts" rollback production)
+test "$(ssh fake-vps readlink -f /var/apps/api/current)" = "$first_api_current"
+ssh fake-vps curl -fsS http://127.0.0.1:3000/ | grep -q '^mode-a$'
 
 mode_b="$tmp/mode-b"
 mkdir -p "$mode_b/public"

@@ -465,6 +465,23 @@ class SimpleVpsCliTest(unittest.TestCase):
                 [(["runuser", "-u", "app-my-app", "--", "npm", "ci", "--omit=dev"], str(app_dir.resolve()))],
             )
 
+    def test_app_service_is_active_prints_systemctl_output(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cli = load_cli(Path(tmp))
+
+            def fake_run(command, text=False, capture_output=False, check=False):
+                self.assertEqual(command, [cli.SYSTEMCTL_BIN, "is-active", "simple-my-app-web.service"])
+                return subprocess.CompletedProcess(command, 0, stdout="active\n", stderr="")
+
+            stdout = io.StringIO()
+            with mock.patch.object(cli.subprocess, "run", fake_run):
+                with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(io.StringIO()):
+                    with self.assertRaises(SystemExit) as exit_context:
+                        cli.cmd_app_service(argparse.Namespace(action="is-active", name="my-app", service="web"))
+
+            self.assertEqual(exit_context.exception.code, 0)
+            self.assertEqual(stdout.getvalue(), "active\n")
+
 
 if __name__ == "__main__":
     unittest.main()

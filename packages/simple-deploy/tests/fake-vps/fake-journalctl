@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+unit=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -u)
+      unit="${2:-}"
+      shift 2
+      ;;
+    -n)
+      shift 2
+      ;;
+    --no-pager|-f)
+      shift
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+
+if [[ -z "$unit" ]]; then
+  echo "fake journalctl: missing -u" >&2
+  exit 1
+fi
+
+log="/run/fake-systemctl/$unit.log"
+if [[ -f "$log" ]]; then
+  cat "$log"
+fi
