@@ -1,8 +1,8 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, test } from "bun:test";
-import { main, type CommandRunner } from "../src/cli";
+import { main, type CommandResult, type CommandRunner } from "../src/cli";
 
 function fixture(): string {
   const root = mkdtempSync(join(tmpdir(), "simple-deploy-deploy-test-"));
@@ -31,6 +31,24 @@ service = "web"
   return root;
 }
 
+async function runLocal(command: string[]): Promise<CommandResult> {
+  const proc = Bun.spawn(command, { stdout: "pipe", stderr: "pipe" });
+  const [stdout, stderr, code] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ]);
+  return { code, stdout, stderr };
+}
+
+function seedMockCheckout(command: string[]) {
+  if (command[0] !== "sh") return;
+  const match = command[2]?.match(/tar -x -C ([^ ]+)/);
+  if (!match) return;
+  mkdirSync(match[1], { recursive: true });
+  writeFileSync(join(match[1], "bun.lock"), "\n");
+}
+
 afterEach(() => {
   process.exitCode = 0;
 });
@@ -42,6 +60,7 @@ describe("deploy", () => {
     const runner: CommandRunner = {
       async run(command) {
         commands.push(command);
+        seedMockCheckout(command);
         if (command.join(" ") === "git -C " + root + " rev-parse HEAD") {
           return { code: 0, stdout: "a1b2c3d4e5f6\n", stderr: "" };
         }
@@ -91,6 +110,7 @@ describe("deploy", () => {
     const runner: CommandRunner = {
       async run(command) {
         commands.push(command);
+        seedMockCheckout(command);
         const joined = command.join(" ");
         if (joined === "git -C " + root + " rev-parse HEAD") return { code: 0, stdout: "a1b2c3d4e5f6\n", stderr: "" };
         if (joined === "git -C " + root + " status --porcelain") return { code: 0, stdout: "", stderr: "" };
@@ -147,6 +167,7 @@ describe("deploy", () => {
     const runner: CommandRunner = {
       async run(command) {
         commands.push(command);
+        seedMockCheckout(command);
         const joined = command.join(" ");
         if (joined === "git -C " + root + " rev-parse HEAD") return { code: 0, stdout: "a1b2c3d4e5f6\n", stderr: "" };
         if (joined === "git -C " + root + " status --porcelain") return { code: 0, stdout: " M src/server.ts\n", stderr: "" };
@@ -165,5 +186,113 @@ describe("deploy", () => {
         command.startsWith("sh -c tar -C " + root + " --exclude .git --exclude node_modules -cf - . | tar -x -C "),
       ),
     ).toBe(true);
+  });
+
+  test("deploys a build output artifact with explicit includes", async () => {
+    const root = mkdtempSync(join(tmpdir(), "simple-deploy-build-test-"));
+    mkdirSync(join(root, "public"), { recursive: true });
+    writeFileSync(join(root, "bun.lock"), "\n");
+    writeFileSync(join(root, "package.json"), `{"name":"web","version":"1.0.0"}\n`);
+    writeFileSync(join(root, "server.js"), `console.log("built");\n`);
+    writeFileSync(join(root, "public", "asset.txt"), "asset\n");
+    writeFileSync(
+      join(root, "simple-deploy.toml"),
+      `
+name = "web"
+
+[build]
+command = "mkdir -p dist && cp server.js dist/server.js"
+output = "dist"
+include = ["public"]
+
+[env.production]
+server = "admin@100.x.y.z"
+path = "/var/apps/web"
+runtime = "bun"
+
+[services.web]
+command = "bun server.js"
+port = 3000
+healthcheck = "/health"
+`,
+    );
+    await runLocal(["git", "-C", root, "init", "-q"]);
+    await runLocal(["git", "-C", root, "config", "user.email", "smoke@example.com"]);
+    await runLocal(["git", "-C", root, "config", "user.name", "Smoke"]);
+    await runLocal(["git", "-C", root, "add", "."]);
+    await runLocal(["git", "-C", root, "commit", "-q", "-m", "fixture"]);
+
+    const commands: string[][] = [];
+    const runner: CommandRunner = {
+      async run(command) {
+        commands.push(command);
+        if (command[0] === "git" || command[0] === "sh") return runLocal(command);
+        return { code: 0, stdout: "", stderr: "" };
+      },
+    };
+
+    await main(["deploy", "production"], root, { runner });
+
+    const joined = commands.map((command) => command.join(" "));
+    const rsyncCommand = commands.find((command) => command[0] === "rsync" && command[2] === "--delete");
+    const artifactRoot = rsyncCommand?.[3]?.replace(/\/$/, "");
+    expect(process.exitCode).toBe(0);
+    expect(joined.some((command) => command.startsWith("sh -c cd ") && command.includes("mkdir -p dist"))).toBe(true);
+    expect(artifactRoot).toBeDefined();
+    expect(readFileSync(join(artifactRoot!, "server.js"), "utf8")).toContain("built");
+    expect(readFileSync(join(artifactRoot!, "public", "asset.txt"), "utf8")).toBe("asset\n");
+    expect(existsSync(join(artifactRoot!, "package.json"))).toBe(true);
+    expect(existsSync(join(artifactRoot!, "bun.lock"))).toBe(true);
+    expect(existsSync(join(artifactRoot!, "simple-deploy.toml"))).toBe(false);
+    expect(joined.some((command) => command.includes("sudo simple-vps app run-as web"))).toBe(true);
+  });
+
+  test("deploys a bundled build without server install", async () => {
+    const root = mkdtempSync(join(tmpdir(), "simple-deploy-bundle-test-"));
+    writeFileSync(join(root, "worker.js"), `console.log("bundle");\n`);
+    writeFileSync(
+      join(root, "simple-deploy.toml"),
+      `
+name = "worker"
+
+[build]
+command = "mkdir -p dist && cp worker.js dist/worker.js"
+output = "dist"
+install = false
+
+[env.production]
+server = "admin@100.x.y.z"
+path = "/var/apps/worker"
+runtime = "bun"
+
+[services.worker]
+command = "bun worker.js"
+`,
+    );
+    await runLocal(["git", "-C", root, "init", "-q"]);
+    await runLocal(["git", "-C", root, "config", "user.email", "smoke@example.com"]);
+    await runLocal(["git", "-C", root, "config", "user.name", "Smoke"]);
+    await runLocal(["git", "-C", root, "add", "."]);
+    await runLocal(["git", "-C", root, "commit", "-q", "-m", "fixture"]);
+
+    const commands: string[][] = [];
+    const runner: CommandRunner = {
+      async run(command) {
+        commands.push(command);
+        if (command[0] === "git" || command[0] === "sh") return runLocal(command);
+        return { code: 0, stdout: "", stderr: "" };
+      },
+    };
+
+    await main(["deploy", "production"], root, { runner });
+
+    const joined = commands.map((command) => command.join(" "));
+    const rsyncCommand = commands.find((command) => command[0] === "rsync" && command[2] === "--delete");
+    const artifactRoot = rsyncCommand?.[3]?.replace(/\/$/, "");
+    expect(process.exitCode).toBe(0);
+    expect(artifactRoot).toBeDefined();
+    expect(readFileSync(join(artifactRoot!, "worker.js"), "utf8")).toContain("bundle");
+    expect(existsSync(join(artifactRoot!, "simple-deploy.toml"))).toBe(false);
+    expect(joined.some((command) => command.includes("sudo simple-vps app run-as worker"))).toBe(false);
   });
 });

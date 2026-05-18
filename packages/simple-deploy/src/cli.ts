@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 
 type Dict = Record<string, unknown>;
@@ -298,6 +298,30 @@ function dirtyStamp(now: () => Date): string {
   return now().toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "").replace("T", "");
 }
 
+function copyDirectoryContents(source: string, target: string) {
+  if (!existsSync(source) || !statSync(source).isDirectory()) {
+    throw new Error(`[build].output does not exist after build: ${source}`);
+  }
+  mkdirSync(target, { recursive: true });
+  for (const entry of readdirSync(source)) {
+    cpSync(join(source, entry), join(target, entry), { recursive: true });
+  }
+}
+
+function copyRelativePath(sourceRoot: string, relativePath: string, targetRoot: string) {
+  const source = join(sourceRoot, relativePath);
+  const target = join(targetRoot, relativePath);
+  if (!existsSync(source)) throw new Error(`include path does not exist after build: ${relativePath}`);
+  mkdirSync(dirname(target), { recursive: true });
+  cpSync(source, target, { recursive: true });
+}
+
+function copyRootFile(sourceRoot: string, file: string, targetRoot: string) {
+  const source = join(sourceRoot, file);
+  if (!existsSync(source)) throw new Error(`${file} is required when install is enabled`);
+  cpSync(source, join(targetRoot, file));
+}
+
 function resolveEnv(manifest: Dict, envName: string): Dict {
   const envs = isRecord(manifest.env) ? manifest.env : {};
   const env = envs[envName];
@@ -482,6 +506,46 @@ function renderUnit(appName: string, envName: string, release: string, serviceNa
   return lines.join("\n");
 }
 
+async function prepareArtifact(
+  root: string,
+  runner: CommandRunner,
+  build: Dict | undefined,
+  runtime: string,
+  dirty: boolean,
+): Promise<{ artifactDir: string; lockfiles: string[] }> {
+  const checkoutDir = mkdtempSync(join(tmpdir(), "simple-deploy-checkout-"));
+  const checkoutCommand = dirty
+    ? `tar -C ${shellEscape(root)} --exclude .git --exclude node_modules -cf - . | tar -x -C ${shellEscape(checkoutDir)}`
+    : `git -C ${shellEscape(root)} archive HEAD | tar -x -C ${shellEscape(checkoutDir)}`;
+  await runCommand(runner, ["sh", "-c", checkoutCommand], "failed to create release checkout");
+
+  if (!build) {
+    return { artifactDir: checkoutDir, lockfiles: lockfilesIn(checkoutDir) };
+  }
+
+  const command = requireString(build.command, "[build].command");
+  await runCommand(runner, ["sh", "-c", `cd ${shellEscape(checkoutDir)} && ${command}`], "build failed");
+
+  const artifactDir = mkdtempSync(join(tmpdir(), "simple-deploy-artifact-"));
+  const output = requireString(build.output, "[build].output");
+  copyDirectoryContents(join(checkoutDir, output), artifactDir);
+
+  if (Array.isArray(build.include)) {
+    for (const entry of build.include) {
+      copyRelativePath(checkoutDir, requireString(entry, "[build].include[]"), artifactDir);
+    }
+  }
+
+  const lockfiles = lockfilesIn(checkoutDir);
+  if (installNeeded(runtime, build)) {
+    copyRootFile(checkoutDir, "package.json", artifactDir);
+    if (lockfiles.length === 0) throw new Error("lockfile is required when install is enabled");
+    copyRootFile(checkoutDir, lockfiles[0], artifactDir);
+  }
+
+  return { artifactDir, lockfiles };
+}
+
 async function runDeploy(root: string, envName: string, runner: CommandRunner, options: { dirty: boolean; now: () => Date }) {
   const result = checkManifest(root, envName);
   if (result.errors.length > 0) throw new Error(result.errors.join("\n"));
@@ -493,7 +557,6 @@ async function runDeploy(root: string, envName: string, runner: CommandRunner, o
   const appRoot = requireString(env.path, `[env.${envName}].path`);
   const runtime = requireString(env.runtime, `[env.${envName}].runtime`);
   const build = effectiveBuild(manifest, env);
-  if (build) throw new Error("deploy currently supports Mode A only");
 
   const sha = await gitOutput(root, runner, ["rev-parse", "HEAD"]);
   const dirty = await gitOutput(root, runner, ["status", "--porcelain"]);
@@ -505,11 +568,7 @@ async function runDeploy(root: string, envName: string, runner: CommandRunner, o
   const dotenvFiles = blockedDotenvFiles(treeFiles);
   if (dotenvFiles.length > 0) throw new Error(`refusing to deploy dotenv file: ${dotenvFiles.join(", ")}`);
 
-  const artifactDir = mkdtempSync(join(tmpdir(), "simple-deploy-artifact-"));
-  const artifactCommand = dirty
-    ? `tar -C ${shellEscape(root)} --exclude .git --exclude node_modules -cf - . | tar -x -C ${shellEscape(artifactDir)}`
-    : `git -C ${shellEscape(root)} archive HEAD | tar -x -C ${shellEscape(artifactDir)}`;
-  await runCommand(runner, ["sh", "-c", artifactCommand], "failed to create release artifact");
+  const { artifactDir, lockfiles } = await prepareArtifact(root, runner, build, runtime, Boolean(dirty));
 
   const releaseDir = `${appRoot}/releases/${release}`;
   await runCommand(runner, ["ssh", server, `test -d ${shellEscape(appRoot)}/shared`], `setup has not run for ${envName}`);
@@ -524,11 +583,10 @@ async function runDeploy(root: string, envName: string, runner: CommandRunner, o
     );
   }
 
-  const locks = lockfilesIn(root);
   if (installNeeded(runtime, build)) {
     await runCommand(
       runner,
-      ["ssh", server, `sudo simple-vps app run-as ${appName} --cwd ${releaseDir} -- ${installCommandFor(locks[0])}`],
+      ["ssh", server, `sudo simple-vps app run-as ${appName} --cwd ${releaseDir} -- ${installCommandFor(lockfiles[0])}`],
       "production install failed",
     );
   }
