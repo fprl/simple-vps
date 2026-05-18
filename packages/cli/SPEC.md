@@ -1,15 +1,14 @@
-# Simple Deploy Spec
+# Simple VPS CLI Spec
 
-Source of truth for Simple Deploy. Keep this file updated before spreading
-details into code, CLI help text, or release notes. The [README](README.md) is
-product-facing; this spec is the contract.
+Implementation reference for the Bun CLI. The public product contract lives in
+the root [SPEC.md](../../SPEC.md).
 
 ## Goal
 
-Simple Deploy turns an app repo into a running release on a Simple VPS host:
+Simple VPS CLI turns an app repo into a running release on a Simple VPS host:
 
 ```text
-app repo + simple-deploy.toml -> simple-deploy deploy production -> live app
+app repo + simple-vps.toml -> simple-vps deploy production -> live app
 ```
 
 The model is **Wrangler-shaped for your own VPS**:
@@ -37,8 +36,8 @@ VPS hosts.
 ## Boundary With Simple VPS
 
 ```text
-simple-vps  ->  "this server is ready to host apps"
-simple-deploy -> "this app is running here, with these services and routes"
+packages/simple-vps -> "this server is ready to host apps"
+packages/cli        -> "this app is running here, with these services and routes"
 ```
 
 Simple VPS owns:
@@ -48,10 +47,10 @@ Simple VPS owns:
 - Generated Caddy files at `/etc/caddy/simple-vps/`.
 - The `simple-vps route proxy|static|redirect|remove` primitives.
 - The `simple-vps app ...` privileged API for app lifecycle on the server.
-- The sudoers policy that lets Simple Deploy invoke `simple-vps` over SSH
+- The sudoers policy that lets Simple VPS CLI invoke `simple-vps` over SSH
   (see [Server API](#server-api)).
 
-Simple Deploy owns:
+Simple VPS CLI owns:
 
 - The app's release directory layout.
 - Per-app system user and per-service systemd units.
@@ -60,48 +59,53 @@ Simple Deploy owns:
 - Calling `sudo simple-vps route ...` to publish routes.
 - Rollback, health-check, and prune behavior.
 
-Simple Deploy never edits `/etc/caddy/*` directly. It calls
+Simple VPS CLI never edits `/etc/caddy/*` directly. It calls
 `sudo simple-vps route ...` on the server.
 
 ## CLI
 
 ```bash
-simple-deploy init
-simple-deploy setup <env>
-simple-deploy deploy <env>
-simple-deploy deploy <env> --dirty
-simple-deploy deploy <env> --include-dotenv
-simple-deploy rollback <env>
-simple-deploy rollback <env> <sha>
-simple-deploy status <env>
-simple-deploy logs <env>
-simple-deploy logs <env> <service>
-simple-deploy logs <env> <service> --tail
-simple-deploy restart <env> <service>
-simple-deploy secret put <env> KEY
-simple-deploy secret list <env>
-simple-deploy secret rm <env> KEY
-simple-deploy env push <env> <file>
-simple-deploy ssh <env>
-simple-deploy destroy <env>
-simple-deploy destroy <env> --purge
-simple-deploy destroy <env> --confirm <app>
-simple-deploy destroy <env> --purge --yes --confirm <app>
+simple-vps init
+simple-vps setup <env>
+simple-vps deploy <env>
+simple-vps deploy <env> --dirty
+simple-vps deploy <env> --include-dotenv
+simple-vps rollback <env>
+simple-vps rollback <env> <sha>
+simple-vps status <env>
+simple-vps logs <env>
+simple-vps logs <env> <service>
+simple-vps logs <env> <service> --tail
+simple-vps restart <env> <service>
+simple-vps secret put <env> KEY
+simple-vps secret list <env>
+simple-vps secret rm <env> KEY
+simple-vps env push <env> <file>
+simple-vps ssh <env>
+simple-vps route list [--json]
+simple-vps host status
+simple-vps host doctor
+simple-vps destroy <env>
+simple-vps destroy <env> --purge
+simple-vps destroy <env> --confirm <app>
+simple-vps destroy <env> --purge --yes --confirm <app>
 ```
 
 Rules:
 
 - `<env>` matches a `[env.<name>]` block in the manifest.
-- `simple-deploy deploy` is the only mutating command on app code.
+- `simple-vps deploy` is the only mutating command on app code.
 - `secret put` reads the value from stdin or prompts. Never accepts the value
   as an argument.
 - `secret list` prints names only, never values.
 - data-preserving `destroy` requires `--yes` or `--confirm <app>`.
 - `destroy --purge` requires both `--yes` and `--confirm <app>`.
+- Host and route read-only commands target the only env in the manifest. If
+  multiple envs exist, they fail rather than guessing a server.
 
 ## Manifest
 
-The manifest lives at `simple-deploy.toml` in the app repo root.
+The manifest lives at `simple-vps.toml` in the app repo root.
 
 ### Schema
 
@@ -221,9 +225,9 @@ releases/<sha>/
 - Release directory name = full git SHA of `HEAD`.
 - CLI output displays the short SHA (`a1b2c3d`).
 - Dirty deploys require `--dirty`. The release directory becomes
-  `<sha>-dirty-<unix-utc-timestamp>` and `simple-deploy status` prints
+  `<sha>-dirty-<unix-utc-timestamp>` and `simple-vps status` prints
   `dirty: yes` prominently.
-- `simple-deploy deploy` against a SHA already present on the server skips
+- `simple-vps deploy` against a SHA already present on the server skips
   build/upload and re-runs the activation phase (idempotent re-deploy).
 
 ## Build Modes
@@ -309,7 +313,7 @@ Use when the build emits a self-contained bundle. Fastest deploys.
 ### setup
 
 ```bash
-simple-deploy setup <env>
+simple-vps setup <env>
 ```
 
 Idempotent. Required before the first `deploy`. `deploy` hard-fails with a
@@ -335,9 +339,14 @@ Steps:
 
 ### deploy
 
+The remote staging directory remains `/tmp/simple-deploy` and the successful
+release marker remains `.simple-deploy-success` in 0.2.0. They are internal
+server API details preserved to avoid a server-layout migration during the
+public CLI rename.
+
 ```bash
-simple-deploy deploy <env>
-simple-deploy deploy <env> --dirty
+simple-vps deploy <env>
+simple-vps deploy <env> --dirty
 ```
 
 Pipeline:
@@ -385,7 +394,7 @@ Failure mode is **stop-and-replace**. Blue-green is a future
 ### status
 
 ```bash
-simple-deploy status <env>
+simple-vps status <env>
 ```
 
 Read-only.
@@ -403,9 +412,9 @@ Service state is whatever `sudo simple-vps app service is-active` prints.
 ### logs
 
 ```bash
-simple-deploy logs <env>
-simple-deploy logs <env> <service>
-simple-deploy logs <env> <service> --tail
+simple-vps logs <env>
+simple-vps logs <env> <service>
+simple-vps logs <env> <service> --tail
 ```
 
 Read-only. With one declared service, the service argument is optional. With
@@ -421,8 +430,8 @@ journalctl -u simple-<name>-<service>.service -f    # --tail
 ### rollback
 
 ```bash
-simple-deploy rollback <env>           # previous successful release
-simple-deploy rollback <env> <sha>     # explicit release in releases/
+simple-vps rollback <env>           # previous successful release
+simple-vps rollback <env> <sha>     # explicit release in releases/
 ```
 
 Pipeline:
@@ -448,8 +457,8 @@ not by release.
 ### destroy
 
 ```bash
-simple-deploy destroy <env>
-simple-deploy destroy <env> --purge
+simple-vps destroy <env>
+simple-vps destroy <env> --purge
 ```
 
 Default (data-preserving):
@@ -494,7 +503,7 @@ Examples: `simple-my-app-web.service`, `simple-my-app-worker.service`.
 
 ```ini
 [Unit]
-Description=simple-deploy: <name>/<service>
+Description=simple-vps: <name>/<service>
 After=network.target
 
 [Service]
@@ -558,7 +567,7 @@ Use a single-quote-safe escaper (replace `'` with `'\''`) and emit
 
 ### Logs
 
-Logs go to the journal. `simple-deploy logs <env> <service>` is a thin wrapper
+Logs go to the journal. `simple-vps logs <env> <service>` is a thin wrapper
 around:
 
 ```bash
@@ -579,7 +588,7 @@ Two layers.
   - No `export` keyword.
   - No variable expansion.
   - No inline comments after a value.
-- `simple-deploy env push` and `simple-deploy secret put` MUST validate the
+- `simple-vps env push` and `simple-vps secret put` MUST validate the
   resulting file against systemd's parser before writing it.
 
 ### systemd Environment= (tool-controlled)
@@ -600,7 +609,7 @@ defaults.
 
 ### Secrets vs Env
 
-`simple-deploy secret put` and `simple-deploy env push` both write to
+`simple-vps secret put` and `simple-vps env push` both write to
 `shared/.env`. The split is operational:
 
 - `secret put` is interactive, never echoes the value, never accepts it as an
@@ -612,11 +621,11 @@ Both produce the same on-disk format.
 ### Env Commands
 
 ```bash
-simple-deploy env push <env> <file>
-simple-deploy secret put <env> KEY
-simple-deploy secret list <env>
-simple-deploy secret rm <env> KEY
-simple-deploy restart <env> <service>
+simple-vps env push <env> <file>
+simple-vps secret put <env> KEY
+simple-vps secret list <env>
+simple-vps secret rm <env> KEY
+simple-vps restart <env> <service>
 ```
 
 `env push <file>` replaces the entire `shared/.env` with `<file>`.
@@ -646,10 +655,10 @@ service's health check.
 
 ## Route Contract
 
-Simple Deploy does not edit Caddy. It calls `sudo simple-vps route ...` on
+Simple VPS CLI does not edit Caddy. It calls `sudo simple-vps route ...` on
 the server over SSH. Simple VPS validates and owns the ingress state machine
 (see the
-[Simple Deploy Server API](../simple-vps/SPEC.md#simple-deploy-server-api)
+[Simple VPS CLI Server API](../simple-vps/SPEC.md#simple-vps-cli-server-api)
 in the Simple VPS spec).
 
 ```bash
@@ -696,21 +705,21 @@ ssh-agent
 IdentityFile
 ```
 
-Simple Deploy shells out to `ssh` and `rsync`. No special handling.
+Simple VPS CLI shells out to `ssh` and `rsync`. No special handling.
 
 ### CI
 
 ```text
-SIMPLE_DEPLOY_SSH_KEY        # private key contents
-SIMPLE_DEPLOY_KNOWN_HOSTS    # known_hosts entries for env.server
+SIMPLE_VPS_SSH_KEY        # private key contents
+SIMPLE_VPS_KNOWN_HOSTS    # known_hosts entries for env.server
 ```
 
-When `SIMPLE_DEPLOY_SSH_KEY` is set:
+When `SIMPLE_VPS_SSH_KEY` is set:
 
 - Write the key to a temp file with `0600`.
 - Pass `-i <tempfile>` to `ssh` and `rsync`.
 - Use `-o StrictHostKeyChecking=yes -o UserKnownHostsFile=<tempfile>`.
-- Refuse to run if `SIMPLE_DEPLOY_KNOWN_HOSTS` is missing.
+- Refuse to run if `SIMPLE_VPS_KNOWN_HOSTS` is missing.
 - Never write `StrictHostKeyChecking=no`. Anywhere. Ever.
 
 Secrets are never written to the manifest. `env.<name>.server` is allowed and
@@ -718,9 +727,9 @@ expected to be committed.
 
 ## Server API
 
-Simple Deploy needs narrow root privileges on the server. Simple VPS exposes
+Simple VPS CLI needs narrow root privileges on the server. Simple VPS exposes
 them as subcommands of the `simple-vps` binary, gated by a single sudoers
-line for `/usr/local/bin/simple-vps`. Simple Deploy invokes them over SSH:
+line for `/usr/local/bin/simple-vps`. Simple VPS CLI invokes them over SSH:
 
 ```bash
 # app lifecycle
@@ -745,12 +754,12 @@ Validation lives inside `simple-vps`. Argument shape, app/service naming,
 host/port ranges, unit file ownership, and `run-as --cwd` scoping
 are all enforced server-side, not in sudoers globs. The full contract lives
 in the
-[Simple Deploy Server API](../simple-vps/SPEC.md#simple-deploy-server-api)
+[Simple VPS CLI Server API](../simple-vps/SPEC.md#simple-vps-cli-server-api)
 section of the Simple VPS spec.
 
 If the sudoers entry or the `app` subcommands are missing on the server,
-`simple-deploy setup` fails with a clear pointer to re-run the Simple VPS
-install. Simple Deploy never installs server-side capability itself.
+`simple-vps setup` fails with a clear pointer to re-run the Simple VPS
+install. Simple VPS CLI never installs server-side capability itself.
 
 ## Artifact Rules
 
@@ -776,7 +785,7 @@ The following are **always** excluded from the artifact:
 
 - `node_modules/` (any depth)
 - `.git/`
-- `.simple-deploy/` (reserved local working dir)
+- `.simple-vps/` (reserved local working dir)
 - Build caches: `.next/cache/`, `.turbo/`, `.parcel-cache/`, `.cache/`,
   `node_modules/.cache/`
 - `.DS_Store`, `Thumbs.db`
@@ -825,7 +834,7 @@ Detected from the lockfile present in the artifact root:
 Rules:
 
 - Exactly one lockfile must be present in Mode A and Mode B. Multiple lockfiles
-  are a project error: `simple-deploy deploy` refuses and lists them.
+  are a project error: `simple-vps deploy` refuses and lists them.
 - The package manager binary must be installed on the server. Simple VPS
   installs `bun` and `node`/`npm` by default. `pnpm` is installed by Simple
   VPS. `yarn` is not installed by default.
@@ -836,10 +845,10 @@ Rules:
 ## Init
 
 ```bash
-simple-deploy init
+simple-vps init
 ```
 
-Generates a starter `simple-deploy.toml` by inspecting:
+Generates a starter `simple-vps.toml` by inspecting:
 
 - `package.json` for `name` and a likely `start` script.
 - The presence of a lockfile to suggest `runtime`.
@@ -848,9 +857,9 @@ Generates a starter `simple-deploy.toml` by inspecting:
 Never overwrites an existing manifest. Prints next steps:
 
 ```text
-1. edit simple-deploy.toml
-2. simple-deploy setup production
-3. simple-deploy deploy production
+1. edit simple-vps.toml
+2. simple-vps setup production
+3. simple-vps deploy production
 ```
 
 ## Validation
@@ -868,11 +877,11 @@ The CLI MUST run before every deploy:
 - shared/.env content is systemd-EnvironmentFile-parseable
 ```
 
-The CLI SHOULD run on save (`simple-deploy check`):
+The CLI SHOULD run on save (`simple-vps check`):
 
 ```bash
-simple-deploy check          # validate manifest only
-simple-deploy check --env production   # also check SSH, server tooling, setup
+simple-vps check          # validate manifest only
+simple-vps check production   # also check SSH, server tooling, setup
 ```
 
 ## Implementation Plan
@@ -882,8 +891,8 @@ simple-deploy check --env production   # also check SSH, server tooling, setup
 3. Implement `setup` end-to-end against a Simple VPS host.
 4. Implement Mode A deploy end-to-end (smallest viable path).
 5. Add Mode B and Mode C.
-6. CI examples (GitHub Actions) using `SIMPLE_DEPLOY_SSH_KEY` and
-   `SIMPLE_DEPLOY_KNOWN_HOSTS`.
+6. CI examples (GitHub Actions) using `SIMPLE_VPS_SSH_KEY` and
+   `SIMPLE_VPS_KNOWN_HOSTS`.
 7. End-to-end smoke test deploying a Hono/Bun example app to a fresh
    Simple VPS host.
 8. Only then tag v1.

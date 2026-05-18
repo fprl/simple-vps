@@ -2,7 +2,7 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
-image="simple-deploy-fake-vps:local"
+image="simple-vps-fake-vps:local"
 tmp="$(mktemp -d)"
 container=""
 
@@ -19,7 +19,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-docker build -f "$repo_root/packages/simple-deploy/tests/fake-vps/Dockerfile" -t "$image" "$repo_root"
+docker build -f "$repo_root/packages/cli/tests/fake-vps/Dockerfile" -t "$image" "$repo_root"
 container="$(docker run -d -p 127.0.0.1::22 "$image")"
 
 ssh-keygen -q -t ed25519 -N "" -f "$tmp/id_ed25519"
@@ -216,7 +216,7 @@ mode_a="$tmp/mode-a"
 mkdir -p "$mode_a"
 write_node_package "$mode_a" "api"
 write_server "$mode_a" "mode-a"
-cat > "$mode_a/simple-deploy.toml" <<'EOF'
+cat > "$mode_a/simple-vps.toml" <<'EOF'
 name = "api"
 
 [env.production]
@@ -236,48 +236,48 @@ service = "web"
 EOF
 commit_fixture "$mode_a"
 
-(cd "$mode_a" && bun run "$repo_root/packages/simple-deploy/src/cli.ts" setup production)
-(cd "$mode_a" && bun run "$repo_root/packages/simple-deploy/src/cli.ts" deploy production)
+(cd "$mode_a" && bun run "$repo_root/packages/cli/src/cli.ts" setup production)
+(cd "$mode_a" && bun run "$repo_root/packages/cli/src/cli.ts" deploy production)
 first_api_current="$(ssh fake-vps readlink -f /var/apps/api/current)"
 ssh fake-vps test -L /var/apps/api/current
 ssh fake-vps test -L /var/apps/api/current/db
 ssh fake-vps curl -fsS http://127.0.0.1:3000/health >/dev/null
 ssh fake-vps curl -fsS http://127.0.0.1:3000/ | grep -q '^mode-a$'
 ssh fake-vps sudo simple-vps route list --json | grep -q '"host": "api.example.com"'
-(cd "$mode_a" && bun run "$repo_root/packages/simple-deploy/src/cli.ts" status production) | grep -q 'service web: active'
-(cd "$mode_a" && bun run "$repo_root/packages/simple-deploy/src/cli.ts" logs production web) | grep -q 'server:mode-a'
+(cd "$mode_a" && bun run "$repo_root/packages/cli/src/cli.ts" status production) | grep -q 'service web: active'
+(cd "$mode_a" && bun run "$repo_root/packages/cli/src/cli.ts" logs production web) | grep -q 'server:mode-a'
 printf 'API_KEY=from-env\n' > "$mode_a/production.env"
-(cd "$mode_a" && bun run "$repo_root/packages/simple-deploy/src/cli.ts" env push production production.env)
+(cd "$mode_a" && bun run "$repo_root/packages/cli/src/cli.ts" env push production production.env)
 test "$(ssh fake-vps curl -fsS http://127.0.0.1:3000/secret)" = ""
-(cd "$mode_a" && bun run "$repo_root/packages/simple-deploy/src/cli.ts" restart production web)
+(cd "$mode_a" && bun run "$repo_root/packages/cli/src/cli.ts" restart production web)
 test "$(ssh fake-vps curl -fsS http://127.0.0.1:3000/secret)" = "from-env"
-(cd "$mode_a" && printf 'from-secret\n' | bun run "$repo_root/packages/simple-deploy/src/cli.ts" secret put production API_KEY)
-(cd "$mode_a" && bun run "$repo_root/packages/simple-deploy/src/cli.ts" secret list production) | grep -q '^API_KEY$'
-if (cd "$mode_a" && bun run "$repo_root/packages/simple-deploy/src/cli.ts" secret list production) | grep -q 'from-secret'; then
+(cd "$mode_a" && printf 'from-secret\n' | bun run "$repo_root/packages/cli/src/cli.ts" secret put production API_KEY)
+(cd "$mode_a" && bun run "$repo_root/packages/cli/src/cli.ts" secret list production) | grep -q '^API_KEY$'
+if (cd "$mode_a" && bun run "$repo_root/packages/cli/src/cli.ts" secret list production) | grep -q 'from-secret'; then
   echo "secret list leaked a secret value" >&2
   exit 1
 fi
 test "$(ssh fake-vps curl -fsS http://127.0.0.1:3000/secret)" = "from-env"
-(cd "$mode_a" && bun run "$repo_root/packages/simple-deploy/src/cli.ts" restart production web)
+(cd "$mode_a" && bun run "$repo_root/packages/cli/src/cli.ts" restart production web)
 test "$(ssh fake-vps curl -fsS http://127.0.0.1:3000/secret)" = "from-secret"
-(cd "$mode_a" && bun run "$repo_root/packages/simple-deploy/src/cli.ts" secret rm production API_KEY)
-(cd "$mode_a" && bun run "$repo_root/packages/simple-deploy/src/cli.ts" restart production web)
+(cd "$mode_a" && bun run "$repo_root/packages/cli/src/cli.ts" secret rm production API_KEY)
+(cd "$mode_a" && bun run "$repo_root/packages/cli/src/cli.ts" restart production web)
 test "$(ssh fake-vps curl -fsS http://127.0.0.1:3000/secret)" = ""
 rm "$mode_a/production.env"
 
 write_server "$mode_a" "mode-a-v2"
 git -C "$mode_a" add server.js
 git -C "$mode_a" commit -q -m "second fixture"
-(cd "$mode_a" && bun run "$repo_root/packages/simple-deploy/src/cli.ts" deploy production)
+(cd "$mode_a" && bun run "$repo_root/packages/cli/src/cli.ts" deploy production)
 ssh fake-vps curl -fsS http://127.0.0.1:3000/ | grep -q '^mode-a-v2$'
-(cd "$mode_a" && bun run "$repo_root/packages/simple-deploy/src/cli.ts" rollback production)
+(cd "$mode_a" && bun run "$repo_root/packages/cli/src/cli.ts" rollback production)
 test "$(ssh fake-vps readlink -f /var/apps/api/current)" = "$first_api_current"
 ssh fake-vps curl -fsS http://127.0.0.1:3000/ | grep -q '^mode-a$'
 
 write_unhealthy_server "$mode_a" "mode-a-bad"
 git -C "$mode_a" add server.js
 git -C "$mode_a" commit -q -m "bad fixture"
-if (cd "$mode_a" && bun run "$repo_root/packages/simple-deploy/src/cli.ts" deploy production); then
+if (cd "$mode_a" && bun run "$repo_root/packages/cli/src/cli.ts" deploy production); then
   echo "unhealthy deploy unexpectedly passed" >&2
   exit 1
 fi
@@ -287,7 +287,7 @@ ssh fake-vps curl -fsS http://127.0.0.1:3000/ | grep -q '^mode-a$'
 hono_api="$tmp/hono-api"
 mkdir -p "$hono_api"
 write_hono_bun_app "$hono_api"
-cat > "$hono_api/simple-deploy.toml" <<'EOF'
+cat > "$hono_api/simple-vps.toml" <<'EOF'
 name = "hono-api"
 
 [env.production]
@@ -307,8 +307,8 @@ service = "web"
 EOF
 commit_fixture "$hono_api"
 
-(cd "$hono_api" && bun run "$repo_root/packages/simple-deploy/src/cli.ts" setup production)
-(cd "$hono_api" && bun run "$repo_root/packages/simple-deploy/src/cli.ts" deploy production)
+(cd "$hono_api" && bun run "$repo_root/packages/cli/src/cli.ts" setup production)
+(cd "$hono_api" && bun run "$repo_root/packages/cli/src/cli.ts" deploy production)
 ssh fake-vps curl -fsS http://127.0.0.1:3003/health >/dev/null
 ssh fake-vps curl -fsS http://127.0.0.1:3003/ | grep -q '^hono-api$'
 ssh fake-vps test -d /var/apps/hono-api/current/node_modules/hono
@@ -328,7 +328,7 @@ cat > "$static_site/index.html" <<'EOF'
   </body>
 </html>
 EOF
-cat > "$static_site/simple-deploy.toml" <<'EOF'
+cat > "$static_site/simple-vps.toml" <<'EOF'
 name = "static-site"
 
 [env.production]
@@ -342,8 +342,8 @@ type = "static"
 EOF
 commit_fixture "$static_site"
 
-(cd "$static_site" && bun run "$repo_root/packages/simple-deploy/src/cli.ts" setup production)
-(cd "$static_site" && bun run "$repo_root/packages/simple-deploy/src/cli.ts" deploy production)
+(cd "$static_site" && bun run "$repo_root/packages/cli/src/cli.ts" setup production)
+(cd "$static_site" && bun run "$repo_root/packages/cli/src/cli.ts" deploy production)
 ssh fake-vps "grep -q '<h1>static-site</h1>' /var/apps/static-site/current/index.html"
 assert_route_contains "static.example.com" "/" "<h1>static-site</h1>"
 
@@ -352,7 +352,7 @@ mkdir -p "$mode_b/public"
 write_node_package "$mode_b" "web"
 write_server "$mode_b" "mode-b"
 printf 'asset\n' > "$mode_b/public/asset.txt"
-cat > "$mode_b/simple-deploy.toml" <<'EOF'
+cat > "$mode_b/simple-vps.toml" <<'EOF'
 name = "web"
 
 [build]
@@ -377,14 +377,14 @@ service = "web"
 EOF
 commit_fixture "$mode_b"
 
-(cd "$mode_b" && bun run "$repo_root/packages/simple-deploy/src/cli.ts" setup production)
-(cd "$mode_b" && bun run "$repo_root/packages/simple-deploy/src/cli.ts" deploy production)
+(cd "$mode_b" && bun run "$repo_root/packages/cli/src/cli.ts" setup production)
+(cd "$mode_b" && bun run "$repo_root/packages/cli/src/cli.ts" deploy production)
 ssh fake-vps curl -fsS http://127.0.0.1:3001/health >/dev/null
 ssh fake-vps grep -q '^asset$' /var/apps/web/current/public/asset.txt
 ssh fake-vps test -f /var/apps/web/current/package-lock.json
-ssh fake-vps test ! -e /var/apps/web/current/simple-deploy.toml
+ssh fake-vps test ! -e /var/apps/web/current/simple-vps.toml
 ssh fake-vps sudo simple-vps route list --json | grep -q '"host": "web.example.com"'
-(cd "$mode_b" && bun run "$repo_root/packages/simple-deploy/src/cli.ts" destroy production --yes)
+(cd "$mode_b" && bun run "$repo_root/packages/cli/src/cli.ts" destroy production --yes)
 ssh fake-vps test -d /var/apps/web/shared
 ssh fake-vps test -d /var/apps/web/releases
 ssh fake-vps test ! -e /var/apps/web/current
@@ -396,7 +396,7 @@ fi
 mode_c="$tmp/mode-c"
 mkdir -p "$mode_c"
 write_server "$mode_c" "mode-c"
-cat > "$mode_c/simple-deploy.toml" <<'EOF'
+cat > "$mode_c/simple-vps.toml" <<'EOF'
 name = "bundle"
 
 [build]
@@ -421,13 +421,13 @@ service = "web"
 EOF
 commit_fixture "$mode_c"
 
-(cd "$mode_c" && bun run "$repo_root/packages/simple-deploy/src/cli.ts" setup production)
-(cd "$mode_c" && bun run "$repo_root/packages/simple-deploy/src/cli.ts" deploy production)
+(cd "$mode_c" && bun run "$repo_root/packages/cli/src/cli.ts" setup production)
+(cd "$mode_c" && bun run "$repo_root/packages/cli/src/cli.ts" deploy production)
 ssh fake-vps curl -fsS http://127.0.0.1:3002/health >/dev/null
 ssh fake-vps test ! -e /var/apps/bundle/current/package.json
-ssh fake-vps test ! -e /var/apps/bundle/current/simple-deploy.toml
+ssh fake-vps test ! -e /var/apps/bundle/current/simple-vps.toml
 ssh fake-vps sudo simple-vps route list --json | grep -q '"host": "bundle.example.com"'
-(cd "$mode_c" && bun run "$repo_root/packages/simple-deploy/src/cli.ts" destroy production --purge --yes --confirm bundle)
+(cd "$mode_c" && bun run "$repo_root/packages/cli/src/cli.ts" destroy production --purge --yes --confirm bundle)
 ssh fake-vps test ! -e /var/apps/bundle
 if ssh fake-vps sudo simple-vps route list --json | grep -q '"app": "bundle"'; then
   echo "purge left bundle routes behind" >&2

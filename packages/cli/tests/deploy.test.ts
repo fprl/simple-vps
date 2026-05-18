@@ -5,10 +5,10 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { main, type CommandResult, type CommandRunner } from "../src/cli";
 
 function fixture(): string {
-  const root = mkdtempSync(join(tmpdir(), "simple-deploy-deploy-test-"));
+  const root = mkdtempSync(join(tmpdir(), "simple-vps-deploy-test-"));
   writeFileSync(join(root, "bun.lock"), "\n");
   writeFileSync(
-    join(root, "simple-deploy.toml"),
+    join(root, "simple-vps.toml"),
     `
 name = "api"
 
@@ -96,6 +96,9 @@ describe("deploy", () => {
     expect(joined.some((command) => command.startsWith("rsync -az ") && command.includes("admin@100.x.y.z:/tmp/simple-deploy/"))).toBe(
       true,
     );
+    const unitUpload = commands.find((command) => command[0] === "rsync" && command[1] === "-az" && command[3]?.includes(":/tmp/simple-deploy/"));
+    const unitRoot = unitUpload?.[2]?.replace(/\/$/, "");
+    expect(readFileSync(join(unitRoot!, "simple-api-web.service"), "utf8")).toContain("Description=simple-vps: api/web");
     expect(joined.some((command) => command.includes("sudo simple-vps app install-unit api web "))).toBe(true);
     expect(joined).toContain("ssh admin@100.x.y.z sudo simple-vps app service start api web");
     expect(joined).toContain(
@@ -196,10 +199,10 @@ describe("deploy", () => {
   });
 
   test("allows artifact dotenv files only with an explicit override", async () => {
-    const root = mkdtempSync(join(tmpdir(), "simple-deploy-dotenv-test-"));
+    const root = mkdtempSync(join(tmpdir(), "simple-vps-dotenv-test-"));
     writeFileSync(join(root, "worker.js"), `console.log("bundle");\n`);
     writeFileSync(
-      join(root, "simple-deploy.toml"),
+      join(root, "simple-vps.toml"),
       `
 name = "worker"
 
@@ -280,14 +283,14 @@ command = "bun worker.js"
   });
 
   test("deploys a build output artifact with explicit includes", async () => {
-    const root = mkdtempSync(join(tmpdir(), "simple-deploy-build-test-"));
+    const root = mkdtempSync(join(tmpdir(), "simple-vps-build-test-"));
     mkdirSync(join(root, "public"), { recursive: true });
     writeFileSync(join(root, "bun.lock"), "\n");
     writeFileSync(join(root, "package.json"), `{"name":"web","version":"1.0.0"}\n`);
     writeFileSync(join(root, "server.js"), `console.log("built");\n`);
     writeFileSync(join(root, "public", "asset.txt"), "asset\n");
     writeFileSync(
-      join(root, "simple-deploy.toml"),
+      join(root, "simple-vps.toml"),
       `
 name = "web"
 
@@ -334,15 +337,15 @@ healthcheck = "/health"
     expect(readFileSync(join(artifactRoot!, "public", "asset.txt"), "utf8")).toBe("asset\n");
     expect(existsSync(join(artifactRoot!, "package.json"))).toBe(true);
     expect(existsSync(join(artifactRoot!, "bun.lock"))).toBe(true);
-    expect(existsSync(join(artifactRoot!, "simple-deploy.toml"))).toBe(false);
+    expect(existsSync(join(artifactRoot!, "simple-vps.toml"))).toBe(false);
     expect(joined.some((command) => command.includes("sudo simple-vps app run-as web"))).toBe(true);
   });
 
   test("deploys a bundled build without server install", async () => {
-    const root = mkdtempSync(join(tmpdir(), "simple-deploy-bundle-test-"));
+    const root = mkdtempSync(join(tmpdir(), "simple-vps-bundle-test-"));
     writeFileSync(join(root, "worker.js"), `console.log("bundle");\n`);
     writeFileSync(
-      join(root, "simple-deploy.toml"),
+      join(root, "simple-vps.toml"),
       `
 name = "worker"
 
@@ -383,17 +386,17 @@ command = "bun worker.js"
     expect(process.exitCode).toBe(0);
     expect(artifactRoot).toBeDefined();
     expect(readFileSync(join(artifactRoot!, "worker.js"), "utf8")).toContain("bundle");
-    expect(existsSync(join(artifactRoot!, "simple-deploy.toml"))).toBe(false);
+    expect(existsSync(join(artifactRoot!, "simple-vps.toml"))).toBe(false);
     expect(joined.some((command) => command.includes("sudo simple-vps app run-as worker"))).toBe(false);
   });
 
   test("refuses artifact symlinks that point outside the artifact root", async () => {
-    const root = mkdtempSync(join(tmpdir(), "simple-deploy-symlink-test-"));
+    const root = mkdtempSync(join(tmpdir(), "simple-vps-symlink-test-"));
     mkdirSync(join(root, "dist"), { recursive: true });
     writeFileSync(join(root, "dist", "server.js"), `console.log("bundle");\n`);
     symlinkSync("/etc/passwd", join(root, "dist", "leak"));
     writeFileSync(
-      join(root, "simple-deploy.toml"),
+      join(root, "simple-vps.toml"),
       `
 name = "worker"
 

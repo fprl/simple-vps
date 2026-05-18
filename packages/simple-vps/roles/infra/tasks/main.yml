@@ -138,14 +138,19 @@
     group: root
     mode: '0755'
 
-- name: Allow Simple Deploy to invoke Simple VPS server API
+- name: Allow Simple VPS CLI to invoke Simple VPS server API
   copy:
-    dest: /etc/sudoers.d/simple-deploy
+    dest: /etc/sudoers.d/simple-vps
     owner: root
     group: root
     mode: '0440'
     content: "{{ admin_user }} ALL=(root) NOPASSWD: /usr/local/bin/simple-vps\n"
     validate: 'visudo -cf %s'
+
+- name: Remove legacy Simple Deploy sudoers file
+  file:
+    path: /etc/sudoers.d/simple-deploy
+    state: absent
 
 - name: Add Caddy GPG key
   apt_key:

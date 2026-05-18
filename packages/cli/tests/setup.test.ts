@@ -5,10 +5,10 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { main, type CommandRunner } from "../src/cli";
 
 function fixture(): string {
-  const root = mkdtempSync(join(tmpdir(), "simple-deploy-setup-test-"));
+  const root = mkdtempSync(join(tmpdir(), "simple-vps-setup-test-"));
   writeFileSync(join(root, "bun.lock"), "\n");
   writeFileSync(
-    join(root, "simple-deploy.toml"),
+    join(root, "simple-vps.toml"),
     `
 name = "api"
 
@@ -90,8 +90,8 @@ describe("setup", () => {
     let keyContent = "";
     let keyMode = 0;
     let knownHostsContent = "";
-    const previousKey = process.env.SIMPLE_DEPLOY_SSH_KEY;
-    const previousKnownHosts = process.env.SIMPLE_DEPLOY_KNOWN_HOSTS;
+    const previousKey = process.env.SIMPLE_VPS_SSH_KEY;
+    const previousKnownHosts = process.env.SIMPLE_VPS_KNOWN_HOSTS;
     const runner: CommandRunner = {
       async run(command) {
         commands.push(command);
@@ -108,15 +108,15 @@ describe("setup", () => {
       },
     };
 
-    process.env.SIMPLE_DEPLOY_SSH_KEY = "test-private-key";
-    process.env.SIMPLE_DEPLOY_KNOWN_HOSTS = "100.x.y.z ssh-ed25519 AAAA";
+    process.env.SIMPLE_VPS_SSH_KEY = "test-private-key";
+    process.env.SIMPLE_VPS_KNOWN_HOSTS = "100.x.y.z ssh-ed25519 AAAA";
     try {
       await main(["setup", "production"], root, { runner });
     } finally {
-      if (previousKey === undefined) delete process.env.SIMPLE_DEPLOY_SSH_KEY;
-      else process.env.SIMPLE_DEPLOY_SSH_KEY = previousKey;
-      if (previousKnownHosts === undefined) delete process.env.SIMPLE_DEPLOY_KNOWN_HOSTS;
-      else process.env.SIMPLE_DEPLOY_KNOWN_HOSTS = previousKnownHosts;
+      if (previousKey === undefined) delete process.env.SIMPLE_VPS_SSH_KEY;
+      else process.env.SIMPLE_VPS_SSH_KEY = previousKey;
+      if (previousKnownHosts === undefined) delete process.env.SIMPLE_VPS_KNOWN_HOSTS;
+      else process.env.SIMPLE_VPS_KNOWN_HOSTS = previousKnownHosts;
     }
 
     const first = commands[0];
@@ -133,8 +133,8 @@ describe("setup", () => {
     const commands: string[][] = [];
     const errors: string[] = [];
     const originalError = console.error;
-    const previousKey = process.env.SIMPLE_DEPLOY_SSH_KEY;
-    const previousKnownHosts = process.env.SIMPLE_DEPLOY_KNOWN_HOSTS;
+    const previousKey = process.env.SIMPLE_VPS_SSH_KEY;
+    const previousKnownHosts = process.env.SIMPLE_VPS_KNOWN_HOSTS;
     const runner: CommandRunner = {
       async run(command) {
         commands.push(command);
@@ -142,21 +142,21 @@ describe("setup", () => {
       },
     };
 
-    process.env.SIMPLE_DEPLOY_SSH_KEY = "test-private-key";
-    delete process.env.SIMPLE_DEPLOY_KNOWN_HOSTS;
+    process.env.SIMPLE_VPS_SSH_KEY = "test-private-key";
+    delete process.env.SIMPLE_VPS_KNOWN_HOSTS;
     console.error = (message?: unknown) => errors.push(String(message));
     try {
       await main(["setup", "production"], root, { runner });
     } finally {
       console.error = originalError;
-      if (previousKey === undefined) delete process.env.SIMPLE_DEPLOY_SSH_KEY;
-      else process.env.SIMPLE_DEPLOY_SSH_KEY = previousKey;
-      if (previousKnownHosts === undefined) delete process.env.SIMPLE_DEPLOY_KNOWN_HOSTS;
-      else process.env.SIMPLE_DEPLOY_KNOWN_HOSTS = previousKnownHosts;
+      if (previousKey === undefined) delete process.env.SIMPLE_VPS_SSH_KEY;
+      else process.env.SIMPLE_VPS_SSH_KEY = previousKey;
+      if (previousKnownHosts === undefined) delete process.env.SIMPLE_VPS_KNOWN_HOSTS;
+      else process.env.SIMPLE_VPS_KNOWN_HOSTS = previousKnownHosts;
     }
 
     expect(process.exitCode).toBe(1);
     expect(commands).toHaveLength(0);
-    expect(errors.join("\n")).toContain("SIMPLE_DEPLOY_KNOWN_HOSTS is required");
+    expect(errors.join("\n")).toContain("SIMPLE_VPS_KNOWN_HOSTS is required");
   });
 });

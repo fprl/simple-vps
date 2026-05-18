@@ -1,7 +1,7 @@
 # Simple VPS Spec
 
 Source of truth for the Simple VPS product. The package-level specs
-(`packages/simple-vps/SPEC.md`, `packages/simple-deploy/SPEC.md`) document
+(`packages/simple-vps/SPEC.md`, `packages/cli/SPEC.md`) document
 implementation; this file documents the public contract.
 
 ## Product
@@ -132,7 +132,7 @@ The manifest is `simple-vps.toml` at the app repo root.
 
 Schema, validation rules, three build modes (A/B/C), env override blocks,
 include/dotenv handling, and lockfile detection are unchanged from
-`packages/simple-deploy/SPEC.md`. Only the filename changes.
+`packages/cli/SPEC.md`. Only the filename changes.
 
 `simple-deploy.toml` is not read. There is no fallback path.
 
@@ -185,7 +185,7 @@ Standard SemVer.
 
 0.2.0    unified `simple-vps` CLI lands
          manifest renamed to `simple-vps.toml`
-         no server layout / sudoers / systemd changes
+         no server layout / sudoers grant target / systemd changes
          no fallback to the old shape
 
 0.3.0+   slice chosen from real friction surfaced by 0.2.0 usage
@@ -216,6 +216,8 @@ for a meaningful window without needing contract changes.
 ### What does not change
 
 - Server layout (`/var/apps/<name>/...`).
+- Internal server API staging and release markers (`/tmp/simple-deploy`,
+  `.simple-deploy-success`).
 - Sudoers grant target (still the `simple-vps` binary, one line).
 - systemd unit naming (`simple-<app>-<service>.service`).
 - The three build modes (A/B/C) and their detection.
@@ -293,7 +295,7 @@ Suggested sequence for the 0.2.0 slice:
    `simple-vps.toml`.
 6. Update README and SPEC files to reflect single CLI. Delete prose that
    references `simple-deploy` as a separate tool.
-7. Bump `packages/simple-deploy/package.json` (or its successor) to
+7. Bump `packages/cli/package.json` to
    `0.2.0`.
 8. Tag `v0.2.0`.
 

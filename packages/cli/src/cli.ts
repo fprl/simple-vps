@@ -67,6 +67,10 @@ const RESERVED_SERVICES = new Set(["current", "releases", "shared"]);
 const LOCKFILES = ["bun.lock", "bun.lockb", "pnpm-lock.yaml", "package-lock.json", "yarn.lock"];
 const ALLOWED_DOTENV_FILES = new Set([".env.example", ".env.sample", ".env.defaults"]);
 const COPY_OPTIONS = { recursive: true, verbatimSymlinks: true };
+const MANIFEST_FILE = "simple-vps.toml";
+// Internal server API contract retained for 0.2.0; not a public product name.
+const REMOTE_DEPLOY_TMP_DIR = "/tmp/simple-deploy";
+const RELEASE_SUCCESS_MARKER = ".simple-deploy-success";
 
 const defaultRunner: CommandRunner = {
   async run(command, options) {
@@ -114,9 +118,9 @@ function parseToml(path: string): Dict {
 }
 
 function readManifest(root: string): Dict {
-  const path = join(root, "simple-deploy.toml");
+  const path = join(root, MANIFEST_FILE);
   if (!existsSync(path)) {
-    throw new Error("simple-deploy.toml not found");
+    throw new Error(`${MANIFEST_FILE} not found`);
   }
   return parseToml(path);
 }
@@ -323,13 +327,13 @@ function authCommand(command: string[], sshOptions: string[], rsyncRemoteShell: 
 }
 
 function prepareCommandRunner(runner: CommandRunner): { runner: CommandRunner; cleanup: () => void } {
-  const key = process.env.SIMPLE_DEPLOY_SSH_KEY;
+  const key = process.env.SIMPLE_VPS_SSH_KEY;
   if (!key) return { runner, cleanup: () => {} };
 
-  const knownHosts = process.env.SIMPLE_DEPLOY_KNOWN_HOSTS;
-  if (!knownHosts) throw new Error("SIMPLE_DEPLOY_KNOWN_HOSTS is required when SIMPLE_DEPLOY_SSH_KEY is set");
+  const knownHosts = process.env.SIMPLE_VPS_KNOWN_HOSTS;
+  if (!knownHosts) throw new Error("SIMPLE_VPS_KNOWN_HOSTS is required when SIMPLE_VPS_SSH_KEY is set");
 
-  const dir = mkdtempSync(join(tmpdir(), "simple-deploy-ssh-"));
+  const dir = mkdtempSync(join(tmpdir(), "simple-vps-ssh-"));
   const keyPath = join(dir, "id");
   const knownHostsPath = join(dir, "known_hosts");
   writeFileSync(keyPath, ensureTrailingNewline(key), { encoding: "utf8", mode: 0o600 });
@@ -548,6 +552,18 @@ function loadAppContext(root: string, envName: string): AppContext {
   return { manifest, appName, env, envName, server, appRoot, runtime, build, services, routes };
 }
 
+function loadSingleEnvContext(root: string): AppContext {
+  const result = checkManifest(root);
+  if (result.errors.length > 0) throw new Error(result.errors.join("\n"));
+  if (result.envs.length !== 1) throw new Error("command requires exactly one env in simple-vps.toml");
+  return loadAppContext(root, result.envs[0]);
+}
+
+async function runRemoteReadCommand(runner: CommandRunner, context: AppContext, command: string, failureMessage: string) {
+  const result = await runCommand(runner, ["ssh", context.server, command], failureMessage);
+  if (result.stdout.trim()) console.log(result.stdout.trimEnd());
+}
+
 export function checkManifest(root = process.cwd(), envName?: string): CheckResult {
   const manifest = readManifest(root);
   const errors: string[] = [];
@@ -596,7 +612,7 @@ function printCheckResult(result: CheckResult) {
     return;
   }
   const envList = result.envs.length > 0 ? result.envs.join(", ") : "none";
-  console.log(`simple-deploy.toml OK (envs: ${envList})`);
+  console.log(`${MANIFEST_FILE} OK (envs: ${envList})`);
 }
 
 function inferPackageName(root: string): string {
@@ -613,8 +629,8 @@ function inferPackageName(root: string): string {
 }
 
 function runInit(root: string) {
-  const manifestPath = join(root, "simple-deploy.toml");
-  if (existsSync(manifestPath)) throw new Error("simple-deploy.toml already exists");
+  const manifestPath = join(root, MANIFEST_FILE);
+  if (existsSync(manifestPath)) throw new Error(`${MANIFEST_FILE} already exists`);
   const name = inferPackageName(root);
   const content = `name = "${name}"
 
@@ -634,11 +650,11 @@ type = "proxy"
 service = "web"
 `;
   writeFileSync(manifestPath, content, { encoding: "utf8", mode: 0o644 });
-  console.log("Created simple-deploy.toml");
+  console.log(`Created ${MANIFEST_FILE}`);
   console.log("Next:");
-  console.log("1. edit simple-deploy.toml");
-  console.log("2. simple-deploy setup production");
-  console.log("3. simple-deploy deploy production");
+  console.log(`1. edit ${MANIFEST_FILE}`);
+  console.log("2. simple-vps setup production");
+  console.log("3. simple-vps deploy production");
 }
 
 async function runCommand(runner: CommandRunner, command: string[], failureMessage: string): Promise<CommandResult> {
@@ -693,9 +709,9 @@ async function runSetup(root: string, envName: string, runner: CommandRunner) {
 
 async function uploadEnvContent(runner: CommandRunner, context: AppContext, content: string) {
   validateEnvironmentFile(content);
-  const localDir = mkdtempSync(join(tmpdir(), "simple-deploy-env-"));
+  const localDir = mkdtempSync(join(tmpdir(), "simple-vps-env-"));
   const localPath = join(localDir, ".env");
-  const remotePath = `/tmp/simple-deploy/${context.appName}-env-${Date.now().toString(36)}.env`;
+  const remotePath = `${REMOTE_DEPLOY_TMP_DIR}/${context.appName}-env-${Date.now().toString(36)}.env`;
   writeFileSync(localPath, content, { encoding: "utf8", mode: 0o600 });
   await runCommand(runner, ["rsync", "-az", localPath, `${context.server}:${remotePath}`], "env upload failed");
   await runCommand(
@@ -718,7 +734,7 @@ async function runEnvPush(root: string, envName: string, file: string, runner: C
   const context = loadAppContext(root, envName);
   const content = readFileSync(file, "utf8");
   await uploadEnvContent(runner, context, content);
-  console.log(`Pushed env for ${context.appName} (${envName}). Run simple-deploy restart ${envName} <service> to apply.`);
+  console.log(`Pushed env for ${context.appName} (${envName}). Run simple-vps restart ${envName} <service> to apply.`);
 }
 
 async function runSecretPut(root: string, envName: string, key: string, runner: CommandRunner, stdinText: string | undefined) {
@@ -727,7 +743,7 @@ async function runSecretPut(root: string, envName: string, key: string, runner: 
   const value = await readSecretInput(stdinText);
   const content = setEnvValue(await readRemoteEnv(runner, context), key, value);
   await uploadEnvContent(runner, context, content);
-  console.log(`Set secret ${key} for ${context.appName} (${envName}). Run simple-deploy restart ${envName} <service> to apply.`);
+  console.log(`Set secret ${key} for ${context.appName} (${envName}). Run simple-vps restart ${envName} <service> to apply.`);
 }
 
 async function runSecretList(root: string, envName: string, runner: CommandRunner) {
@@ -746,7 +762,7 @@ async function runSecretRm(root: string, envName: string, key: string, runner: C
     return;
   }
   await uploadEnvContent(runner, context, content);
-  console.log(`Removed secret ${key} for ${context.appName} (${envName}). Run simple-deploy restart ${envName} <service> to apply.`);
+  console.log(`Removed secret ${key} for ${context.appName} (${envName}). Run simple-vps restart ${envName} <service> to apply.`);
 }
 
 async function gitOutput(root: string, runner: CommandRunner, args: string[]): Promise<string> {
@@ -760,7 +776,7 @@ function renderUnit(appName: string, envName: string, release: string, serviceNa
   const releaseDir = `/var/apps/${appName}/releases/${release}`;
   const lines = [
     "[Unit]",
-    `Description=simple-deploy: ${appName}/${serviceName}`,
+    `Description=simple-vps: ${appName}/${serviceName}`,
     "After=network.target",
     "",
     "[Service]",
@@ -802,7 +818,7 @@ async function prepareArtifact(
   runtime: string,
   dirty: boolean,
 ): Promise<{ artifactDir: string; lockfiles: string[] }> {
-  const checkoutDir = mkdtempSync(join(tmpdir(), "simple-deploy-checkout-"));
+  const checkoutDir = mkdtempSync(join(tmpdir(), "simple-vps-checkout-"));
   const checkoutCommand = dirty
     ? `tar -C ${shellEscape(root)} --exclude .git --exclude node_modules -cf - . | tar -x -C ${shellEscape(checkoutDir)}`
     : `git -C ${shellEscape(root)} archive HEAD | tar -x -C ${shellEscape(checkoutDir)}`;
@@ -815,7 +831,7 @@ async function prepareArtifact(
   const command = requireString(build.command, "[build].command");
   await runCommand(runner, ["sh", "-c", `cd ${shellEscape(checkoutDir)} && ${command}`], "build failed");
 
-  const artifactDir = mkdtempSync(join(tmpdir(), "simple-deploy-artifact-"));
+  const artifactDir = mkdtempSync(join(tmpdir(), "simple-vps-artifact-"));
   const output = requireString(build.output, "[build].output");
   copyDirectoryContents(join(checkoutDir, output), artifactDir);
 
@@ -892,7 +908,7 @@ async function activateRelease(runner: CommandRunner, context: AppContext, relea
 async function markReleaseSuccessful(runner: CommandRunner, server: string, releaseDir: string) {
   await runCommand(
     runner,
-    ["ssh", server, `touch ${shellEscape(releaseDir)}/.simple-deploy-success`],
+    ["ssh", server, `touch ${shellEscape(releaseDir)}/${RELEASE_SUCCESS_MARKER}`],
     "failed to mark release successful",
   );
 }
@@ -904,7 +920,7 @@ function pruneReleasesCommand(appRoot: string, keep: number): string {
     "set -eu",
     `releases=${shellEscape(releases)}`,
     `current=$(readlink -f ${shellEscape(current)} 2>/dev/null || true)`,
-    `previous=$(find "$releases" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\\n' 2>/dev/null | sort -rn | while read -r _ dir; do [ -f "$dir/.simple-deploy-success" ] || continue; resolved=$(readlink -f "$dir"); [ "$resolved" = "$current" ] && continue; echo "$resolved"; break; done)`,
+    `previous=$(find "$releases" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\\n' 2>/dev/null | sort -rn | while read -r _ dir; do [ -f "$dir/${RELEASE_SUCCESS_MARKER}" ] || continue; resolved=$(readlink -f "$dir"); [ "$resolved" = "$current" ] && continue; echo "$resolved"; break; done)`,
     "count=0",
     `find "$releases" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\\n' 2>/dev/null | sort -rn | while read -r _ dir; do count=$((count + 1)); resolved=$(readlink -f "$dir"); if [ "$resolved" = "$current" ] || [ "$resolved" = "$previous" ] || [ "$count" -le ${keep} ]; then continue; fi; rm -rf -- "$dir"; done`,
   ].join("; ");
@@ -985,6 +1001,37 @@ async function runLogs(root: string, envName: string, serviceName: string | unde
   if (result.stdout.trim()) console.log(result.stdout.trimEnd());
 }
 
+async function runSsh(root: string, envName: string, runner: CommandRunner) {
+  const context = loadAppContext(root, envName);
+  const result = await runner.run(["ssh", context.server], { passthrough: true });
+  if (result.code !== 0) throw new Error(`SSH failed for ${context.server}`);
+}
+
+async function runRoute(root: string, args: string[], runner: CommandRunner) {
+  const subcommand = args[0];
+  if (subcommand !== "list") throw new Error("route requires subcommand: list");
+  const flags = args.slice(1);
+  const json = flags.includes("--json");
+  const unknown = flags.find((flag) => flag !== "--json");
+  if (unknown) throw new Error(`unknown argument: ${unknown}`);
+  const context = loadSingleEnvContext(root);
+  await runRemoteReadCommand(
+    runner,
+    context,
+    `sudo simple-vps route list${json ? " --json" : ""}`,
+    "failed to read routes",
+  );
+}
+
+async function runHost(root: string, args: string[], runner: CommandRunner) {
+  const subcommand = args[0];
+  if ((subcommand !== "status" && subcommand !== "doctor") || args.length !== 1) {
+    throw new Error("host requires subcommand: status, doctor");
+  }
+  const context = loadSingleEnvContext(root);
+  await runRemoteReadCommand(runner, context, "sudo simple-vps status", "failed to read host status");
+}
+
 function validateReleaseArg(release: string) {
   if (!/^[A-Za-z0-9._-]+$/.test(release)) throw new Error(`invalid release: ${release}`);
 }
@@ -997,7 +1044,7 @@ async function resolveRollbackTarget(context: AppContext, runner: CommandRunner,
     await runCommand(runner, ["ssh", context.server, `test -d ${target}`], `release not found: ${release}`);
     return target;
   }
-  const command = `current=$(readlink -f ${context.appRoot}/current 2>/dev/null || true); for dir in $(ls -1dt ${releasesDir}/* 2>/dev/null); do [ -f "$dir/.simple-deploy-success" ] || continue; [ "$(readlink -f "$dir")" = "$current" ] && continue; echo "$dir"; exit 0; done; exit 1`;
+  const command = `current=$(readlink -f ${context.appRoot}/current 2>/dev/null || true); for dir in $(ls -1dt ${releasesDir}/* 2>/dev/null); do [ -f "$dir/${RELEASE_SUCCESS_MARKER}" ] || continue; [ "$(readlink -f "$dir")" = "$current" ] && continue; echo "$dir"; exit 0; done; exit 1`;
   const result = await runCommand(runner, ["ssh", context.server, command], "no previous successful release found");
   return result.stdout.trim();
 }
@@ -1115,8 +1162,8 @@ async function runDeploy(
     );
   }
 
-  const localUnitDir = mkdtempSync(join(tmpdir(), "simple-deploy-units-"));
-  const remoteUnitDir = `/tmp/simple-deploy/${release}`;
+  const localUnitDir = mkdtempSync(join(tmpdir(), "simple-vps-units-"));
+  const remoteUnitDir = `${REMOTE_DEPLOY_TMP_DIR}/${release}`;
   for (const [serviceName, service] of Object.entries(services)) {
     const serviceUnitName = unitName(appName, serviceName);
     const unitPath = join(localUnitDir, serviceUnitName);
@@ -1195,19 +1242,23 @@ function parseDestroyOptions(args: string[], appNameHint?: string): DestroyOptio
 
 function usage() {
   console.error("Usage:");
-  console.error("  simple-deploy init");
-  console.error("  simple-deploy check [--env <name>]");
-  console.error("  simple-deploy setup <env>");
-  console.error("  simple-deploy deploy <env> [--dirty] [--include-dotenv]");
-  console.error("  simple-deploy status <env>");
-  console.error("  simple-deploy logs <env> [service] [--tail]");
-  console.error("  simple-deploy rollback <env> [release]");
-  console.error("  simple-deploy destroy <env> [--yes|--confirm <app>] [--purge]");
-  console.error("  simple-deploy restart <env> <service>");
-  console.error("  simple-deploy env push <env> <file>");
-  console.error("  simple-deploy secret put <env> <key>");
-  console.error("  simple-deploy secret list <env>");
-  console.error("  simple-deploy secret rm <env> <key>");
+  console.error("  simple-vps init");
+  console.error("  simple-vps check [env]");
+  console.error("  simple-vps setup <env>");
+  console.error("  simple-vps deploy <env> [--dirty] [--include-dotenv]");
+  console.error("  simple-vps rollback <env> [release]");
+  console.error("  simple-vps destroy <env> [--yes] [--confirm <app>] [--purge]");
+  console.error("  simple-vps restart <env> <service>");
+  console.error("  simple-vps status <env>");
+  console.error("  simple-vps logs <env> [service] [--tail]");
+  console.error("  simple-vps ssh <env>");
+  console.error("  simple-vps secret put <env> <key>");
+  console.error("  simple-vps secret list <env>");
+  console.error("  simple-vps secret rm <env> <key>");
+  console.error("  simple-vps env push <env> <file>");
+  console.error("  simple-vps host status");
+  console.error("  simple-vps host doctor");
+  console.error("  simple-vps route list [--json]");
 }
 
 export async function main(argv = process.argv.slice(2), root = process.cwd(), options: MainOptions = {}) {
@@ -1226,16 +1277,8 @@ export async function main(argv = process.argv.slice(2), root = process.cwd(), o
       return;
     }
     if (command === "check") {
-      let env: string | undefined;
-      for (let index = 0; index < args.length; index += 1) {
-        const arg = args[index];
-        if (arg === "--env") {
-          env = args[index + 1];
-          index += 1;
-        } else {
-          throw new Error(`unknown argument: ${arg}`);
-        }
-      }
+      if (args.length > 1) throw new Error("check accepts optional env");
+      const env = args[0];
       printCheckResult(checkManifest(root, env));
       return;
     }
@@ -1262,6 +1305,20 @@ export async function main(argv = process.argv.slice(2), root = process.cwd(), o
       const values = rest.filter((arg) => arg !== "--tail");
       if (!env || values.length > 1) throw new Error("logs requires env, optional service, and optional --tail");
       await runLogs(root, env, values[0], tail, runner);
+      return;
+    }
+    if (command === "ssh") {
+      const env = args[0];
+      if (!env || args.length > 1) throw new Error("ssh requires exactly one env");
+      await runSsh(root, env, runner);
+      return;
+    }
+    if (command === "route") {
+      await runRoute(root, args, runner);
+      return;
+    }
+    if (command === "host") {
+      await runHost(root, args, runner);
       return;
     }
     if (command === "rollback") {

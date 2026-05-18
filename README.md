@@ -1,26 +1,33 @@
-# Simple Stack
+# Simple VPS
 
-Simple Stack is an opinionated path for running small production apps on boring
-VPS infrastructure.
+Simple VPS is one CLI for running JS/TS apps on your own VPS without Docker.
 
-The stack is split into focused packages:
+```text
+fresh Ubuntu VPS  ->  install.sh         ->  hardened box
+your app repo     ->  simple-vps deploy  ->  live app
+```
+
+## Packages
 
 ```text
 packages/simple-vps
-  Harden and prepare an Ubuntu VPS for production apps.
+  Host installer, Ansible roles, and privileged server-side helper.
 
-packages/simple-deploy
-  Planned native deploy tool for JS/Bun/Node apps using systemd releases.
+packages/cli
+  Public Bun CLI for app deploys and app operations.
 ```
 
-Current working package:
+## Start Here
+
+The public product contract lives in [SPEC.md](SPEC.md).
+
+The root installer delegates to [packages/simple-vps](packages/simple-vps):
 
 ```bash
 ./install.sh --mode remote --host 203.0.113.10 --ssh-key ~/.ssh/id_ed25519
 ```
 
-The root installer delegates to [packages/simple-vps](packages/simple-vps).
+Implementation references:
 
-Read [SIMPLE_STACK_PLAN.md](SIMPLE_STACK_PLAN.md) for the product direction and
-[packages/simple-vps/SPEC.md](packages/simple-vps/SPEC.md) for the current VPS
-implementation.
+- [packages/simple-vps/SPEC.md](packages/simple-vps/SPEC.md)
+- [packages/cli/SPEC.md](packages/cli/SPEC.md)

@@ -5,10 +5,10 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { main, type CommandRunner } from "../src/cli";
 
 function fixture(): string {
-  const root = mkdtempSync(join(tmpdir(), "simple-deploy-env-test-"));
+  const root = mkdtempSync(join(tmpdir(), "simple-vps-env-test-"));
   writeFileSync(join(root, "bun.lock"), "\n");
   writeFileSync(
-    join(root, "simple-deploy.toml"),
+    join(root, "simple-vps.toml"),
     `
 name = "api"
 
@@ -36,7 +36,9 @@ describe("env and secret commands", () => {
     const envFile = join(root, "production.env");
     writeFileSync(envFile, "# prod\nFEATURE_FLAG=on\nEMPTY=\n");
     const commands: string[][] = [];
+    const output: string[] = [];
     let uploaded = "";
+    const originalLog = console.log;
     const runner: CommandRunner = {
       async run(command) {
         commands.push(command);
@@ -45,7 +47,12 @@ describe("env and secret commands", () => {
       },
     };
 
-    await main(["env", "push", "production", envFile], root, { runner });
+    console.log = (message?: unknown) => output.push(String(message));
+    try {
+      await main(["env", "push", "production", envFile], root, { runner });
+    } finally {
+      console.log = originalLog;
+    }
 
     const joined = commands.map((command) => command.join(" "));
     expect(process.exitCode).toBe(0);
@@ -54,6 +61,8 @@ describe("env and secret commands", () => {
       true,
     );
     expect(joined.some((command) => command.includes("sudo simple-vps app install-env api /tmp/simple-deploy/"))).toBe(true);
+    expect(output.join("\n")).toContain("Run simple-vps restart production <service> to apply.");
+    expect(output.join("\n")).not.toContain("simple-deploy restart");
   });
 
   test("env push rejects shell-style env files before upload", async () => {
@@ -87,8 +96,8 @@ describe("env and secret commands", () => {
     const envFile = join(root, "production.env");
     writeFileSync(envFile, "FEATURE_FLAG=on\n");
     const commands: string[][] = [];
-    const previousKey = process.env.SIMPLE_DEPLOY_SSH_KEY;
-    const previousKnownHosts = process.env.SIMPLE_DEPLOY_KNOWN_HOSTS;
+    const previousKey = process.env.SIMPLE_VPS_SSH_KEY;
+    const previousKnownHosts = process.env.SIMPLE_VPS_KNOWN_HOSTS;
     const runner: CommandRunner = {
       async run(command) {
         commands.push(command);
@@ -96,15 +105,15 @@ describe("env and secret commands", () => {
       },
     };
 
-    process.env.SIMPLE_DEPLOY_SSH_KEY = "test-private-key";
-    process.env.SIMPLE_DEPLOY_KNOWN_HOSTS = "100.x.y.z ssh-ed25519 AAAA";
+    process.env.SIMPLE_VPS_SSH_KEY = "test-private-key";
+    process.env.SIMPLE_VPS_KNOWN_HOSTS = "100.x.y.z ssh-ed25519 AAAA";
     try {
       await main(["env", "push", "production", envFile], root, { runner });
     } finally {
-      if (previousKey === undefined) delete process.env.SIMPLE_DEPLOY_SSH_KEY;
-      else process.env.SIMPLE_DEPLOY_SSH_KEY = previousKey;
-      if (previousKnownHosts === undefined) delete process.env.SIMPLE_DEPLOY_KNOWN_HOSTS;
-      else process.env.SIMPLE_DEPLOY_KNOWN_HOSTS = previousKnownHosts;
+      if (previousKey === undefined) delete process.env.SIMPLE_VPS_SSH_KEY;
+      else process.env.SIMPLE_VPS_SSH_KEY = previousKey;
+      if (previousKnownHosts === undefined) delete process.env.SIMPLE_VPS_KNOWN_HOSTS;
+      else process.env.SIMPLE_VPS_KNOWN_HOSTS = previousKnownHosts;
     }
 
     const rsync = commands.find((command) => command[0] === "rsync");
@@ -142,6 +151,7 @@ describe("env and secret commands", () => {
     expect(process.exitCode).toBe(0);
     expect(uploaded).toBe("# keep\nAPI_KEY=new-secret\nOTHER=value\n");
     expect(output.join("\n")).toContain("Set secret API_KEY");
+    expect(output.join("\n")).toContain("Run simple-vps restart production <service> to apply.");
     expect(output.join("\n")).not.toContain("new-secret");
   });
 

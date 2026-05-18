@@ -39,8 +39,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
-      - name: Simple Deploy tests
-        working-directory: packages/simple-deploy
+      - name: Install CLI dependencies
+        working-directory: packages/cli
+        run: bun install --frozen-lockfile
+      - name: Simple VPS CLI typecheck
+        working-directory: packages/cli
+        run: bun run typecheck
+      - name: Simple VPS CLI tests
+        working-directory: packages/cli
         run: bun test
 
   ansible:

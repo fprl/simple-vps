@@ -5,10 +5,10 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { main, type CommandRunner } from "../src/cli";
 
 function fixture(): string {
-  const root = mkdtempSync(join(tmpdir(), "simple-deploy-lifecycle-test-"));
+  const root = mkdtempSync(join(tmpdir(), "simple-vps-lifecycle-test-"));
   writeFileSync(join(root, "bun.lock"), "\n");
   writeFileSync(
-    join(root, "simple-deploy.toml"),
+    join(root, "simple-vps.toml"),
     `
 name = "api"
 

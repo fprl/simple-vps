@@ -1036,7 +1036,7 @@ def build_parser():
     generate.add_argument("--force", action="store_true")
     generate.set_defaults(func=cmd_generate_caddy)
 
-    app = subparsers.add_parser("app", help="Manage Simple Deploy apps")
+    app = subparsers.add_parser("app", help="Manage Simple VPS apps")
     app_subparsers = app.add_subparsers(dest="app_command", required=True)
 
     app_create = app_subparsers.add_parser("create", help="Create an app user and directory layout")

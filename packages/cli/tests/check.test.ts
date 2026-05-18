@@ -5,13 +5,13 @@ import { describe, expect, test } from "bun:test";
 import { checkManifest } from "../src/cli";
 
 function fixture(): string {
-  const root = mkdtempSync(join(tmpdir(), "simple-deploy-test-"));
+  const root = mkdtempSync(join(tmpdir(), "simple-vps-test-"));
   writeFileSync(join(root, "bun.lock"), "\n");
   return root;
 }
 
 function writeManifest(root: string, content: string) {
-  writeFileSync(join(root, "simple-deploy.toml"), content);
+  writeFileSync(join(root, "simple-vps.toml"), content);
 }
 
 describe("checkManifest", () => {
@@ -115,7 +115,7 @@ runtime = "bun"
   });
 
   test("allows static apps without lockfiles", () => {
-    const root = mkdtempSync(join(tmpdir(), "simple-deploy-test-"));
+    const root = mkdtempSync(join(tmpdir(), "simple-vps-test-"));
     writeManifest(
       root,
       `
@@ -137,6 +137,23 @@ type = "static"
     );
 
     expect(checkManifest(root, "production").errors).toEqual([]);
+  });
+
+  test("does not read the legacy simple-deploy manifest", () => {
+    const root = fixture();
+    writeFileSync(
+      join(root, "simple-deploy.toml"),
+      `
+name = "api"
+
+[env.production]
+server = "admin@100.x.y.z"
+path = "/var/apps/api"
+runtime = "bun"
+`,
+    );
+
+    expect(() => checkManifest(root, "production")).toThrow("simple-vps.toml not found");
   });
 
   test("rejects unsafe env paths", () => {

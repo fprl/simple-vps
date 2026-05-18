@@ -170,9 +170,9 @@ Rules:
 - Detect manual edits in Simple VPS generated Caddy files and fail unless
   `--force`
 
-## Simple Deploy Server API
+## Simple VPS CLI Server API
 
-Simple Deploy is the sibling package that drives app deploys from a developer
+The Bun CLI in `packages/cli` drives app deploys from a developer
 laptop or CI runner over SSH. It needs narrow root privileges on the server
 to create per-app system users, install systemd units, manage
 `simple-*.service` units, and publish routes. Simple VPS exposes that
@@ -180,8 +180,8 @@ capability as subcommands of the existing `simple-vps` binary — there is no
 separate helper.
 
 ```text
-simple-deploy/SPEC.md -> "these are the simple-vps subcommands we invoke"
-simple-vps/SPEC.md    -> "this is the API we expose, with validation"
+packages/cli/SPEC.md     -> "these are the simple-vps subcommands we invoke"
+packages/simple-vps/SPEC.md -> "this is the API we expose, with validation"
 ```
 
 ### Sudoers
@@ -189,9 +189,12 @@ simple-vps/SPEC.md    -> "this is the API we expose, with validation"
 One sudoers line, granting passwordless `sudo` for `simple-vps`:
 
 ```text
-/etc/sudoers.d/simple-deploy
+/etc/sudoers.d/simple-vps
   admin ALL=(root) NOPASSWD: /usr/local/bin/simple-vps
 ```
+
+The 0.2.0 Ansible role removes the legacy `/etc/sudoers.d/simple-deploy`
+file when applying the renamed sudoers file.
 
 `simple-vps` is the gatekeeper. Every privileged subcommand validates its
 arguments (app/service name shape, unit file path and ownership, host, port,
@@ -225,12 +228,15 @@ sudo simple-vps app run-as <name> --cwd <path> -- <command> [args...]
 
 `app destroy` is the destructive purge primitive: it removes
 `/var/apps/<name>` and the `app-<name>` system user. The data-preserving
-`simple-deploy destroy` path does not call it.
+`simple-vps destroy` path does not call it.
 
 `app install-env` is the only writer for `/var/apps/<name>/shared/.env`.
 It requires the source file to live under `/tmp/simple-deploy/`, validates
 EnvironmentFile syntax, writes atomically, and sets `0600 app-<name>:app-<name>`.
-`app read-env` prints the current file for `simple-deploy secret list|put|rm`.
+`app read-env` prints the current file for `simple-vps secret list|put|rm`.
+
+`/tmp/simple-deploy` is a retained internal server API path for 0.2.0. It is
+not a public product name and is not renamed in this slice.
 
 ### Route Subcommands
 
@@ -262,7 +268,7 @@ Enforced by `simple-vps` before any privileged action:
 
 `app create` adds the invoking sudo user to the app's group and makes
 `/var/apps/<name>` plus `/var/apps/<name>/releases` setgid group-writable
-(`2775`). That is the upload contract: `simple-deploy` can rsync release
+(`2775`). That is the upload contract: the Bun CLI can rsync release
 artifacts as the deploy user, while services still run as `app-<name>`.
 It also ensures `/tmp/simple-deploy` exists with mode `1777`; unit uploads
 land there before `app install-unit` validates ownership and content.
@@ -270,8 +276,8 @@ land there before `app install-unit` validates ownership and content.
 ### Failure Mode
 
 If the sudoers entry or the `app` subcommands are missing on the server,
-Simple Deploy fails at `setup` time with a clear pointer to re-run the
-Simple VPS install. Simple Deploy never installs server-side capability
+the Bun CLI fails at `setup` time with a clear pointer to re-run the
+Simple VPS install. The CLI never installs server-side capability
 itself.
 
 ## Cloudflare Model
@@ -351,7 +357,7 @@ the engine.
 Simple VPS is Python, stdlib only.
 
 The `/usr/local/bin/simple-vps` CLI is granted passwordless sudo by
-`/etc/sudoers.d/simple-deploy`, so it lives at the privilege boundary. Python
+`/etc/sudoers.d/simple-vps`, so it lives at the privilege boundary. Python
 stdlib covers the root API this tool needs (`argparse`, `json`, `pathlib`, `re`,
 `shutil`, `subprocess`) without npm, PyPI, or transitive dependencies to audit.
 
