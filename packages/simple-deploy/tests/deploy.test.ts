@@ -139,4 +139,30 @@ describe("deploy", () => {
     expect(process.exitCode).toBe(1);
     expect(errors.join("\n")).toContain("refusing to deploy dotenv file: .env");
   });
+
+  test("allows dirty deploys with an explicitly marked release id", async () => {
+    const root = fixture();
+    const commands: string[][] = [];
+    const runner: CommandRunner = {
+      async run(command) {
+        commands.push(command);
+        const joined = command.join(" ");
+        if (joined === "git -C " + root + " rev-parse HEAD") return { code: 0, stdout: "a1b2c3d4e5f6\n", stderr: "" };
+        if (joined === "git -C " + root + " status --porcelain") return { code: 0, stdout: " M src/server.ts\n", stderr: "" };
+        if (joined === "git -C " + root + " ls-tree -r --name-only HEAD") return { code: 0, stdout: "src/server.ts\n", stderr: "" };
+        return { code: 0, stdout: "", stderr: "" };
+      },
+    };
+
+    await main(["deploy", "production", "--dirty"], root, { runner, now: () => new Date("2026-05-18T12:34:56Z") });
+
+    const joined = commands.map((command) => command.join(" "));
+    expect(process.exitCode).toBe(0);
+    expect(joined).toContain("ssh admin@100.x.y.z mkdir -p /var/apps/api/releases/a1b2c3d4e5f6-dirty-20260518123456");
+    expect(
+      joined.some((command) =>
+        command.startsWith("sh -c tar -C " + root + " --exclude .git --exclude node_modules -cf - . | tar -x -C "),
+      ),
+    ).toBe(true);
+  });
 });

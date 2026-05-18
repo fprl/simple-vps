@@ -175,6 +175,7 @@ command = "bun run start --debug"
 ### Validation Rules
 
 - `name` matches `^[a-z][a-z0-9-]{1,40}$`.
+- `[env.<name>].path` must be exactly `/var/apps/<name>` in v1.
 - Service names match `^[a-z][a-z0-9-]{0,30}$`.
 - Route names match the same shape as service names.
 - A route with `type = "proxy"` must reference a service with a `port`.
@@ -361,8 +362,8 @@ Health check semantics:
 
 - HTTP `GET http://127.0.0.1:<port><healthcheck>`.
 - Acceptable status: `healthcheck_status` (default 200).
-- Total budget: `healthcheck_timeout` seconds (default 10). Retry every 1s
-  until pass or timeout.
+- Attempts: `healthcheck_timeout` attempts (default 10), one per second.
+  Each attempt has a 2s HTTP timeout and must return `healthcheck_status`.
 
 Failure mode is **stop-and-replace**. Blue-green is a future
 `[env.<name>] strategy = "blue-green"` and is not in v1.

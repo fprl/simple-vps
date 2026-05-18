@@ -23,6 +23,7 @@ export type CommandRunner = {
 
 export type MainOptions = {
   runner?: CommandRunner;
+  now?: () => Date;
 };
 
 const APP_RE = /^[a-z][a-z0-9-]{1,40}$/;
@@ -293,6 +294,10 @@ function blockedDotenvFiles(paths: string[]): string[] {
   });
 }
 
+function dirtyStamp(now: () => Date): string {
+  return now().toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "").replace("T", "");
+}
+
 function resolveEnv(manifest: Dict, envName: string): Dict {
   const envs = isRecord(manifest.env) ? manifest.env : {};
   const env = envs[envName];
@@ -477,7 +482,7 @@ function renderUnit(appName: string, envName: string, release: string, serviceNa
   return lines.join("\n");
 }
 
-async function runDeploy(root: string, envName: string, runner: CommandRunner) {
+async function runDeploy(root: string, envName: string, runner: CommandRunner, options: { dirty: boolean; now: () => Date }) {
   const result = checkManifest(root, envName);
   if (result.errors.length > 0) throw new Error(result.errors.join("\n"));
 
@@ -490,9 +495,10 @@ async function runDeploy(root: string, envName: string, runner: CommandRunner) {
   const build = effectiveBuild(manifest, env);
   if (build) throw new Error("deploy currently supports Mode A only");
 
-  const release = await gitOutput(root, runner, ["rev-parse", "HEAD"]);
+  const sha = await gitOutput(root, runner, ["rev-parse", "HEAD"]);
   const dirty = await gitOutput(root, runner, ["status", "--porcelain"]);
-  if (dirty) throw new Error("working tree is dirty; commit changes or pass --dirty");
+  if (dirty && !options.dirty) throw new Error("working tree is dirty; commit changes or pass --dirty");
+  const release = dirty ? `${sha}-dirty-${dirtyStamp(options.now)}` : sha;
   const treeFiles = (await gitOutput(root, runner, ["ls-tree", "-r", "--name-only", "HEAD"]))
     .split("\n")
     .filter(Boolean);
@@ -500,11 +506,10 @@ async function runDeploy(root: string, envName: string, runner: CommandRunner) {
   if (dotenvFiles.length > 0) throw new Error(`refusing to deploy dotenv file: ${dotenvFiles.join(", ")}`);
 
   const artifactDir = mkdtempSync(join(tmpdir(), "simple-deploy-artifact-"));
-  await runCommand(
-    runner,
-    ["sh", "-c", `git -C ${shellEscape(root)} archive HEAD | tar -x -C ${shellEscape(artifactDir)}`],
-    "failed to create release artifact",
-  );
+  const artifactCommand = dirty
+    ? `tar -C ${shellEscape(root)} --exclude .git --exclude node_modules -cf - . | tar -x -C ${shellEscape(artifactDir)}`
+    : `git -C ${shellEscape(root)} archive HEAD | tar -x -C ${shellEscape(artifactDir)}`;
+  await runCommand(runner, ["sh", "-c", artifactCommand], "failed to create release artifact");
 
   const releaseDir = `${appRoot}/releases/${release}`;
   await runCommand(runner, ["ssh", server, `test -d ${shellEscape(appRoot)}/shared`], `setup has not run for ${envName}`);
@@ -642,6 +647,7 @@ export async function main(argv = process.argv.slice(2), root = process.cwd(), o
   process.exitCode = 0;
   const [command, ...args] = argv;
   const runner = options.runner ?? defaultRunner;
+  const now = options.now ?? (() => new Date());
   try {
     if (command === "--help" || command === "-h") {
       usage();
@@ -673,8 +679,11 @@ export async function main(argv = process.argv.slice(2), root = process.cwd(), o
     }
     if (command === "deploy") {
       const env = args[0];
-      if (!env || args.length > 1) throw new Error("deploy requires exactly one env");
-      await runDeploy(root, env, runner);
+      const flags = args.slice(1);
+      const dirty = flags.includes("--dirty");
+      const unknown = flags.find((flag) => flag !== "--dirty");
+      if (!env || unknown) throw new Error("deploy requires one env and optional --dirty");
+      await runDeploy(root, env, runner, { dirty, now });
       return;
     }
     usage();
