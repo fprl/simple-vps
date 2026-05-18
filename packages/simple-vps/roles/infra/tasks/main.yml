@@ -138,6 +138,15 @@
     group: root
     mode: '0755'
 
+- name: Allow Simple Deploy to invoke Simple VPS server API
+  copy:
+    dest: /etc/sudoers.d/simple-deploy
+    owner: root
+    group: root
+    mode: '0440'
+    content: "{{ admin_user }} ALL=(root) NOPASSWD: /usr/local/bin/simple-vps\n"
+    validate: 'visudo -cf %s'
+
 - name: Add Caddy GPG key
   apt_key:
     url: https://dl.cloudsmith.io/public/caddy/stable/gpg.key

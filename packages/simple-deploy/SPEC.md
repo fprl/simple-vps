@@ -631,7 +631,7 @@ sudo simple-vps app install-unit <name> <service> <unit-file>
 sudo simple-vps app uninstall-unit <name> <service>
 sudo simple-vps app daemon-reload
 sudo simple-vps app service <action> <name> <service>
-sudo simple-vps app run-as <name> -- <command> [args...]
+sudo simple-vps app run-as <name> --cwd <path> -- <command> [args...]
 
 # routes
 sudo simple-vps route proxy <host> --port <port> --app <name>
@@ -641,7 +641,7 @@ sudo simple-vps route remove --app <name>
 ```
 
 Validation lives inside `simple-vps`. Argument shape, app/service naming,
-host/port ranges, unit file ownership, and `run-as` working-directory scoping
+host/port ranges, unit file ownership, and `run-as --cwd` scoping
 are all enforced server-side, not in sudoers globs. The full contract lives
 in the
 [Simple Deploy Server API](../simple-vps/SPEC.md#simple-deploy-server-api)

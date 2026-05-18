@@ -123,7 +123,7 @@ simple-vps app install-unit my-app web /tmp/simple-deploy/simple-my-app-web.serv
 simple-vps app uninstall-unit my-app web
 simple-vps app daemon-reload
 simple-vps app service start my-app web
-simple-vps app run-as my-app -- bun install --production --frozen-lockfile
+simple-vps app run-as my-app --cwd /var/apps/my-app/releases/a1b2c3d -- bun install --production --frozen-lockfile
 simple-vps devtools install
 ```
 
@@ -215,7 +215,7 @@ sudo simple-vps app uninstall-unit <name> <service>
 sudo simple-vps app daemon-reload
 sudo simple-vps app service <action> <name> <service>
   # action: start | stop | restart | status | is-active | enable | disable
-sudo simple-vps app run-as <name> -- <command> [args...]
+sudo simple-vps app run-as <name> --cwd <path> -- <command> [args...]
   # used for: bun install --production, npm ci --omit=dev, etc.
 ```
 
@@ -244,8 +244,8 @@ Enforced by `simple-vps` before any privileged action:
   invoking admin user.
 - Unit file contents must start with `[Unit]` and reference `User=app-<name>`.
   Units that try to escalate are refused.
-- `app run-as` refuses any working directory or argument that resolves
-  outside `/var/apps/<name>/`.
+- `app run-as --cwd <path>` refuses any working directory outside
+  `/var/apps/<name>/`.
 
 ### Failure Mode
 
@@ -325,6 +325,19 @@ Why not Brewfile:
 If Ansible starts slowing down the one-script path, port the narrow role logic to
 a small Bash/Python installer later. Do not restart from scratch just to change
 the engine.
+
+## Language Choice
+
+Simple VPS is Python, stdlib only.
+
+The `/usr/local/bin/simple-vps` CLI is granted passwordless sudo by
+`/etc/sudoers.d/simple-deploy`, so it lives at the privilege boundary. Python
+stdlib covers the root API this tool needs (`argparse`, `json`, `pathlib`, `re`,
+`shutil`, `subprocess`) without npm, PyPI, or transitive dependencies to audit.
+
+Adding a non-stdlib dependency is the trigger to revisit this decision. Until
+then, contributor preference is not enough reason to move the root-owned server
+API to TS/Bun.
 
 ## Current Implementation
 

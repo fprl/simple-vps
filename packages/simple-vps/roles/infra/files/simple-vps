@@ -21,6 +21,9 @@ ROUTES_CADDYFILE_PATH = Path(
     os.environ.get("SIMPLE_VPS_ROUTES_CADDYFILE_PATH", str(MANAGED_CADDY_DIR / "routes.caddy"))
 )
 BACKUP_DIR = Path(os.environ.get("SIMPLE_VPS_BACKUP_DIR", "/etc/simple-vps/backups"))
+APP_ROOT = Path(os.environ.get("SIMPLE_VPS_APP_ROOT", "/var/apps"))
+SYSTEMD_UNIT_DIR = Path(os.environ.get("SIMPLE_VPS_SYSTEMD_UNIT_DIR", "/etc/systemd/system"))
+DEPLOY_TMP_DIR = Path(os.environ.get("SIMPLE_VPS_DEPLOY_TMP_DIR", "/tmp/simple-deploy"))
 CADDY_BIN = os.environ.get("SIMPLE_VPS_CADDY_BIN", "caddy")
 SYSTEMCTL_BIN = os.environ.get("SIMPLE_VPS_SYSTEMCTL_BIN", "systemctl")
 STATE_VERSION = 2
@@ -31,8 +34,10 @@ HOST_RE = re.compile(
     r"^(?=.{1,253}$)(?!-)[a-z0-9-]{1,63}(?<!-)"
     r"(?:\.(?!-)[a-z0-9-]{1,63}(?<!-))*$"
 )
-APP_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$")
+APP_RE = re.compile(r"^[a-z][a-z0-9-]{1,40}$")
+SERVICE_RE = re.compile(r"^[a-z][a-z0-9-]{0,30}$")
 HEADER_NAME_RE = re.compile(r"^[A-Za-z0-9!#$%&'*+.^_`|~-]+$")
+SERVICE_ACTIONS = {"start", "stop", "restart", "status", "is-active", "enable", "disable"}
 
 
 def die(message, code=1):
@@ -134,7 +139,36 @@ def normalize_app(value):
     return app
 
 
-def normalize_root(value):
+def normalize_service(value):
+    service = str(value).strip()
+    if not SERVICE_RE.match(service):
+        die(f"invalid service name: {value}")
+    if service in {"current", "releases", "shared"}:
+        die(f"reserved service name: {service}")
+    return service
+
+
+def path_is_relative_to(path, base):
+    try:
+        path.relative_to(base)
+        return True
+    except ValueError:
+        return False
+
+
+def app_path(name):
+    return APP_ROOT / name
+
+
+def app_user(name):
+    return f"app-{name}"
+
+
+def service_unit_name(name, service):
+    return f"simple-{name}-{service}.service"
+
+
+def normalize_root(value, app=None):
     root = str(value).strip()
     if not root:
         die("root cannot be empty")
@@ -142,7 +176,13 @@ def normalize_root(value):
         die("root cannot contain newlines")
     if not root.startswith("/"):
         die("static route root must be an absolute path")
-    return root.rstrip("/") or "/"
+    normalized = root.rstrip("/") or "/"
+    if app:
+        resolved = Path(normalized).resolve(strict=False)
+        base = app_path(app).resolve(strict=False)
+        if not path_is_relative_to(resolved, base):
+            die(f"static route root for app {app} must be under {base}")
+    return normalized
 
 
 def normalize_redirect_target(value):
@@ -200,7 +240,7 @@ def normalize_route(route):
     if route_type == "proxy":
         normalized["port"] = normalize_port(route.get("port"))
     elif route_type == "static":
-        normalized["root"] = normalize_root(route.get("root"))
+        normalized["root"] = normalize_root(route.get("root"), app=app)
     elif route_type == "redirect":
         normalized.pop("headers", None)
         normalized["to"] = normalize_redirect_target(route.get("to"))
@@ -335,14 +375,22 @@ def render_routes_caddyfile(state):
     return managed_content("\n".join(lines))
 
 
-def run_checked(command):
-    result = subprocess.run(command, text=True, capture_output=True, check=False)
+def run_checked(command, cwd=None):
+    kwargs = {"text": True, "capture_output": True, "check": False}
+    if cwd is not None:
+        kwargs["cwd"] = str(cwd)
+    result = subprocess.run(command, **kwargs)
     if result.returncode != 0:
         if result.stdout:
             print(result.stdout, file=sys.stderr, end="")
         if result.stderr:
             print(result.stderr, file=sys.stderr, end="")
         die(f"command failed: {' '.join(command)}")
+
+
+def command_succeeds(command):
+    result = subprocess.run(command, text=True, capture_output=True, check=False)
+    return result.returncode == 0
 
 
 def validate_generated_caddy(caddyfile_content, routes_content):
@@ -629,6 +677,179 @@ def cmd_generate_caddy(_args):
         print(f"{CADDYFILE_PATH} already up to date")
 
 
+def ensure_app_user_exists(name):
+    user = app_user(name)
+    if command_succeeds(["id", "-u", user]):
+        return
+    run_checked(["useradd", "--system", "--no-create-home", "--shell", "/usr/sbin/nologin", "--user-group", user])
+
+
+def ensure_app_user_absent(name):
+    user = app_user(name)
+    if command_succeeds(["id", "-u", user]):
+        run_checked(["userdel", user])
+
+
+def ensure_app_directories(name):
+    root = app_path(name)
+    shared = root / "shared"
+    paths = [
+        root,
+        root / "releases",
+        root / "systemd",
+        shared,
+        shared / "db",
+        shared / "storage",
+        shared / "logs",
+    ]
+    for path in paths:
+        path.mkdir(parents=True, exist_ok=True)
+
+    env_file = shared / ".env"
+    if not env_file.exists():
+        env_file.write_text("", encoding="utf-8")
+        os.chmod(env_file, 0o600)
+
+    run_checked(["chown", "-R", f"{app_user(name)}:{app_user(name)}", str(root)])
+
+
+def cmd_app_create(args):
+    require_root()
+    name = normalize_app(args.name)
+    ensure_app_user_exists(name)
+    ensure_app_directories(name)
+    print(f"App {name} is ready at {app_path(name)}")
+
+
+def cmd_app_destroy(args):
+    require_root()
+    name = normalize_app(args.name)
+    root = app_path(name)
+    if root.exists():
+        shutil.rmtree(root)
+    ensure_app_user_absent(name)
+    print(f"Removed app {name}")
+
+
+def validate_unit_source(path, name, service):
+    resolved = Path(path).resolve(strict=False)
+    tmp_root = DEPLOY_TMP_DIR.resolve(strict=False)
+    if not path_is_relative_to(resolved, tmp_root):
+        die(f"unit file must live under {tmp_root}")
+    if not resolved.is_file():
+        die(f"unit file does not exist: {path}")
+
+    sudo_uid = os.environ.get("SUDO_UID")
+    if sudo_uid is not None:
+        try:
+            expected_uid = int(sudo_uid)
+        except ValueError:
+            die("invalid SUDO_UID")
+        actual_uid = resolved.stat().st_uid
+        if actual_uid != expected_uid:
+            die(f"unit file must be owned by invoking sudo user (uid {expected_uid})")
+
+    content = resolved.read_text(encoding="utf-8")
+    if not content.startswith("[Unit]"):
+        die("unit file must start with [Unit]")
+
+    lines = [line.strip() for line in content.splitlines()]
+    expected_user = f"User={app_user(name)}"
+    if expected_user not in lines:
+        die(f"unit file must contain {expected_user}")
+
+    for line in lines:
+        if line.startswith("User=") and line != expected_user:
+            die("unit file contains unexpected User= directive")
+        if line.startswith("Group=") and line != f"Group={app_user(name)}":
+            die("unit file contains unexpected Group= directive")
+
+    unit_name = service_unit_name(name, service)
+    if resolved.name != unit_name:
+        die(f"unit file name must be {unit_name}")
+    return resolved
+
+
+def install_unit_file(source, name, service):
+    unit_name = service_unit_name(name, service)
+    systemd_target = SYSTEMD_UNIT_DIR / unit_name
+    app_target = app_path(name) / "systemd" / unit_name
+    app_target.parent.mkdir(parents=True, exist_ok=True)
+    SYSTEMD_UNIT_DIR.mkdir(parents=True, exist_ok=True)
+
+    shutil.copy2(source, app_target)
+    shutil.copy2(source, systemd_target)
+    os.chmod(app_target, 0o644)
+    os.chmod(systemd_target, 0o644)
+
+
+def cmd_app_install_unit(args):
+    require_root()
+    name = normalize_app(args.name)
+    service = normalize_service(args.service)
+    source = validate_unit_source(args.path_to_unit_file, name, service)
+    install_unit_file(source, name, service)
+    print(f"Installed {service_unit_name(name, service)}")
+
+
+def cmd_app_uninstall_unit(args):
+    require_root()
+    name = normalize_app(args.name)
+    service = normalize_service(args.service)
+    unit_name = service_unit_name(name, service)
+    for path in (SYSTEMD_UNIT_DIR / unit_name, app_path(name) / "systemd" / unit_name):
+        if path.exists():
+            path.unlink()
+    print(f"Removed {unit_name}")
+
+
+def cmd_app_daemon_reload(_args):
+    require_root()
+    run_checked([SYSTEMCTL_BIN, "daemon-reload"])
+    print("Reloaded systemd")
+
+
+def cmd_app_service(args):
+    require_root()
+    action = str(args.action).strip()
+    if action not in SERVICE_ACTIONS:
+        die(f"invalid service action: {args.action}")
+    name = normalize_app(args.name)
+    service = normalize_service(args.service)
+    run_checked([SYSTEMCTL_BIN, action, service_unit_name(name, service)])
+
+
+def normalize_cwd(name, value):
+    root = app_path(name).resolve(strict=False)
+    cwd = Path(value or root).resolve(strict=False)
+    if not path_is_relative_to(cwd, root):
+        die(f"cwd must be under {root}")
+    if not cwd.is_dir():
+        die(f"cwd does not exist: {cwd}")
+    return cwd
+
+
+def validate_run_command(command):
+    if not command:
+        die("missing command after --")
+    if command[0] == "--":
+        command = command[1:]
+    if not command:
+        die("missing command after --")
+    for arg in command:
+        if "\x00" in arg or "\n" in arg or "\r" in arg:
+            die("command arguments cannot contain NULs or newlines")
+    return command
+
+
+def cmd_app_run_as(args):
+    require_root()
+    name = normalize_app(args.name)
+    cwd = normalize_cwd(name, args.cwd)
+    command = validate_run_command(args.run_command)
+    run_checked(["runuser", "-u", app_user(name), "--", *command], cwd=cwd)
+
+
 def build_parser():
     parser = argparse.ArgumentParser(prog="simple-vps")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -693,6 +914,43 @@ def build_parser():
     )
     generate.add_argument("--force", action="store_true")
     generate.set_defaults(func=cmd_generate_caddy)
+
+    app = subparsers.add_parser("app", help="Manage Simple Deploy apps")
+    app_subparsers = app.add_subparsers(dest="app_command", required=True)
+
+    app_create = app_subparsers.add_parser("create", help="Create an app user and directory layout")
+    app_create.add_argument("name")
+    app_create.set_defaults(func=cmd_app_create)
+
+    app_destroy = app_subparsers.add_parser("destroy", help="Remove an app user and directory layout")
+    app_destroy.add_argument("name")
+    app_destroy.set_defaults(func=cmd_app_destroy)
+
+    app_install_unit = app_subparsers.add_parser("install-unit", help="Install a validated app systemd unit")
+    app_install_unit.add_argument("name")
+    app_install_unit.add_argument("service")
+    app_install_unit.add_argument("path_to_unit_file")
+    app_install_unit.set_defaults(func=cmd_app_install_unit)
+
+    app_uninstall_unit = app_subparsers.add_parser("uninstall-unit", help="Remove an app systemd unit")
+    app_uninstall_unit.add_argument("name")
+    app_uninstall_unit.add_argument("service")
+    app_uninstall_unit.set_defaults(func=cmd_app_uninstall_unit)
+
+    app_daemon_reload = app_subparsers.add_parser("daemon-reload", help="Reload systemd after unit changes")
+    app_daemon_reload.set_defaults(func=cmd_app_daemon_reload)
+
+    app_service = app_subparsers.add_parser("service", help="Run a safe systemctl action for an app service")
+    app_service.add_argument("action")
+    app_service.add_argument("name")
+    app_service.add_argument("service")
+    app_service.set_defaults(func=cmd_app_service)
+
+    app_run_as = app_subparsers.add_parser("run-as", help="Run a command as the app user under the app root")
+    app_run_as.add_argument("name")
+    app_run_as.add_argument("--cwd")
+    app_run_as.add_argument("run_command", nargs=argparse.REMAINDER)
+    app_run_as.set_defaults(func=cmd_app_run_as)
 
     return parser
 

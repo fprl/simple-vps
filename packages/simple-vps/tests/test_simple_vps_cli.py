@@ -7,6 +7,7 @@ import json
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 
@@ -26,6 +27,9 @@ def load_cli(tmp_path):
     module.USER_CADDY_DIR = tmp_path / "conf.d"
     module.ROUTES_CADDYFILE_PATH = module.MANAGED_CADDY_DIR / "routes.caddy"
     module.BACKUP_DIR = tmp_path / "backups"
+    module.APP_ROOT = tmp_path / "apps"
+    module.SYSTEMD_UNIT_DIR = tmp_path / "systemd"
+    module.DEPLOY_TMP_DIR = tmp_path / "deploy-tmp"
     module.CADDY_BIN = "true"
     module.SYSTEMCTL_BIN = "true"
     module.require_root = lambda: None
@@ -114,12 +118,13 @@ class SimpleVpsCliTest(unittest.TestCase):
     def test_route_static_and_redirect_write_state_and_caddyfile(self):
         with tempfile.TemporaryDirectory() as tmp:
             cli = load_cli(Path(tmp))
+            static_root = cli.APP_ROOT / "data-feed" / "current" / "public"
 
             call_quiet(
                 cli.cmd_route_static,
                 argparse.Namespace(
                     host="Data.example.com",
-                    root="/var/apps/data-feed/current/public",
+                    root=str(static_root),
                     app="data-feed",
                     header=["Cache-Control: public, max-age=60"],
                     force=False,
@@ -143,7 +148,7 @@ class SimpleVpsCliTest(unittest.TestCase):
                         "app": "data-feed",
                         "headers": {"Cache-Control": "public, max-age=60"},
                         "host": "data.example.com",
-                        "root": "/var/apps/data-feed/current/public",
+                        "root": str(static_root),
                         "type": "static",
                     },
                     {
@@ -155,7 +160,7 @@ class SimpleVpsCliTest(unittest.TestCase):
             )
 
             routes_caddyfile = cli.ROUTES_CADDYFILE_PATH.read_text(encoding="utf-8")
-            self.assertIn("root * \"/var/apps/data-feed/current/public\"", routes_caddyfile)
+            self.assertIn(f"root * {json.dumps(str(static_root))}", routes_caddyfile)
             self.assertIn("header Cache-Control \"public, max-age=60\"", routes_caddyfile)
             self.assertIn("file_server", routes_caddyfile)
             self.assertIn("redir \"https://new.example.com{uri}\" permanent", routes_caddyfile)
@@ -220,6 +225,22 @@ class SimpleVpsCliTest(unittest.TestCase):
                 ],
             )
 
+    def test_static_route_with_app_must_stay_under_app_root(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cli = load_cli(Path(tmp))
+
+            with self.assertRaises(SystemExit):
+                call_quiet(
+                    cli.cmd_route_static,
+                    argparse.Namespace(
+                        host="data.example.com",
+                        root="/srv/public",
+                        app="data-feed",
+                        header=[],
+                        force=False,
+                    ),
+                )
+
     def test_invalid_host_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
             cli = load_cli(Path(tmp))
@@ -266,8 +287,8 @@ class SimpleVpsCliTest(unittest.TestCase):
                 commands.append(command)
                 return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
-            cli.subprocess.run = fake_run
-            call_quiet(cli.cmd_generate_caddy, argparse.Namespace())
+            with mock.patch.object(cli.subprocess, "run", fake_run):
+                call_quiet(cli.cmd_generate_caddy, argparse.Namespace())
 
             validate_commands = [command for command in commands if command[:2] == ["true", "validate"]]
             self.assertTrue(validate_commands)
@@ -299,6 +320,108 @@ class SimpleVpsCliTest(unittest.TestCase):
             self.assertIn("  litestream: litestream-installed", output)
             self.assertIn("  bun: bun-installed", output)
             self.assertNotIn("  pm2:", output)
+
+    def test_app_create_creates_layout_and_user_commands(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cli = load_cli(Path(tmp))
+            commands = []
+
+            def fake_run(command, text=False, capture_output=False, check=False):
+                commands.append(command)
+                if command[:2] == ["id", "-u"]:
+                    return subprocess.CompletedProcess(command, 1, stdout="", stderr="")
+                return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+            with mock.patch.object(cli.subprocess, "run", fake_run):
+                call_quiet(cli.cmd_app_create, argparse.Namespace(name="my-app"))
+
+            root = cli.APP_ROOT / "my-app"
+            self.assertTrue((root / "releases").is_dir())
+            self.assertTrue((root / "systemd").is_dir())
+            self.assertTrue((root / "shared" / "db").is_dir())
+            self.assertTrue((root / "shared" / "storage").is_dir())
+            self.assertTrue((root / "shared" / "logs").is_dir())
+            self.assertEqual((root / "shared" / ".env").read_text(encoding="utf-8"), "")
+            self.assertIn(
+                ["useradd", "--system", "--no-create-home", "--shell", "/usr/sbin/nologin", "--user-group", "app-my-app"],
+                commands,
+            )
+            self.assertIn(["chown", "-R", "app-my-app:app-my-app", str(root)], commands)
+
+    def test_app_install_unit_validates_and_copies_unit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cli = load_cli(Path(tmp))
+            cli.APP_ROOT.mkdir()
+            (cli.APP_ROOT / "my-app" / "systemd").mkdir(parents=True)
+            cli.DEPLOY_TMP_DIR.mkdir()
+            unit = cli.DEPLOY_TMP_DIR / "simple-my-app-web.service"
+            unit.write_text(
+                "\n".join(
+                    [
+                        "[Unit]",
+                        "Description=test",
+                        "[Service]",
+                        "User=app-my-app",
+                        "Group=app-my-app",
+                        "ExecStart=/usr/bin/env bash -c 'exec bun run start'",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            call_quiet(
+                cli.cmd_app_install_unit,
+                argparse.Namespace(name="my-app", service="web", path_to_unit_file=str(unit)),
+            )
+
+            installed = cli.SYSTEMD_UNIT_DIR / "simple-my-app-web.service"
+            rendered = cli.APP_ROOT / "my-app" / "systemd" / "simple-my-app-web.service"
+            self.assertEqual(installed.read_text(encoding="utf-8"), unit.read_text(encoding="utf-8"))
+            self.assertEqual(rendered.read_text(encoding="utf-8"), unit.read_text(encoding="utf-8"))
+
+    def test_app_install_unit_rejects_wrong_user(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cli = load_cli(Path(tmp))
+            cli.DEPLOY_TMP_DIR.mkdir()
+            unit = cli.DEPLOY_TMP_DIR / "simple-my-app-web.service"
+            unit.write_text("[Unit]\n[Service]\nUser=root\n", encoding="utf-8")
+
+            with self.assertRaises(SystemExit):
+                call_quiet(
+                    cli.cmd_app_install_unit,
+                    argparse.Namespace(name="my-app", service="web", path_to_unit_file=str(unit)),
+                )
+
+    def test_app_run_as_requires_cwd_under_app_root(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cli = load_cli(Path(tmp))
+            commands = []
+            app_dir = cli.APP_ROOT / "my-app" / "releases" / "a1b2c3d"
+            app_dir.mkdir(parents=True)
+            outside = Path(tmp) / "outside"
+            outside.mkdir()
+
+            def fake_run(command, text=False, capture_output=False, check=False, cwd=None):
+                commands.append((command, cwd))
+                return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+            with mock.patch.object(cli.subprocess, "run", fake_run):
+                call_quiet(
+                    cli.cmd_app_run_as,
+                    argparse.Namespace(name="my-app", cwd=str(app_dir), run_command=["--", "bun", "install"]),
+                )
+
+            self.assertEqual(
+                commands,
+                [(["runuser", "-u", "app-my-app", "--", "bun", "install"], str(app_dir.resolve()))],
+            )
+
+            with self.assertRaises(SystemExit):
+                call_quiet(
+                    cli.cmd_app_run_as,
+                    argparse.Namespace(name="my-app", cwd=str(outside), run_command=["--", "bun", "install"]),
+                )
 
 
 if __name__ == "__main__":

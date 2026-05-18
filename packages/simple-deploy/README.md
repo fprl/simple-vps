@@ -1,16 +1,18 @@
 # Simple Deploy
 
-Simple Deploy is the planned native deploy tool for Simple Stack.
+Simple Deploy is the native deploy tool for Simple Stack.
 
-It deploys apps from your local machine to a hardened VPS prepared by
-`simple-vps`. No Docker in v1.
+It deploys JS/TS apps from an app repo or CI runner to a hardened VPS prepared
+by `simple-vps`. No Docker in v1.
 
 ## Shape
 
 ```text
 local app repo
-  -> build/package
+  -> optional build
+  -> package artifact
   -> upload release
+  -> install production deps when needed
   -> link shared files
   -> restart systemd services
   -> health check
@@ -21,9 +23,9 @@ Server layout:
 
 ```text
 /var/apps/my-app
-|-- current -> releases/20260514170000
+|-- current -> releases/a1b2c3d4...
 |-- releases
-|   `-- 20260514170000
+|   `-- a1b2c3d4...
 |-- shared
 |   |-- .env
 |   |-- db
@@ -38,6 +40,8 @@ Target CLI shape:
 
 ```bash
 simple-deploy init
+simple-deploy check
+simple-deploy check --env production
 simple-deploy setup production
 simple-deploy deploy production
 simple-deploy rollback production
@@ -55,18 +59,15 @@ simple-deploy ssh production
 Simple Deploy reads `simple-deploy.toml` from the app repo root.
 
 ```toml
-app = "my-app"
+name = "my-app"
 
-[production]
+[env.production]
 server = "admin@100.x.y.z"
 path = "/var/apps/my-app"
 runtime = "bun"
 
-[build]
-command = "bun install --frozen-lockfile && bun run build"
-
 [services.web]
-command = "bun run start"
+command = "bun run src/server.ts"
 port = 3000
 healthcheck = "/health"
 
@@ -88,30 +89,39 @@ simple-my-app-jobs.service
 
 Only services with ports get routed.
 
+`[build]` is optional. No-build Bun and Node apps are first-class. When a build
+is declared, `output` is required and only that artifact root is deployed:
+
+```toml
+[build]
+command = "bun run build"
+output = "dist"
+include = ["public", "prisma"]
+```
+
 ## Static App
 
 Serving generated JSON, assets, or static sites should be first-class:
 
 ```toml
-app = "data-feed"
+name = "data-feed"
 
-[production]
+[build]
+command = "bun run generate"
+output = "dist"
+
+[env.production]
 server = "admin@100.x.y.z"
 path = "/var/apps/data-feed"
 runtime = "static"
 
-[build]
-command = "bun run generate"
-
 [routes.data]
 host = "data.example.com"
 type = "static"
-root = "public"
-headers.Cache-Control = "public, max-age=60"
 ```
 
 No systemd service. No port. The route points Caddy at
-`/var/apps/data-feed/current/public`.
+`/var/apps/data-feed/current`.
 
 ## Databases
 
@@ -129,12 +139,12 @@ operate Postgres in v1.
 
 ## Route Contract
 
-Simple Deploy should call Simple VPS route primitives instead of editing Caddy
-directly:
+Simple Deploy calls the Simple VPS server API instead of editing Caddy directly:
 
 ```bash
-simple-vps route proxy app.example.com --port 3000
-simple-vps route static data.example.com --root /var/apps/data-feed/current/public
+sudo simple-vps app create my-app
+sudo simple-vps route proxy app.example.com --port 3000 --app my-app
+sudo simple-vps route static data.example.com --root /var/apps/data-feed/current --app data-feed
 ```
 
 Simple VPS should own generated ingress config, validation, backups, and reloads.
