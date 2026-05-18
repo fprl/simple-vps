@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 
 type Dict = Record<string, unknown>;
 
@@ -246,6 +247,14 @@ function lockfilesIn(root: string): string[] {
   return LOCKFILES.filter((file) => existsSync(join(root, file)));
 }
 
+function installCommandFor(lockfile: string): string {
+  if (lockfile === "bun.lock" || lockfile === "bun.lockb") return "bun install --production --frozen-lockfile";
+  if (lockfile === "pnpm-lock.yaml") return "pnpm install --prod --frozen-lockfile";
+  if (lockfile === "package-lock.json") return "npm ci --omit=dev";
+  if (lockfile === "yarn.lock") return "yarn install --production --frozen-lockfile";
+  throw new Error(`unsupported lockfile: ${lockfile}`);
+}
+
 function installNeeded(runtime: string | undefined, build: Dict | undefined): boolean {
   if (runtime === "static") return false;
   if (!build) return true;
@@ -256,6 +265,19 @@ function requireString(value: unknown, label: string): string {
   const text = asString(value);
   if (!text) throw new Error(`${label} is required`);
   return text;
+}
+
+function shellEscape(value: string): string {
+  if (/^[A-Za-z0-9_@%+=:,./-]+$/.test(value)) return value;
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+function systemdEscape(value: string): string {
+  return value.replaceAll("%", "%%");
+}
+
+function servicePort(service: Dict): number | undefined {
+  return asNumber(service.port);
 }
 
 function resolveEnv(manifest: Dict, envName: string): Dict {
@@ -358,12 +380,13 @@ service = "web"
   console.log("3. simple-deploy deploy production");
 }
 
-async function runCommand(runner: CommandRunner, command: string[], failureMessage: string) {
+async function runCommand(runner: CommandRunner, command: string[], failureMessage: string): Promise<CommandResult> {
   const result = await runner.run(command);
   if (result.code !== 0) {
     const detail = result.stderr.trim() || result.stdout.trim();
     throw new Error(detail ? `${failureMessage}: ${detail}` : failureMessage);
   }
+  return result;
 }
 
 async function runSetup(root: string, envName: string, runner: CommandRunner) {
@@ -395,15 +418,193 @@ async function runSetup(root: string, envName: string, runner: CommandRunner) {
   console.log(`Setup complete for ${appName} (${envName})`);
 }
 
+async function gitOutput(root: string, runner: CommandRunner, args: string[]): Promise<string> {
+  const result = await runCommand(runner, ["git", "-C", root, ...args], `git ${args.join(" ")} failed`);
+  return result.stdout.trim();
+}
+
+function renderUnit(appName: string, envName: string, release: string, serviceName: string, service: Dict): string {
+  const port = servicePort(service);
+  const command = requireString(service.command, `[services.${serviceName}].command`);
+  const releaseDir = `/var/apps/${appName}/releases/${release}`;
+  const lines = [
+    "[Unit]",
+    `Description=simple-deploy: ${appName}/${serviceName}`,
+    "After=network.target",
+    "",
+    "[Service]",
+    "Type=simple",
+    `User=app-${appName}`,
+    `Group=app-${appName}`,
+    `WorkingDirectory=/var/apps/${appName}/current`,
+    `EnvironmentFile=/var/apps/${appName}/shared/.env`,
+    `Environment="SIMPLE_APP_NAME=${appName}"`,
+    `Environment="SIMPLE_ENV=${envName}"`,
+    `Environment="SIMPLE_RELEASE=${release}"`,
+    `Environment="SIMPLE_RELEASE_DIR=${releaseDir}"`,
+    'Environment="NODE_ENV=production"',
+  ];
+  if (port !== undefined) lines.push(`Environment="PORT=${port}"`);
+  lines.push(
+    `ExecStart=/usr/bin/env bash -c 'exec ${systemdEscape(command).replaceAll("'", "'\\''")}'`,
+    "Restart=on-failure",
+    "RestartSec=5s",
+    "StandardOutput=journal",
+    "StandardError=journal",
+    "NoNewPrivileges=true",
+    "PrivateTmp=true",
+    "ProtectSystem=strict",
+    "ProtectHome=true",
+    `ReadWritePaths=/var/apps/${appName}/shared`,
+    "",
+    "[Install]",
+    "WantedBy=multi-user.target",
+    "",
+  );
+  return lines.join("\n");
+}
+
+async function runDeploy(root: string, envName: string, runner: CommandRunner) {
+  const result = checkManifest(root, envName);
+  if (result.errors.length > 0) throw new Error(result.errors.join("\n"));
+
+  const manifest = readManifest(root);
+  const appName = requireString(manifest.name, "name");
+  const env = resolveEnv(manifest, envName);
+  const server = requireString(env.server, `[env.${envName}].server`);
+  const appRoot = requireString(env.path, `[env.${envName}].path`);
+  const runtime = requireString(env.runtime, `[env.${envName}].runtime`);
+  const build = effectiveBuild(manifest, env);
+  if (build) throw new Error("deploy currently supports Mode A only");
+
+  const release = await gitOutput(root, runner, ["rev-parse", "HEAD"]);
+  const dirty = await gitOutput(root, runner, ["status", "--porcelain"]);
+  if (dirty) throw new Error("working tree is dirty; commit changes or pass --dirty");
+
+  const artifactDir = mkdtempSync(join(tmpdir(), "simple-deploy-artifact-"));
+  await runCommand(
+    runner,
+    ["sh", "-c", `git -C ${shellEscape(root)} archive HEAD | tar -x -C ${shellEscape(artifactDir)}`],
+    "failed to create release artifact",
+  );
+
+  const releaseDir = `${appRoot}/releases/${release}`;
+  await runCommand(runner, ["ssh", server, `test -d ${shellEscape(appRoot)}/shared`], `setup has not run for ${envName}`);
+  await runCommand(runner, ["ssh", server, `mkdir -p ${shellEscape(releaseDir)}`], "failed to create release directory");
+  await runCommand(runner, ["rsync", "-az", "--delete", `${artifactDir}/`, `${server}:${releaseDir}/`], "rsync failed");
+
+  const locks = lockfilesIn(root);
+  if (installNeeded(runtime, build)) {
+    await runCommand(
+      runner,
+      ["ssh", server, `sudo simple-vps app run-as ${appName} --cwd ${releaseDir} -- ${installCommandFor(locks[0])}`],
+      "production install failed",
+    );
+  }
+
+  const services = effectiveServices(manifest, env);
+  mkdirSync("/tmp/simple-deploy", { recursive: true });
+  for (const [serviceName, service] of Object.entries(services)) {
+    const unitName = `simple-${appName}-${serviceName}.service`;
+    const unitPath = join("/tmp/simple-deploy", unitName);
+    writeFileSync(unitPath, renderUnit(appName, envName, release, serviceName, service), { encoding: "utf8", mode: 0o644 });
+    await runCommand(
+      runner,
+      ["ssh", server, `sudo simple-vps app install-unit ${appName} ${serviceName} ${unitPath}`],
+      `failed to install ${serviceName} unit`,
+    );
+  }
+
+  await runCommand(runner, ["ssh", server, `sudo simple-vps app daemon-reload`], "systemd daemon-reload failed");
+  const previousCurrentResult = await runner.run(["ssh", server, `readlink -f ${appRoot}/current`]);
+  const previousCurrent = previousCurrentResult.code === 0 ? previousCurrentResult.stdout.trim() : "";
+  for (const serviceName of Object.keys(services)) {
+    await runCommand(runner, ["ssh", server, `sudo simple-vps app service stop ${appName} ${serviceName}`], "service stop failed");
+  }
+  await runCommand(runner, ["ssh", server, `ln -sfn ${releaseDir} ${appRoot}/current`], "failed to activate release");
+  for (const serviceName of Object.keys(services)) {
+    await runCommand(
+      runner,
+      ["ssh", server, `sudo simple-vps app service start ${appName} ${serviceName}`],
+      `failed to start ${serviceName}`,
+    );
+  }
+  try {
+    for (const [serviceName, service] of Object.entries(services)) {
+      const port = servicePort(service);
+      const healthcheck = asString(service.healthcheck);
+      if (port !== undefined && healthcheck) {
+        await runCommand(
+          runner,
+          ["ssh", server, `curl -fsS http://127.0.0.1:${port}${healthcheck}`],
+          `health check failed for ${serviceName}`,
+        );
+      }
+    }
+  } catch (error) {
+    for (const serviceName of Object.keys(services)) {
+      await runCommand(
+        runner,
+        ["ssh", server, `sudo simple-vps app service stop ${appName} ${serviceName}`],
+        "failed to stop unhealthy release",
+      );
+    }
+    if (previousCurrent) {
+      await runCommand(
+        runner,
+        ["ssh", server, `ln -sfn ${previousCurrent} ${appRoot}/current`],
+        "failed to restore previous release",
+      );
+      for (const serviceName of Object.keys(services)) {
+        await runCommand(
+          runner,
+          ["ssh", server, `sudo simple-vps app service start ${appName} ${serviceName}`],
+          "failed to restart previous release",
+        );
+      }
+    }
+    throw error;
+  }
+
+  const routes = effectiveRoutes(manifest, env);
+  for (const route of Object.values(routes)) {
+    const host = requireString(route.host, "route host");
+    const type = requireString(route.type, "route type");
+    if (type === "proxy") {
+      const service = services[requireString(route.service, "route service")];
+      await runCommand(
+        runner,
+        ["ssh", server, `sudo simple-vps route proxy ${host} --port ${servicePort(service)} --app ${appName}`],
+        `failed to publish route ${host}`,
+      );
+    } else if (type === "static") {
+      await runCommand(
+        runner,
+        ["ssh", server, `sudo simple-vps route static ${host} --root ${appRoot}/current --app ${appName}`],
+        `failed to publish route ${host}`,
+      );
+    } else if (type === "redirect") {
+      await runCommand(
+        runner,
+        ["ssh", server, `sudo simple-vps route redirect ${host} --to ${requireString(route.to, "redirect target")} --app ${appName}`],
+        `failed to publish route ${host}`,
+      );
+    }
+  }
+
+  console.log(`Deployed ${appName} ${release.slice(0, 7)} to ${envName}`);
+}
+
 function usage() {
   console.error("Usage:");
   console.error("  simple-deploy init");
   console.error("  simple-deploy check [--env <name>]");
   console.error("  simple-deploy setup <env>");
+  console.error("  simple-deploy deploy <env>");
 }
 
 export async function main(argv = process.argv.slice(2), root = process.cwd(), options: MainOptions = {}) {
-  process.exitCode = undefined;
+  process.exitCode = 0;
   const [command, ...args] = argv;
   const runner = options.runner ?? defaultRunner;
   try {
@@ -433,6 +634,12 @@ export async function main(argv = process.argv.slice(2), root = process.cwd(), o
       const env = args[0];
       if (!env || args.length > 1) throw new Error("setup requires exactly one env");
       await runSetup(root, env, runner);
+      return;
+    }
+    if (command === "deploy") {
+      const env = args[0];
+      if (!env || args.length > 1) throw new Error("deploy requires exactly one env");
+      await runDeploy(root, env, runner);
       return;
     }
     usage();

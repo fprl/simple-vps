@@ -48,7 +48,7 @@ describe("setup", () => {
 
     await main(["setup", "production"], root, { runner });
 
-    expect(process.exitCode).toBeUndefined();
+    expect(process.exitCode).toBe(0);
     expect(commands).toEqual([
       ["ssh", "admin@100.x.y.z", "true"],
       ["ssh", "admin@100.x.y.z", "command -v simple-vps"],
