@@ -162,6 +162,9 @@ simple-vps host status
 simple-vps host doctor    # if chasing a problem
 ```
 
+The expected host security posture is documented in
+[docs/security-model.md](docs/security-model.md).
+
 ## Boundary With Internal Packages
 
 ```text

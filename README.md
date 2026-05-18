@@ -20,6 +20,7 @@ packages/cli
 ## Start Here
 
 The public product contract lives in [SPEC.md](SPEC.md).
+The host security model lives in [docs/security-model.md](docs/security-model.md).
 
 The root installer delegates to [packages/simple-vps](packages/simple-vps):
 
