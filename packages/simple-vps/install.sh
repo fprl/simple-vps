@@ -28,17 +28,14 @@ ASSUME_YES="false"
 INTERACTIVE_MODE="auto"
 PASSTHROUGH_ARGS=()
 ORIGINAL_ARGC=0
-MODE_SET="false"
-TARGET_HOST_SET="false"
 BOOTSTRAP_USER_SET="false"
-SSH_KEY_SET="false"
-SSH_PUBLIC_KEY_FILE_SET="false"
 ADMIN_USER_SET="false"
 TAILSCALE_SET="false"
 CLOUDFLARE_TUNNEL_SET="false"
 INSTALL_DOCKER_SET="false"
 INSTALL_LITESTREAM_SET="false"
 CHECK_MODE_SET="false"
+TMP_FILES=()
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -231,6 +228,12 @@ require_cmd() {
   if ! command -v "$cmd" >/dev/null 2>&1; then
     err "Required command not found: $cmd"
     exit 1
+  fi
+}
+
+cleanup_tmp_files() {
+  if [[ ${#TMP_FILES[@]} -gt 0 ]]; then
+    rm -f "${TMP_FILES[@]}"
   fi
 }
 
@@ -493,12 +496,10 @@ parse_args() {
     case "$1" in
       --mode)
         MODE="${2:-}"
-        MODE_SET="true"
         shift 2
         ;;
       --host|--ip)
         TARGET_HOST="${2:-}"
-        TARGET_HOST_SET="true"
         shift 2
         ;;
       --bootstrap-user)
@@ -508,12 +509,10 @@ parse_args() {
         ;;
       --ssh-key)
         SSH_KEY="${2:-}"
-        SSH_KEY_SET="true"
         shift 2
         ;;
       --ssh-public-key-file)
         SSH_PUBLIC_KEY_FILE="${2:-}"
-        SSH_PUBLIC_KEY_FILE_SET="true"
         shift 2
         ;;
       --admin-user)
@@ -849,7 +848,8 @@ run_remote() {
   tmp_vars="$(mktemp)"
   chmod 600 "$tmp_vars"
 
-  trap "rm -f '$tmp_inventory' '$tmp_vars'" EXIT
+  TMP_FILES+=("$tmp_inventory" "$tmp_vars")
+  trap cleanup_tmp_files EXIT
 
   cat > "$tmp_inventory" <<INVENTORY
 [simple_vps]
@@ -913,7 +913,8 @@ run_local() {
   tmp_vars="$(mktemp)"
   chmod 600 "$tmp_vars"
 
-  trap "rm -f '$tmp_inventory' '$tmp_vars'" EXIT
+  TMP_FILES+=("$tmp_inventory" "$tmp_vars")
+  trap cleanup_tmp_files EXIT
 
   cat > "$tmp_inventory" <<INVENTORY
 [simple_vps]

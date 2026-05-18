@@ -65,4 +65,4 @@ jobs:
       - name: Ansible lint
         working-directory: packages/simple-vps
         run: |
-          ansible-lint playbooks/vps-bootstrap.yml playbooks/vps-apply.yml
+          ansible-lint --profile min playbooks/vps-bootstrap.yml playbooks/vps-apply.yml
