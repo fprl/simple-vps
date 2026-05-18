@@ -53,6 +53,7 @@ export type CommandRunner = {
 export type MainOptions = {
   runner?: CommandRunner;
   now?: () => Date;
+  stdinText?: string;
 };
 
 const APP_RE = /^[a-z][a-z0-9-]{1,40}$/;
@@ -341,6 +342,73 @@ function blockedDotenvFiles(paths: string[]): string[] {
   });
 }
 
+function envKeyFromLine(line: string): string | undefined {
+  const trimmed = line.trim();
+  if (!trimmed || trimmed.startsWith("#")) return undefined;
+  const equals = line.indexOf("=");
+  if (equals === -1) return undefined;
+  return line.slice(0, equals).trim();
+}
+
+function validateEnvKey(key: string) {
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) throw new Error(`invalid env key: ${key}`);
+}
+
+function validateEnvironmentFile(content: string) {
+  if (content.includes("\0")) throw new Error("env file cannot contain NUL bytes");
+  const lines = content.split(/\n/);
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index].replace(/\r$/, "");
+    const number = index + 1;
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    if (trimmed.startsWith("export ")) throw new Error(`line ${number}: export is not supported`);
+    const equals = line.indexOf("=");
+    if (equals === -1) throw new Error(`line ${number}: expected KEY=value`);
+    const key = line.slice(0, equals);
+    if (key.trim() !== key) throw new Error(`line ${number}: whitespace around keys is not supported`);
+    validateEnvKey(key);
+    const value = line.slice(equals + 1);
+    if (value.startsWith('"') || value.startsWith("'")) throw new Error(`line ${number}: quoted values are not supported`);
+    if (/\s+#/.test(value)) throw new Error(`line ${number}: inline comments are not supported`);
+  }
+}
+
+function envKeys(content: string): string[] {
+  const keys: string[] = [];
+  for (const rawLine of content.split(/\n/)) {
+    const key = envKeyFromLine(rawLine.replace(/\r$/, ""));
+    if (key) keys.push(key);
+  }
+  return keys;
+}
+
+function setEnvValue(content: string, key: string, value: string): string {
+  validateEnvKey(key);
+  if (/[\0\r\n]/.test(value)) throw new Error("secret value must be a single line");
+  const lines = content ? content.replace(/\n$/, "").split(/\n/) : [];
+  let replaced = false;
+  const next: string[] = [];
+  for (const rawLine of lines) {
+    const line = rawLine.replace(/\r$/, "");
+    if (envKeyFromLine(line) === key) {
+      if (!replaced) next.push(`${key}=${value}`);
+      replaced = true;
+    } else {
+      next.push(line);
+    }
+  }
+  if (!replaced) next.push(`${key}=${value}`);
+  return `${next.join("\n")}\n`;
+}
+
+function removeEnvValue(content: string, key: string): string {
+  validateEnvKey(key);
+  const lines = content ? content.replace(/\n$/, "").split(/\n/) : [];
+  const next = lines.filter((rawLine) => envKeyFromLine(rawLine.replace(/\r$/, "")) !== key);
+  return next.length > 0 ? `${next.join("\n")}\n` : "";
+}
+
 function dirtyStamp(now: () => Date): string {
   return now().toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "").replace("T", "");
 }
@@ -537,6 +605,27 @@ async function runCommand(runner: CommandRunner, command: string[], failureMessa
   return result;
 }
 
+async function readSecretInput(stdinText: string | undefined): Promise<string> {
+  const text =
+    stdinText ??
+    (process.stdin.isTTY
+      ? await promptHidden("Value: ")
+      : await Bun.stdin.text());
+  return text.replace(/\r?\n$/, "");
+}
+
+async function promptHidden(label: string): Promise<string> {
+  const script = `printf ${shellEscape(label)} >&2; stty -echo; IFS= read -r value; status=$?; stty echo; printf '\\n' >&2; [ "$status" -eq 0 ] || exit "$status"; printf '%s' "$value"`;
+  const proc = Bun.spawn(["sh", "-c", script], {
+    stdin: "inherit",
+    stdout: "pipe",
+    stderr: "inherit",
+  });
+  const [stdout, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
+  if (code !== 0) throw new Error("failed to read secret value");
+  return stdout;
+}
+
 async function runSetup(root: string, envName: string, runner: CommandRunner) {
   const { appName, server, runtime } = loadAppContext(root, envName);
 
@@ -555,6 +644,59 @@ async function runSetup(root: string, envName: string, runner: CommandRunner) {
     "simple-vps app create failed; rerun the Simple VPS install",
   );
   console.log(`Setup complete for ${appName} (${envName})`);
+}
+
+async function uploadEnvContent(runner: CommandRunner, context: AppContext, content: string) {
+  validateEnvironmentFile(content);
+  const localDir = mkdtempSync(join(tmpdir(), "simple-deploy-env-"));
+  const localPath = join(localDir, ".env");
+  const remotePath = `/tmp/simple-deploy/${context.appName}-env-${Date.now().toString(36)}.env`;
+  writeFileSync(localPath, content, { encoding: "utf8", mode: 0o600 });
+  await runCommand(runner, ["rsync", "-az", localPath, `${context.server}:${remotePath}`], "env upload failed");
+  await runCommand(
+    runner,
+    ["ssh", context.server, `sudo simple-vps app install-env ${context.appName} ${remotePath}`],
+    "env install failed",
+  );
+}
+
+async function readRemoteEnv(runner: CommandRunner, context: AppContext): Promise<string> {
+  const result = await runCommand(
+    runner,
+    ["ssh", context.server, `sudo simple-vps app read-env ${context.appName}`],
+    "failed to read remote env",
+  );
+  return result.stdout;
+}
+
+async function runEnvPush(root: string, envName: string, file: string, runner: CommandRunner) {
+  const context = loadAppContext(root, envName);
+  const content = readFileSync(file, "utf8");
+  await uploadEnvContent(runner, context, content);
+  console.log(`Pushed env for ${context.appName} (${envName}). Run simple-deploy restart ${envName} <service> to apply.`);
+}
+
+async function runSecretPut(root: string, envName: string, key: string, runner: CommandRunner, stdinText: string | undefined) {
+  const context = loadAppContext(root, envName);
+  validateEnvKey(key);
+  const value = await readSecretInput(stdinText);
+  const content = setEnvValue(await readRemoteEnv(runner, context), key, value);
+  await uploadEnvContent(runner, context, content);
+  console.log(`Set secret ${key} for ${context.appName} (${envName}). Run simple-deploy restart ${envName} <service> to apply.`);
+}
+
+async function runSecretList(root: string, envName: string, runner: CommandRunner) {
+  const context = loadAppContext(root, envName);
+  for (const key of envKeys(await readRemoteEnv(runner, context))) {
+    console.log(key);
+  }
+}
+
+async function runSecretRm(root: string, envName: string, key: string, runner: CommandRunner) {
+  const context = loadAppContext(root, envName);
+  const content = removeEnvValue(await readRemoteEnv(runner, context), key);
+  await uploadEnvContent(runner, context, content);
+  console.log(`Removed secret ${key} for ${context.appName} (${envName}). Run simple-deploy restart ${envName} <service> to apply.`);
 }
 
 async function gitOutput(root: string, runner: CommandRunner, args: string[]): Promise<string> {
@@ -872,6 +1014,19 @@ async function runDestroy(root: string, envName: string, runner: CommandRunner, 
   console.log(`Destroyed ${context.appName} (${envName}), preserved ${context.appRoot}/shared and ${context.appRoot}/releases`);
 }
 
+async function runRestart(root: string, envName: string, serviceName: string, runner: CommandRunner) {
+  const context = loadAppContext(root, envName);
+  const service = context.services[serviceName];
+  if (!service) throw new Error(`unknown service: ${serviceName}`);
+  await runCommand(
+    runner,
+    ["ssh", context.server, `sudo simple-vps app service restart ${context.appName} ${serviceName}`],
+    `failed to restart ${serviceName}`,
+  );
+  await healthCheckServices(runner, context.server, { [serviceName]: service });
+  console.log(`Restarted ${context.appName}/${serviceName} (${envName})`);
+}
+
 async function runDeploy(
   root: string,
   envName: string,
@@ -958,7 +1113,12 @@ async function runDeploy(
     }
   }
   await markReleaseSuccessful(runner, server, releaseDir);
-  await pruneReleases(runner, context);
+  try {
+    await pruneReleases(runner, context);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`Warning: deploy succeeded; pruning failed: ${message}`);
+  }
 
   console.log(`Deployed ${appName} ${release.slice(0, 7)} to ${envName}`);
 }
@@ -993,6 +1153,11 @@ function usage() {
   console.error("  simple-deploy logs <env> [service] [--tail]");
   console.error("  simple-deploy rollback <env> [release]");
   console.error("  simple-deploy destroy <env> [--yes|--confirm <app>] [--purge]");
+  console.error("  simple-deploy restart <env> <service>");
+  console.error("  simple-deploy env push <env> <file>");
+  console.error("  simple-deploy secret put <env> <key>");
+  console.error("  simple-deploy secret list <env>");
+  console.error("  simple-deploy secret rm <env> <key>");
 }
 
 export async function main(argv = process.argv.slice(2), root = process.cwd(), options: MainOptions = {}) {
@@ -1056,6 +1221,44 @@ export async function main(argv = process.argv.slice(2), root = process.cwd(), o
       if (!env) throw new Error("destroy requires env");
       await runDestroy(root, env, runner, parseDestroyOptions(args.slice(1)));
       return;
+    }
+    if (command === "restart") {
+      const env = args[0];
+      const service = args[1];
+      if (!env || !service || args.length > 2) throw new Error("restart requires env and service");
+      await runRestart(root, env, service, runner);
+      return;
+    }
+    if (command === "env") {
+      const subcommand = args[0];
+      if (subcommand !== "push") throw new Error("env requires subcommand: push");
+      const env = args[1];
+      const file = args[2];
+      if (!env || !file || args.length > 3) throw new Error("env push requires env and file");
+      await runEnvPush(root, env, file, runner);
+      return;
+    }
+    if (command === "secret") {
+      const subcommand = args[0];
+      const env = args[1];
+      if (subcommand === "put") {
+        const key = args[2];
+        if (!env || !key || args.length > 3) throw new Error("secret put requires env and key");
+        await runSecretPut(root, env, key, runner, options.stdinText);
+        return;
+      }
+      if (subcommand === "list") {
+        if (!env || args.length > 2) throw new Error("secret list requires env");
+        await runSecretList(root, env, runner);
+        return;
+      }
+      if (subcommand === "rm") {
+        const key = args[2];
+        if (!env || !key || args.length > 3) throw new Error("secret rm requires env and key");
+        await runSecretRm(root, env, key, runner);
+        return;
+      }
+      throw new Error("secret requires subcommand: put, list, rm");
     }
     if (command === "deploy") {
       const env = args[0];

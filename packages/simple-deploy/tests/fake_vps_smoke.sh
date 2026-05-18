@@ -104,6 +104,11 @@ http.createServer((req, res) => {
     res.end("ok");
     return;
   }
+  if (req.url === "/secret") {
+    res.writeHead(200, { "content-type": "text/plain" });
+    res.end(process.env.API_KEY || "");
+    return;
+  }
   res.writeHead(200, { "content-type": "text/plain" });
   res.end("$body");
 }).listen(port, "127.0.0.1");
@@ -172,6 +177,21 @@ ssh fake-vps curl -fsS http://127.0.0.1:3000/ | grep -q '^mode-a$'
 ssh fake-vps sudo simple-vps route list --json | grep -q '"host": "api.example.com"'
 (cd "$mode_a" && bun run "$repo_root/packages/simple-deploy/src/cli.ts" status production) | grep -q 'service web: active'
 (cd "$mode_a" && bun run "$repo_root/packages/simple-deploy/src/cli.ts" logs production web) | grep -q 'server:mode-a'
+printf 'API_KEY=from-env\n' > "$mode_a/production.env"
+(cd "$mode_a" && bun run "$repo_root/packages/simple-deploy/src/cli.ts" env push production production.env)
+(cd "$mode_a" && bun run "$repo_root/packages/simple-deploy/src/cli.ts" restart production web)
+test "$(ssh fake-vps curl -fsS http://127.0.0.1:3000/secret)" = "from-env"
+(cd "$mode_a" && printf 'from-secret\n' | bun run "$repo_root/packages/simple-deploy/src/cli.ts" secret put production API_KEY)
+(cd "$mode_a" && bun run "$repo_root/packages/simple-deploy/src/cli.ts" secret list production) | grep -q '^API_KEY$'
+if (cd "$mode_a" && bun run "$repo_root/packages/simple-deploy/src/cli.ts" secret list production) | grep -q 'from-secret'; then
+  echo "secret list leaked a secret value" >&2
+  exit 1
+fi
+(cd "$mode_a" && bun run "$repo_root/packages/simple-deploy/src/cli.ts" restart production web)
+test "$(ssh fake-vps curl -fsS http://127.0.0.1:3000/secret)" = "from-secret"
+(cd "$mode_a" && bun run "$repo_root/packages/simple-deploy/src/cli.ts" secret rm production API_KEY)
+(cd "$mode_a" && bun run "$repo_root/packages/simple-deploy/src/cli.ts" restart production web)
+test "$(ssh fake-vps curl -fsS http://127.0.0.1:3000/secret)" = ""
 
 write_server "$mode_a" "mode-a-v2"
 git -C "$mode_a" add server.js

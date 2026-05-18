@@ -135,6 +135,32 @@ describe("deploy", () => {
     expect(joined).not.toContain("ssh admin@100.x.y.z sudo simple-vps route proxy api.example.com --port 3000 --app api");
   });
 
+  test("does not fail a successful deploy when release pruning fails", async () => {
+    const root = fixture();
+    const warnings: string[] = [];
+    const originalError = console.error;
+    const runner: CommandRunner = {
+      async run(command) {
+        seedMockCheckout(command);
+        const joined = command.join(" ");
+        if (joined === "git -C " + root + " rev-parse HEAD") return { code: 0, stdout: "a1b2c3d4e5f6\n", stderr: "" };
+        if (joined === "git -C " + root + " status --porcelain") return { code: 0, stdout: "", stderr: "" };
+        if (joined.includes("rm -rf --")) return { code: 1, stdout: "", stderr: "permission denied" };
+        return { code: 0, stdout: "", stderr: "" };
+      },
+    };
+
+    console.error = (message?: unknown) => warnings.push(String(message));
+    try {
+      await main(["deploy", "production"], root, { runner });
+    } finally {
+      console.error = originalError;
+    }
+
+    expect(process.exitCode).toBe(0);
+    expect(warnings.join("\n")).toContain("Warning: deploy succeeded; pruning failed: failed to prune releases: permission denied");
+  });
+
   test("refuses to deploy tracked dotenv files", async () => {
     const root = fixture();
     const errors: string[] = [];

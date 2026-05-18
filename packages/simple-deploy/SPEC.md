@@ -376,6 +376,8 @@ Health check semantics:
 Release pruning keeps the newest `keep_releases` release directories by mtime
 and always preserves the currently linked release plus the newest successful
 rollback target, even if either falls outside the count.
+Pruning failures warn but do not fail the deploy after the release has been
+activated, routed, and marked successful.
 
 Failure mode is **stop-and-replace**. Blue-green is a future
 `[env.<name>] strategy = "blue-green"` and is not in v1.
@@ -473,6 +475,10 @@ With `--purge`:
 The data-preserving form requires either `--yes` or `--confirm <app>`.
 `--purge` requires both `--yes` and `--confirm <app>`, where `<app>` matches
 the manifest `name`.
+
+Known v1 limitation: `destroy` removes services declared in the current
+manifest. If a service was removed from the manifest before destroy, its old
+unit may need manual cleanup or a future server-side unit enumeration command.
 
 ## Systemd Model
 
@@ -603,6 +609,37 @@ defaults.
 
 Both produce the same on-disk format.
 
+### Env Commands
+
+```bash
+simple-deploy env push <env> <file>
+simple-deploy secret put <env> KEY
+simple-deploy secret list <env>
+simple-deploy secret rm <env> KEY
+simple-deploy restart <env> <service>
+```
+
+`env push <file>` replaces the entire `shared/.env` with `<file>`.
+`secret put KEY` reads the value from stdin when piped, or prompts with no echo
+when stdin is a TTY. Values are never accepted as CLI arguments.
+`secret rm KEY` removes matching `KEY=...` entries and is a no-op if absent.
+`secret list` prints names only, never values.
+
+Writes are atomic:
+
+```text
+1. validate resulting EnvironmentFile syntax locally
+2. rsync temp file to /tmp/simple-deploy/
+3. sudo simple-vps app install-env <name> <temp-file>
+4. simple-vps validates again, chowns to app-<name>:app-<name>, chmod 0600,
+   and renames into /var/apps/<name>/shared/.env
+```
+
+`env push`, `secret put`, and `secret rm` do **not** restart services. They
+print the explicit restart command to run. `restart` invokes
+`sudo simple-vps app service restart <name> <service>` and then runs that
+service's health check.
+
 ## Route Contract
 
 Simple Deploy does not edit Caddy. It calls `sudo simple-vps route ...` on
@@ -685,6 +722,8 @@ line for `/usr/local/bin/simple-vps`. Simple Deploy invokes them over SSH:
 # app lifecycle
 sudo simple-vps app create <name>
 sudo simple-vps app destroy <name>
+sudo simple-vps app read-env <name>
+sudo simple-vps app install-env <name> <env-file>
 sudo simple-vps app install-unit <name> <service> <unit-file>
 sudo simple-vps app uninstall-unit <name> <service>
 sudo simple-vps app daemon-reload
@@ -822,7 +861,7 @@ The CLI MUST run before every deploy:
 - all services with ports have healthchecks
 - exactly one lockfile (Mode A and B)
 - no blocked dotenv files in artifact (unless --include-dotenv)
-- shared/.env on server is systemd-EnvironmentFile-parseable
+- shared/.env content is systemd-EnvironmentFile-parseable
 ```
 
 The CLI SHOULD run on save (`simple-deploy check`):
@@ -839,9 +878,8 @@ simple-deploy check --env production   # also check SSH, server tooling, setup
 3. Implement `setup` end-to-end against a Simple VPS host.
 4. Implement Mode A deploy end-to-end (smallest viable path).
 5. Add Mode B and Mode C.
-6. Add `secret put`, `env push`.
-7. CI examples (GitHub Actions) using `SIMPLE_DEPLOY_SSH_KEY` and
+6. CI examples (GitHub Actions) using `SIMPLE_DEPLOY_SSH_KEY` and
    `SIMPLE_DEPLOY_KNOWN_HOSTS`.
-8. End-to-end smoke test deploying a Hono/Bun example app to a fresh
+7. End-to-end smoke test deploying a Hono/Bun example app to a fresh
    Simple VPS host.
-9. Only then tag v1.
+8. Only then tag v1.

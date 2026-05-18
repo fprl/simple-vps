@@ -387,6 +387,50 @@ class SimpleVpsCliTest(unittest.TestCase):
             self.assertFalse(root.exists())
             self.assertIn(["userdel", "app-my-app"], commands)
 
+    def test_app_read_env_prints_shared_env(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cli = load_cli(Path(tmp))
+            env_file = cli.APP_ROOT / "my-app" / "shared" / ".env"
+            env_file.parent.mkdir(parents=True)
+            env_file.write_text("API_KEY=secret\n", encoding="utf-8")
+
+            output = capture_quiet(cli.cmd_app_read_env, argparse.Namespace(name="my-app"))
+
+            self.assertEqual(output, "API_KEY=secret\n")
+
+    def test_app_install_env_validates_and_atomically_installs_env(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cli = load_cli(Path(tmp))
+            root = cli.APP_ROOT / "my-app"
+            shared = root / "shared"
+            shared.mkdir(parents=True)
+            cli.DEPLOY_TMP_DIR.mkdir()
+            source = cli.DEPLOY_TMP_DIR / ".env"
+            source.write_text("API_KEY=secret\n", encoding="utf-8")
+            chowns = []
+
+            def fake_chown(path, user=None, group=None):
+                chowns.append((Path(path), user, group))
+
+            with mock.patch.object(cli.shutil, "chown", fake_chown):
+                call_quiet(cli.cmd_app_install_env, argparse.Namespace(name="my-app", path_to_env_file=str(source)))
+
+            target = shared / ".env"
+            self.assertEqual(target.read_text(encoding="utf-8"), "API_KEY=secret\n")
+            self.assertEqual(target.stat().st_mode & 0o777, 0o600)
+            self.assertIn((shared / ".env.new", "app-my-app", "app-my-app"), chowns)
+
+    def test_app_install_env_rejects_shell_export(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cli = load_cli(Path(tmp))
+            (cli.APP_ROOT / "my-app" / "shared").mkdir(parents=True)
+            cli.DEPLOY_TMP_DIR.mkdir()
+            source = cli.DEPLOY_TMP_DIR / ".env"
+            source.write_text("export API_KEY=secret\n", encoding="utf-8")
+
+            with self.assertRaises(SystemExit):
+                call_quiet(cli.cmd_app_install_env, argparse.Namespace(name="my-app", path_to_env_file=str(source)))
+
     def test_app_install_unit_validates_and_copies_unit(self):
         with tempfile.TemporaryDirectory() as tmp:
             cli = load_cli(Path(tmp))

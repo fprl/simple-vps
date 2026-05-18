@@ -119,6 +119,8 @@ simple-vps route remove example.com
 simple-vps route remove --app my-app
 simple-vps app create my-app
 simple-vps app destroy my-app
+simple-vps app read-env my-app
+simple-vps app install-env my-app /tmp/simple-deploy/.env
 simple-vps app install-unit my-app web /tmp/simple-deploy/simple-my-app-web.service
 simple-vps app uninstall-unit my-app web
 simple-vps app daemon-reload
@@ -210,6 +212,8 @@ The `simple-vps app ...` namespace covers per-app lifecycle operations:
 ```bash
 sudo simple-vps app create <name>
 sudo simple-vps app destroy <name>
+sudo simple-vps app read-env <name>
+sudo simple-vps app install-env <name> <path-to-env-file>
 sudo simple-vps app install-unit <name> <service> <path-to-unit-file>
 sudo simple-vps app uninstall-unit <name> <service>
 sudo simple-vps app daemon-reload
@@ -222,6 +226,11 @@ sudo simple-vps app run-as <name> --cwd <path> -- <command> [args...]
 `app destroy` is the destructive purge primitive: it removes
 `/var/apps/<name>` and the `app-<name>` system user. The data-preserving
 `simple-deploy destroy` path does not call it.
+
+`app install-env` is the only writer for `/var/apps/<name>/shared/.env`.
+It requires the source file to live under `/tmp/simple-deploy/`, validates
+EnvironmentFile syntax, writes atomically, and sets `0600 app-<name>:app-<name>`.
+`app read-env` prints the current file for `simple-deploy secret list|put|rm`.
 
 ### Route Subcommands
 

@@ -39,6 +39,7 @@ SERVICE_RE = re.compile(r"^[a-z][a-z0-9-]{0,30}$")
 HEADER_NAME_RE = re.compile(r"^[A-Za-z0-9!#$%&'*+.^_`|~-]+$")
 SERVICE_ACTIONS = {"start", "stop", "restart", "status", "is-active", "enable", "disable"}
 SYSTEM_USER_RE = re.compile(r"^[a-z_][a-z0-9_-]{0,31}\$?$")
+ENV_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 def die(message, code=1):
@@ -799,6 +800,49 @@ def validate_unit_source(path, name, service):
     return resolved
 
 
+def validate_deploy_tmp_source(path):
+    resolved = Path(path).resolve(strict=False)
+    tmp_root = DEPLOY_TMP_DIR.resolve(strict=False)
+    if not path_is_relative_to(resolved, tmp_root):
+        die(f"source file must live under {tmp_root}")
+    if not resolved.is_file():
+        die(f"source file does not exist: {path}")
+
+    sudo_uid = os.environ.get("SUDO_UID")
+    if sudo_uid is not None:
+        try:
+            expected_uid = int(sudo_uid)
+        except ValueError:
+            die("invalid SUDO_UID")
+        actual_uid = resolved.stat().st_uid
+        if actual_uid != expected_uid:
+            die(f"source file must be owned by invoking sudo user (uid {expected_uid})")
+    return resolved
+
+
+def validate_environment_content(content):
+    if "\x00" in content:
+        die("env file cannot contain NUL bytes")
+    for index, raw_line in enumerate(content.split("\n"), start=1):
+        line = raw_line.rstrip("\r")
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if stripped.startswith("export "):
+            die(f"line {index}: export is not supported")
+        if "=" not in line:
+            die(f"line {index}: expected KEY=value")
+        key, value = line.split("=", 1)
+        if key.strip() != key:
+            die(f"line {index}: whitespace around keys is not supported")
+        if not ENV_KEY_RE.match(key):
+            die(f"line {index}: invalid env key: {key}")
+        if value.startswith('"') or value.startswith("'"):
+            die(f"line {index}: quoted values are not supported")
+        if re.search(r"\s+#", value):
+            die(f"line {index}: inline comments are not supported")
+
+
 def install_unit_file(source, name, service):
     unit_name = service_unit_name(name, service)
     systemd_target = SYSTEMD_UNIT_DIR / unit_name
@@ -810,6 +854,38 @@ def install_unit_file(source, name, service):
     shutil.copy2(source, systemd_target)
     os.chmod(app_target, 0o644)
     os.chmod(systemd_target, 0o644)
+
+
+def env_file_path(name):
+    return app_path(name) / "shared" / ".env"
+
+
+def install_env_file(source, name):
+    target = env_file_path(name)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp_target = target.parent / ".env.new"
+    shutil.copyfile(source, tmp_target)
+    shutil.chown(tmp_target, user=app_user(name), group=app_user(name))
+    os.chmod(tmp_target, 0o600)
+    os.replace(tmp_target, target)
+
+
+def cmd_app_read_env(args):
+    require_root()
+    name = normalize_app(args.name)
+    target = env_file_path(name)
+    if target.exists():
+        print(target.read_text(encoding="utf-8"), end="")
+
+
+def cmd_app_install_env(args):
+    require_root()
+    name = normalize_app(args.name)
+    source = validate_deploy_tmp_source(args.path_to_env_file)
+    content = source.read_text(encoding="utf-8")
+    validate_environment_content(content)
+    install_env_file(source, name)
+    print(f"Installed env for {name}")
 
 
 def cmd_app_install_unit(args):
@@ -969,6 +1045,15 @@ def build_parser():
     app_destroy = app_subparsers.add_parser("destroy", help="Remove an app user and directory layout")
     app_destroy.add_argument("name")
     app_destroy.set_defaults(func=cmd_app_destroy)
+
+    app_read_env = app_subparsers.add_parser("read-env", help="Print an app shared env file")
+    app_read_env.add_argument("name")
+    app_read_env.set_defaults(func=cmd_app_read_env)
+
+    app_install_env = app_subparsers.add_parser("install-env", help="Install a validated app shared env file")
+    app_install_env.add_argument("name")
+    app_install_env.add_argument("path_to_env_file")
+    app_install_env.set_defaults(func=cmd_app_install_env)
 
     app_install_unit = app_subparsers.add_parser("install-unit", help="Install a validated app systemd unit")
     app_install_unit.add_argument("name")

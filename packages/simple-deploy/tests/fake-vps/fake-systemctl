@@ -63,13 +63,22 @@ case "$action" in
     fi
     user="$(unit_value User "$file")"
     workdir="$(unit_value WorkingDirectory "$file")"
+    env_file="$(unit_value EnvironmentFile "$file")"
     port="$(unit_env PORT "$file")"
     exec_start="$(unit_value ExecStart "$file")"
     command="${exec_start#/usr/bin/env bash -c 'exec }"
     command="${command%\'}"
+    file_env=()
+    if [[ -f "$env_file" ]]; then
+      while IFS= read -r line || [[ -n "$line" ]]; do
+        line="${line%$'\r'}"
+        [[ -z "$line" || "$line" == \#* ]] && continue
+        file_env+=("$line")
+      done < "$env_file"
+    fi
     (
       cd "$workdir"
-      PORT="${port:-}" nohup runuser -u "$user" -- bash -c "$command" > "$state_dir/$unit.log" 2>&1 &
+      nohup runuser -u "$user" -- env PORT="${port:-}" "${file_env[@]}" bash -c "$command" > "$state_dir/$unit.log" 2>&1 &
       echo $! > "$(pid_file "$unit")"
     )
     sleep 0.2
