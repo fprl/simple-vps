@@ -398,6 +398,34 @@ class SimpleVpsCliTest(unittest.TestCase):
                 {"app": "my-app", "dns_record_id": "record", "zone_id": "zone"},
             )
 
+    def test_cloudflare_publish_rolls_back_tunnel_config_on_dns_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cli = load_cli(Path(tmp))
+            cli.CLOUDFLARE_STATE_PATH = Path(tmp) / "cloudflare.json"
+            cli.CLOUDFLARE_API_TOKEN_PATH = Path(tmp) / "cloudflare-api-token"
+            cli.CLOUDFLARE_API_TOKEN_PATH.write_text("token\n", encoding="utf-8")
+            cli.CLOUDFLARE_STATE_PATH.write_text(
+                json.dumps({"account_id": "acct", "tunnel_id": "tun", "routes": {}}),
+                encoding="utf-8",
+            )
+            previous_config = {"ingress": [{"service": "http_status:404"}]}
+            configs = []
+            cli.cloudflare_tunnel_config = lambda token, account, tunnel: previous_config
+            cli.put_cloudflare_tunnel_config = lambda token, account, tunnel, config: configs.append(config)
+            cli.cloudflare_zone_for_host = lambda token, host: "zone"
+            cli.ensure_cloudflare_cname = lambda token, zone, host, target: cli.die("dns failed")
+
+            with self.assertRaises(SystemExit):
+                call_quiet(
+                    cli.cmd_cloudflare_publish,
+                    argparse.Namespace(host="api.example.com", app="my-app"),
+                )
+
+            self.assertEqual(configs[0]["ingress"][0], {"hostname": "api.example.com", "service": "http://127.0.0.1:8080"})
+            self.assertEqual(configs[1], previous_config)
+            state = json.loads(cli.CLOUDFLARE_STATE_PATH.read_text(encoding="utf-8"))
+            self.assertEqual(state["routes"], {})
+
     def test_cloudflare_remove_by_app_updates_state(self):
         with tempfile.TemporaryDirectory() as tmp:
             cli = load_cli(Path(tmp))
@@ -417,12 +445,16 @@ class SimpleVpsCliTest(unittest.TestCase):
                 encoding="utf-8",
             )
             removed = []
-            cli.remove_cloudflare_host = lambda token, state, account, tunnel, host, route: removed.append(host)
+            original_remove_host = cli.CloudflareIngress.remove_host
+            cli.CloudflareIngress.remove_host = lambda self, host, route: removed.append(host)
 
-            output = capture_quiet(
-                cli.cmd_cloudflare_remove,
-                argparse.Namespace(host=None, app="my-app"),
-            )
+            try:
+                output = capture_quiet(
+                    cli.cmd_cloudflare_remove,
+                    argparse.Namespace(host=None, app="my-app"),
+                )
+            finally:
+                cli.CloudflareIngress.remove_host = original_remove_host
 
             self.assertIn("Removed Cloudflare route: api.example.com", output)
             self.assertEqual(removed, ["api.example.com"])
