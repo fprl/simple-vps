@@ -657,13 +657,62 @@ def apply_caddyfile(state, force=False):
         pass
 
 
+class LocalIngress:
+    def __init__(self, state=None):
+        self.previous_state = state if state is not None else load_state()
+
+    def state_with_routes(self, routes):
+        return {"version": STATE_VERSION, "routes": sort_routes(routes)}
+
+    def commit(self, next_state, force=False):
+        write_state(next_state)
+        try:
+            apply_caddyfile(next_state, force=force)
+        except SystemExit:
+            write_state(self.previous_state)
+            raise
+
+    def upsert(self, route, force=False):
+        next_routes = [dict(existing) for existing in self.previous_state["routes"]]
+        index = route_index(next_routes, route["host"])
+
+        if index is not None:
+            existing = next_routes[index]
+            if existing == route:
+                return f"{route['host']} already has the requested {route['type']} route"
+            if not force:
+                die(f"{route['host']} already has a {existing['type']} route; use --force to replace it")
+            next_routes[index] = route
+        else:
+            next_routes.append(route)
+
+        self.commit(self.state_with_routes(next_routes), force=force)
+        return f"Routed {route['host']} ({route['type']}) -> {route_target(route)}"
+
+    def remove_host(self, host, force=False):
+        next_routes = [dict(existing) for existing in self.previous_state["routes"]]
+        index = route_index(next_routes, host)
+        if index is None:
+            die(f"{host} is not routed")
+
+        del next_routes[index]
+        self.commit(self.state_with_routes(next_routes), force=force)
+        return f"Removed route for {host}"
+
+    def remove_app(self, app, force=False):
+        app_name = normalize_app(app)
+        next_routes = [route for route in self.previous_state["routes"] if route.get("app") != app_name]
+        removed_count = len(self.previous_state["routes"]) - len(next_routes)
+        if removed_count == 0:
+            return f"No routes found for app {app_name}"
+
+        self.commit(self.state_with_routes(next_routes), force=force)
+        plural = "route" if removed_count == 1 else "routes"
+        return f"Removed {removed_count} {plural} for app {app_name}"
+
+
 def commit_state_and_caddyfile(previous_state, next_state, force=False):
-    write_state(next_state)
-    try:
-        apply_caddyfile(next_state, force=force)
-    except SystemExit:
-        write_state(previous_state)
-        raise
+    LocalIngress(previous_state).commit(next_state, force=force)
 
 
 def cmd_status(_args):
@@ -820,60 +869,15 @@ def route_target(route):
 
 
 def upsert_route(route, force=False):
-    previous_state = load_state()
-    next_state = {
-        "version": STATE_VERSION,
-        "routes": [dict(existing) for existing in previous_state["routes"]],
-    }
-    routes = next_state["routes"]
-    index = route_index(routes, route["host"])
-
-    if index is not None:
-        existing = routes[index]
-        if existing == route:
-            print(f"{route['host']} already has the requested {route['type']} route")
-            return
-        if not force:
-            die(f"{route['host']} already has a {existing['type']} route; use --force to replace it")
-        routes[index] = route
-    else:
-        routes.append(route)
-
-    next_state["routes"] = sort_routes(routes)
-    commit_state_and_caddyfile(previous_state, next_state, force=force)
-    print(f"Routed {route['host']} ({route['type']}) -> {route_target(route)}")
+    print(LocalIngress().upsert(route, force=force))
 
 
 def remove_route(host, force=False):
-    previous_state = load_state()
-    next_state = {
-        "version": STATE_VERSION,
-        "routes": [dict(existing) for existing in previous_state["routes"]],
-    }
-    routes = next_state["routes"]
-    index = route_index(routes, host)
-    if index is None:
-        die(f"{host} is not routed")
-
-    del routes[index]
-    next_state["routes"] = sort_routes(routes)
-    commit_state_and_caddyfile(previous_state, next_state, force=force)
-    print(f"Removed route for {host}")
+    print(LocalIngress().remove_host(host, force=force))
 
 
 def remove_routes_by_app(app, force=False):
-    previous_state = load_state()
-    app_name = normalize_app(app)
-    next_routes = [route for route in previous_state["routes"] if route.get("app") != app_name]
-    removed_count = len(previous_state["routes"]) - len(next_routes)
-    if removed_count == 0:
-        print(f"No routes found for app {app_name}")
-        return
-
-    next_state = {"version": STATE_VERSION, "routes": sort_routes(next_routes)}
-    commit_state_and_caddyfile(previous_state, next_state, force=force)
-    plural = "route" if removed_count == 1 else "routes"
-    print(f"Removed {removed_count} {plural} for app {app_name}")
+    print(LocalIngress().remove_app(app, force=force))
 
 
 def cmd_route_proxy(args):
@@ -973,73 +977,122 @@ def configured_cloudflare():
     return token, state, account_id, tunnel_id
 
 
+class CloudflareIngress:
+    def __init__(self, token, state, account_id, tunnel_id):
+        self.token = token
+        self.state = state
+        self.account_id = account_id
+        self.tunnel_id = tunnel_id
+
+    @classmethod
+    def configured(cls):
+        configured = configured_cloudflare()
+        if configured is None:
+            return None
+        token, state, account_id, tunnel_id = configured
+        return cls(token, state, account_id, tunnel_id)
+
+    def replace_tunnel_config(self, previous_config, next_config, after_replace):
+        put_cloudflare_tunnel_config(self.token, self.account_id, self.tunnel_id, next_config)
+        try:
+            return after_replace()
+        except SystemExit:
+            put_cloudflare_tunnel_config(self.token, self.account_id, self.tunnel_id, previous_config)
+            raise
+
+    def publish(self, host, app):
+        previous_config = cloudflare_tunnel_config(self.token, self.account_id, self.tunnel_id)
+        next_config = with_cloudflare_hostname(previous_config, host, cloudflare_route_service())
+
+        def write_dns_record():
+            # Explicit failures roll back the tunnel config. A process kill here can
+            # still leave orphaned ingress; a future doctor/repair path should catch it.
+            zone_id = cloudflare_zone_for_host(self.token, host)
+            record_id = ensure_cloudflare_cname(
+                self.token,
+                zone_id,
+                host,
+                f"{self.tunnel_id}.cfargotunnel.com",
+            )
+            return zone_id, record_id
+
+        zone_id, record_id = self.replace_tunnel_config(previous_config, next_config, write_dns_record)
+        routes = self.state.setdefault("routes", {})
+        routes[host] = {"app": app, "zone_id": zone_id, "dns_record_id": record_id}
+        write_cloudflare_state(self.state)
+        return f"Cloudflare route ready: {host}"
+
+    def remove_host(self, host, route_state):
+        previous_config = cloudflare_tunnel_config(self.token, self.account_id, self.tunnel_id)
+        next_config = without_cloudflare_hostname(previous_config, host)
+
+        def delete_dns_record():
+            zone_id = route_state.get("zone_id") if isinstance(route_state, dict) else None
+            record_id = route_state.get("dns_record_id") if isinstance(route_state, dict) else None
+            if zone_id and record_id:
+                delete_cloudflare_dns_record(self.token, zone_id, record_id)
+
+        self.replace_tunnel_config(previous_config, next_config, delete_dns_record)
+
+    def remove(self, host=None, app=None):
+        routes = self.state.setdefault("routes", {})
+        if host:
+            targets = [(host, routes.get(host))]
+        else:
+            app_name = normalize_app(app)
+            targets = [
+                (route_host, route)
+                for route_host, route in routes.items()
+                if isinstance(route, dict) and route.get("app") == app_name
+            ]
+
+        if not targets:
+            return []
+
+        removed = []
+        for route_host, route_state in targets:
+            self.remove_host(route_host, route_state)
+            routes.pop(route_host, None)
+            removed.append(route_host)
+        write_cloudflare_state(self.state)
+        return removed
+
+
 def cmd_cloudflare_publish(args):
     require_root()
     app = normalize_app(args.app)
     host = normalize_host(args.host)
-    configured = configured_cloudflare()
-    if configured is None:
+    ingress = CloudflareIngress.configured()
+    if ingress is None:
         print("Cloudflare API not configured; skipping")
         return
-    token, state, account_id, tunnel_id = configured
-    previous_config = cloudflare_tunnel_config(token, account_id, tunnel_id)
-    next_config = with_cloudflare_hostname(previous_config, host, cloudflare_route_service())
-    put_cloudflare_tunnel_config(token, account_id, tunnel_id, next_config)
-    try:
-        # Explicit failures roll back the tunnel config. A process kill here can
-        # still leave orphaned ingress; a future doctor/repair path should catch it.
-        zone_id = cloudflare_zone_for_host(token, host)
-        record_id = ensure_cloudflare_cname(token, zone_id, host, f"{tunnel_id}.cfargotunnel.com")
-    except SystemExit:
-        put_cloudflare_tunnel_config(token, account_id, tunnel_id, previous_config)
-        raise
-
-    routes = state.setdefault("routes", {})
-    routes[host] = {"app": app, "zone_id": zone_id, "dns_record_id": record_id}
-    write_cloudflare_state(state)
-    print(f"Cloudflare route ready: {host}")
+    print(ingress.publish(host, app))
 
 
 def remove_cloudflare_host(token, state, account_id, tunnel_id, host, route_state):
-    previous_config = cloudflare_tunnel_config(token, account_id, tunnel_id)
-    next_config = without_cloudflare_hostname(previous_config, host)
-    put_cloudflare_tunnel_config(token, account_id, tunnel_id, next_config)
-    try:
-        zone_id = route_state.get("zone_id") if isinstance(route_state, dict) else None
-        record_id = route_state.get("dns_record_id") if isinstance(route_state, dict) else None
-        if zone_id and record_id:
-            delete_cloudflare_dns_record(token, zone_id, record_id)
-    except SystemExit:
-        put_cloudflare_tunnel_config(token, account_id, tunnel_id, previous_config)
-        raise
+    CloudflareIngress(token, state, account_id, tunnel_id).remove_host(host, route_state)
 
 
 def cmd_cloudflare_remove(args):
     require_root()
     if bool(args.host) == bool(args.app):
         die("provide exactly one of host or --app")
-    configured = configured_cloudflare()
-    if configured is None:
+    ingress = CloudflareIngress.configured()
+    if ingress is None:
         print("Cloudflare API not configured; skipping")
         return
-    token, state, account_id, tunnel_id = configured
-    routes = state.setdefault("routes", {})
     if args.host:
         host = normalize_host(args.host)
-        targets = [(host, routes.get(host))]
+        removed = ingress.remove(host=host)
     else:
-        app = normalize_app(args.app)
-        targets = [(host, route) for host, route in routes.items() if isinstance(route, dict) and route.get("app") == app]
+        removed = ingress.remove(app=args.app)
 
-    if not targets:
+    if not removed:
         print("No Cloudflare routes matched")
         return
 
-    for host, route_state in targets:
-        remove_cloudflare_host(token, state, account_id, tunnel_id, host, route_state)
-        routes.pop(host, None)
+    for host in removed:
         print(f"Removed Cloudflare route: {host}")
-    write_cloudflare_state(state)
 
 
 def cmd_publish(args):
