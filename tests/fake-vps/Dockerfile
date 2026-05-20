@@ -27,9 +27,9 @@ RUN useradd -m -s /bin/bash -g operator operator \
   && chmod 700 /home/deploy/.ssh
 
 COPY .fake-vps-bin/simple-vps-linux-amd64 /usr/local/bin/simple-vps
-COPY packages/cli/tests/fake-vps/fake-systemctl /usr/local/bin/systemctl
-COPY packages/cli/tests/fake-vps/fake-journalctl /usr/local/bin/journalctl
-COPY packages/cli/tests/fake-vps/fake-caddy /usr/local/bin/caddy
+COPY tests/fake-vps/fake-systemctl /usr/local/bin/systemctl
+COPY tests/fake-vps/fake-journalctl /usr/local/bin/journalctl
+COPY tests/fake-vps/fake-caddy /usr/local/bin/caddy
 
 RUN chmod 0755 /usr/local/bin/simple-vps /usr/local/bin/systemctl /usr/local/bin/journalctl /usr/local/bin/caddy \
   && printf '%s\n' '{"routes":[],"version":2}' > /etc/simple-vps/state.json \

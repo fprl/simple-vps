@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 image="simple-vps-fake-vps:local"
 tmp="$(mktemp -d)"
 container=""
@@ -32,7 +32,7 @@ simple_vps() {
   "$go_bin" "$@"
 }
 
-docker build -f "$repo_root/packages/cli/tests/fake-vps/Dockerfile" -t "$image" "$repo_root"
+docker build -f "$repo_root/tests/fake-vps/Dockerfile" -t "$image" "$repo_root"
 container="$(docker run -d -p 127.0.0.1::22 "$image")"
 
 ssh-keygen -q -t ed25519 -N "" -f "$tmp/id_ed25519"

@@ -29,7 +29,7 @@ provisioning-test:
 	if command -v ansible-playbook >/dev/null 2>&1; then ANSIBLE_CONFIG=provisioning/ansible.cfg ansible-playbook --syntax-check -i provisioning/inventory/hosts.ini provisioning/playbooks/vps-apply.yml; else echo "ansible-playbook not found; skipping apply syntax check"; fi
 
 fake-vps-smoke:
-	packages/cli/tests/fake_vps_smoke.sh
+	tests/fake-vps/smoke.sh
 
 build:
 	mkdir -p $(DIST_DIR)
