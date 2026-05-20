@@ -1,0 +1,712 @@
+package provision
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"time"
+
+	"github.com/fprl/simple-vps/internal/provision/host"
+	"github.com/fprl/simple-vps/internal/provision/state"
+)
+
+const litestreamVersion = "0.5.8"
+
+type InstallOptions struct {
+	OperatorUser           string
+	DeployUser             string
+	OperatorSSHPublicKeys  []string
+	DeploySSHPublicKeys    []string
+	Timezone               string
+	Locale                 string
+	Tailscale              bool
+	TailscaleAuthKey       string
+	TailscaleHostname      string
+	CloudflareTunnel       bool
+	CloudflareAPIToken     string
+	CloudflareAccountID    string
+	CloudflareTunnelToken  string
+	CloudflareTunnelConfig string
+	InstallDocker          bool
+	InstallLitestream      bool
+	CheckMode              bool
+	StateRoot              string
+	HelperBinaryPath       string
+	ApplyID                string
+	Now                    func() time.Time
+}
+
+type InstallSummary struct {
+	ApplyID           string
+	OperationsChanged int
+}
+
+type operation struct {
+	name string
+	run  func(host.Apply) (bool, error)
+}
+
+func RunInstall(ctx context.Context, runner host.Runner, opts InstallOptions) (InstallSummary, error) {
+	opts = normalizeOptions(opts)
+	apply := host.Apply{
+		Context:   ctx,
+		Runner:    runner,
+		CheckMode: opts.CheckMode,
+		State:     &host.RunState{},
+	}
+	store := state.Store{Root: opts.StateRoot}
+	startedAt := opts.Now().UTC()
+	applyID := opts.ApplyID
+	if applyID == "" {
+		applyID = startedAt.Format("20060102T150405Z")
+	}
+
+	ops := installOperations(opts, store)
+	changedCount := 0
+	for _, op := range ops {
+		changed, err := op.run(apply)
+		if err != nil {
+			if !opts.CheckMode {
+				_ = writeApplyState(store, opts, applyID, startedAt, opts.Now().UTC(), "failed", changedCount)
+			}
+			return InstallSummary{ApplyID: applyID, OperationsChanged: changedCount}, fmt.Errorf("%s: %w", op.name, err)
+		}
+		if changed {
+			changedCount++
+		}
+	}
+
+	if !opts.CheckMode {
+		if err := writeApplyState(store, opts, applyID, startedAt, opts.Now().UTC(), "ok", changedCount); err != nil {
+			return InstallSummary{ApplyID: applyID, OperationsChanged: changedCount}, err
+		}
+	}
+	return InstallSummary{ApplyID: applyID, OperationsChanged: changedCount}, nil
+}
+
+func installOperations(opts InstallOptions, store state.Store) []operation {
+	var ops []operation
+	add := func(name string, run func(host.Apply) (bool, error)) {
+		ops = append(ops, operation{name: name, run: run})
+	}
+
+	add("write host desired state", func(apply host.Apply) (bool, error) {
+		desired := desiredHost(opts)
+		changed, err := hostDesiredChanged(store, desired)
+		if err != nil {
+			return false, err
+		}
+		if changed && !opts.CheckMode {
+			if err := store.WriteHostDesired(desired); err != nil {
+				return false, err
+			}
+		}
+		return changed, nil
+	})
+
+	for _, dir := range []host.Directory{
+		{Path: "/etc/simple-vps", Owner: "root", Group: "root", Mode: 0755},
+		{Path: "/etc/simple-vps/backups", Owner: "root", Group: "root", Mode: 0755},
+		{Path: "/etc/simple-vps/providers", Owner: "root", Group: "root", Mode: 0755},
+		{Path: "/etc/simple-vps/secrets", Owner: "root", Group: "root", Mode: 0755},
+	} {
+		dir := dir
+		add("ensure directory "+dir.Path, func(apply host.Apply) (bool, error) {
+			return host.EnsureDirectory(apply, dir)
+		})
+	}
+
+	for _, pkg := range essentialPackages() {
+		pkg := pkg
+		add("install package "+pkg, func(apply host.Apply) (bool, error) {
+			return host.EnsurePackage(apply, pkg)
+		})
+	}
+
+	add("ensure operator user", func(apply host.Apply) (bool, error) {
+		return host.EnsureUser(apply, host.User{Name: opts.OperatorUser, PrimaryGroup: opts.OperatorUser, Shell: "/bin/bash", CreateHome: true})
+	})
+	add("operator sudo group", func(apply host.Apply) (bool, error) {
+		return host.EnsureGroupMembership(apply, opts.OperatorUser, "sudo")
+	})
+	add("operator sudoers", func(apply host.Apply) (bool, error) {
+		return host.EnsureSudoersFile(apply, "operator", []byte(fmt.Sprintf("%s ALL=(ALL) NOPASSWD:ALL\n", opts.OperatorUser)))
+	})
+	add("ensure deploy user", func(apply host.Apply) (bool, error) {
+		return host.EnsureUser(apply, host.User{Name: opts.DeployUser, PrimaryGroup: opts.DeployUser, Shell: "/bin/bash", CreateHome: true})
+	})
+	addAuthorizedKeys(&ops, opts.OperatorUser, opts.OperatorSSHPublicKeys)
+	addAuthorizedKeys(&ops, opts.DeployUser, opts.DeploySSHPublicKeys)
+
+	add("timezone", func(apply host.Apply) (bool, error) {
+		return host.EnsureTimezone(apply, opts.Timezone)
+	})
+	add("locale", func(apply host.Apply) (bool, error) {
+		return host.EnsureLocale(apply, opts.Locale)
+	})
+	addSSHHardening(&ops)
+	addSecurity(&ops, opts)
+	addHelper(&ops, opts)
+	addCaddy(&ops)
+	if opts.InstallLitestream {
+		addLitestream(&ops)
+	}
+	if opts.InstallDocker {
+		addDocker(&ops, opts)
+	}
+	if opts.Tailscale {
+		addTailscale(&ops, opts)
+	}
+	if opts.CloudflareTunnel {
+		addCloudflare(&ops, opts)
+	}
+
+	return ops
+}
+
+func addAuthorizedKeys(ops *[]operation, user string, keys []string) {
+	dir := fmt.Sprintf("/home/%s/.ssh", user)
+	*ops = append(*ops, operation{name: "ssh directory " + user, run: func(apply host.Apply) (bool, error) {
+		return host.EnsureDirectory(apply, host.Directory{Path: dir, Owner: user, Group: user, Mode: 0700})
+	}})
+	*ops = append(*ops, operation{name: "authorized keys " + user, run: func(apply host.Apply) (bool, error) {
+		content := ""
+		if len(keys) > 0 {
+			content = strings.Join(keys, "\n") + "\n"
+		}
+		return host.EnsureFile(apply, host.File{
+			Path:    filepath.Join(dir, "authorized_keys"),
+			Content: []byte(content),
+			Owner:   user,
+			Group:   user,
+			Mode:    0600,
+		})
+	}})
+}
+
+func addSSHHardening(ops *[]operation) {
+	*ops = append(*ops, operation{name: "ssh hardening", run: ensureSSHHardening})
+}
+
+func ensureSSHHardening(apply host.Apply) (bool, error) {
+	changed := false
+	for _, item := range []struct {
+		re   string
+		line string
+	}{
+		{`^#?PermitRootLogin\b`, "PermitRootLogin prohibit-password"},
+		{`^#?PasswordAuthentication\b`, "PasswordAuthentication no"},
+		{`^#?PubkeyAuthentication\b`, "PubkeyAuthentication yes"},
+		{`^#?X11Forwarding\b`, "X11Forwarding no"},
+		{`^#?MaxAuthTries\b`, "MaxAuthTries 3"},
+	} {
+		lineChanged, err := host.EnsureLineInFile(apply, host.LineInFile{
+			Path:   "/etc/ssh/sshd_config",
+			Regexp: item.re,
+			Line:   item.line,
+			Owner:  "root",
+			Group:  "root",
+			Mode:   0644,
+		})
+		if err != nil {
+			return false, err
+		}
+		changed = changed || lineChanged
+	}
+	if !changed {
+		return false, nil
+	}
+	if apply.CheckMode {
+		return true, nil
+	}
+	if _, err := host.EnsureSystemdUnit(apply, host.SystemdUnit{Name: "ssh.service", Action: host.Restarted}); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func addSecurity(ops *[]operation, opts InstallOptions) {
+	for _, file := range []host.File{
+		{
+			Path:    "/etc/apt/apt.conf.d/20auto-upgrades",
+			Content: []byte("APT::Periodic::Update-Package-Lists \"1\";\nAPT::Periodic::Unattended-Upgrade \"1\";\n"),
+			Owner:   "root", Group: "root", Mode: 0644,
+		},
+		{
+			Path:    "/etc/fail2ban/jail.local",
+			Content: []byte("[sshd]\nenabled = true\nport = ssh\nfilter = sshd\nlogpath = /var/log/auth.log\nmaxretry = 3\nbantime = 3600\nfindtime = 600\n"),
+			Owner:   "root", Group: "root", Mode: 0644,
+		},
+	} {
+		file := file
+		*ops = append(*ops, operation{name: "write " + file.Path, run: func(apply host.Apply) (bool, error) {
+			return host.EnsureFile(apply, file)
+		}})
+	}
+	for _, rule := range []host.UfwRule{
+		{Rule: "default deny incoming"},
+		{Rule: "default allow outgoing"},
+		{Rule: "allow 22/tcp"},
+		{Rule: "allow 41641/udp"},
+		{Rule: "allow 80/tcp", Delete: opts.CloudflareTunnel},
+		{Rule: "allow 443/tcp", Delete: opts.CloudflareTunnel},
+	} {
+		rule := rule
+		*ops = append(*ops, operation{name: "ufw " + rule.Rule, run: func(apply host.Apply) (bool, error) {
+			return host.EnsureUfwRule(apply, rule)
+		}})
+	}
+	*ops = append(*ops, operation{name: "enable ufw", run: func(apply host.Apply) (bool, error) {
+		active, err := ufwActive(apply)
+		if err != nil {
+			return false, err
+		}
+		if active {
+			return false, nil
+		}
+		if apply.CheckMode {
+			return true, nil
+		}
+		result, err := apply.Runner.Run(apply.ContextOrBackground(), host.Command{Program: "ufw", Args: []string{"--force", "enable"}})
+		if err != nil {
+			return false, err
+		}
+		return true, commandOK(result, "ufw", []string{"--force", "enable"})
+	}})
+	*ops = append(*ops, operation{name: "fail2ban service", run: func(apply host.Apply) (bool, error) {
+		return host.EnsureSystemdUnit(apply, host.SystemdUnit{Name: "fail2ban.service", Action: host.Started})
+	}})
+}
+
+func ufwActive(apply host.Apply) (bool, error) {
+	result, err := apply.Runner.Run(apply.ContextOrBackground(), host.Command{Program: "ufw", Args: []string{"status"}})
+	if err != nil {
+		return false, err
+	}
+	if result.ExitCode != 0 {
+		return false, nil
+	}
+	return strings.Contains(strings.ToLower(string(result.Stdout)), "status: active"), nil
+}
+
+func addHelper(ops *[]operation, opts InstallOptions) {
+	*ops = append(*ops, operation{name: "install simple-vps helper", run: func(apply host.Apply) (bool, error) {
+		path := opts.HelperBinaryPath
+		if path == "" {
+			var err error
+			path, err = os.Executable()
+			if err != nil {
+				return false, err
+			}
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return false, err
+		}
+		return host.EnsureFile(apply, host.File{Path: "/usr/local/bin/simple-vps", Content: data, Owner: "root", Group: "root", Mode: 0755})
+	}})
+	*ops = append(*ops, operation{name: "simple-vps sudoers", run: func(apply host.Apply) (bool, error) {
+		return host.EnsureSudoersFile(apply, "simple-vps", []byte(fmt.Sprintf("%s ALL=(root) NOPASSWD: /usr/local/bin/simple-vps\n", opts.DeployUser)))
+	}})
+}
+
+func addCaddy(ops *[]operation) {
+	*ops = append(*ops, operation{name: "caddy repo", run: func(apply host.Apply) (bool, error) {
+		return host.EnsureAptRepo(apply, host.AptRepo{
+			Name:       "caddy",
+			KeyURL:     "https://dl.cloudsmith.io/public/caddy/stable/gpg.key",
+			KeyPath:    "/usr/share/keyrings/caddy-stable-archive-keyring.gpg",
+			SourcePath: "/etc/apt/sources.list.d/caddy-stable.list",
+			SourceLine: "deb [signed-by=/usr/share/keyrings/caddy-stable-archive-keyring.gpg] https://dl.cloudsmith.io/public/caddy/stable/deb/debian any-version main",
+		})
+	}})
+	*ops = append(*ops, operation{name: "caddy package", run: func(apply host.Apply) (bool, error) { return host.EnsurePackage(apply, "caddy") }})
+	for _, dir := range []host.Directory{
+		{Path: "/etc/caddy/simple-vps", Owner: "root", Group: "root", Mode: 0755},
+		{Path: "/etc/caddy/conf.d", Owner: "root", Group: "root", Mode: 0755},
+		{Path: "/var/www/html", Owner: "caddy", Group: "caddy", Mode: 0755},
+	} {
+		dir := dir
+		*ops = append(*ops, operation{name: "caddy dir " + dir.Path, run: func(apply host.Apply) (bool, error) { return host.EnsureDirectory(apply, dir) }})
+	}
+	*ops = append(*ops, operation{name: "caddy service", run: func(apply host.Apply) (bool, error) {
+		return host.EnsureSystemdUnit(apply, host.SystemdUnit{Name: "caddy.service", Action: host.Started})
+	}})
+	*ops = append(*ops, operation{name: "generate caddy", run: runCommandChangedUnlessOutputContains("simple-vps", []string{"server", "generate-caddy"}, "already up to date")})
+}
+
+func addLitestream(ops *[]operation) {
+	*ops = append(*ops, operation{name: "litestream deb", run: func(apply host.Apply) (bool, error) {
+		arch := litestreamArch(runtime.GOARCH)
+		if arch == "" {
+			return false, fmt.Errorf("unsupported Litestream architecture: %s", runtime.GOARCH)
+		}
+		deb := fmt.Sprintf("/tmp/litestream-%s-linux-%s.deb", litestreamVersion, arch)
+		url := fmt.Sprintf("https://github.com/benbjohnson/litestream/releases/download/v%s/litestream-%s-linux-%s.deb", litestreamVersion, litestreamVersion, arch)
+		installed, err := litestreamInstalled(apply)
+		if err != nil {
+			return false, err
+		}
+		if installed {
+			return false, nil
+		}
+		if apply.CheckMode {
+			return true, nil
+		}
+		result, err := apply.Runner.Run(apply.ContextOrBackground(), host.Command{Program: "curl", Args: []string{"-fsSL", url, "-o", deb}})
+		if err != nil {
+			return false, err
+		}
+		if err := commandOK(result, "curl", []string{"-fsSL", url, "-o", deb}); err != nil {
+			return false, err
+		}
+		result, err = apply.Runner.Run(apply.ContextOrBackground(), host.Command{Program: "apt-get", Args: []string{"install", "-y", deb}})
+		if err != nil {
+			return false, err
+		}
+		return true, commandOK(result, "apt-get", []string{"install", "-y", deb})
+	}})
+}
+
+func litestreamInstalled(apply host.Apply) (bool, error) {
+	result, err := apply.Runner.Run(apply.ContextOrBackground(), host.Command{Program: "dpkg-query", Args: []string{"-W", "-f=${Version}", "litestream"}})
+	if err != nil {
+		return false, err
+	}
+	if result.ExitCode != 0 {
+		return false, nil
+	}
+	return strings.TrimSpace(string(result.Stdout)) == litestreamVersion, nil
+}
+
+func addDocker(ops *[]operation, opts InstallOptions) {
+	*ops = append(*ops, operation{name: "docker repo", run: func(apply host.Apply) (bool, error) {
+		return host.EnsureAptRepo(apply, host.AptRepo{
+			Name:       "docker",
+			KeyURL:     "https://download.docker.com/linux/ubuntu/gpg",
+			KeyPath:    "/usr/share/keyrings/docker.asc",
+			SourcePath: "/etc/apt/sources.list.d/docker.list",
+			SourceLine: "deb [arch=" + debArch(runtime.GOARCH) + " signed-by=/usr/share/keyrings/docker.asc] https://download.docker.com/linux/ubuntu noble stable",
+		})
+	}})
+	for _, pkg := range []string{"docker-ce", "docker-ce-cli", "containerd.io", "docker-buildx-plugin", "docker-compose-plugin"} {
+		pkg := pkg
+		*ops = append(*ops, operation{name: "docker package " + pkg, run: func(apply host.Apply) (bool, error) { return host.EnsurePackage(apply, pkg) }})
+	}
+	*ops = append(*ops, operation{name: "operator docker group", run: func(apply host.Apply) (bool, error) {
+		return host.EnsureGroupMembership(apply, opts.OperatorUser, "docker")
+	}})
+	*ops = append(*ops, operation{name: "docker daemon config", run: func(apply host.Apply) (bool, error) {
+		return host.EnsureFile(apply, host.File{Path: "/etc/docker/daemon.json", Content: []byte("{\n  \"log-driver\": \"json-file\",\n  \"log-opts\": {\n    \"max-size\": \"10m\",\n    \"max-file\": \"3\"\n  }\n}\n"), Owner: "root", Group: "root", Mode: 0644})
+	}})
+	*ops = append(*ops, operation{name: "docker service", run: func(apply host.Apply) (bool, error) {
+		return host.EnsureSystemdUnit(apply, host.SystemdUnit{Name: "docker.service", Action: host.Started})
+	}})
+}
+
+func addTailscale(ops *[]operation, opts InstallOptions) {
+	*ops = append(*ops, operation{name: "tailscale repo", run: func(apply host.Apply) (bool, error) {
+		return host.EnsureAptRepo(apply, host.AptRepo{
+			Name:       "tailscale",
+			KeyURL:     "https://pkgs.tailscale.com/stable/ubuntu/noble.noarmor.gpg",
+			KeyPath:    "/usr/share/keyrings/tailscale-archive-keyring.gpg",
+			SourcePath: "/etc/apt/sources.list.d/tailscale.list",
+			SourceLine: "deb [signed-by=/usr/share/keyrings/tailscale-archive-keyring.gpg] https://pkgs.tailscale.com/stable/ubuntu noble main",
+		})
+	}})
+	*ops = append(*ops, operation{name: "tailscale package", run: func(apply host.Apply) (bool, error) { return host.EnsurePackage(apply, "tailscale") }})
+	*ops = append(*ops, operation{name: "tailscaled service", run: func(apply host.Apply) (bool, error) {
+		return host.EnsureSystemdUnit(apply, host.SystemdUnit{Name: "tailscaled.service", Action: host.Started})
+	}})
+	if opts.TailscaleAuthKey != "" {
+		args := []string{"up", "--auth-key=" + opts.TailscaleAuthKey}
+		if opts.TailscaleHostname != "" {
+			args = append(args, "--hostname="+opts.TailscaleHostname)
+		}
+		*ops = append(*ops, operation{name: "tailscale auth", run: func(apply host.Apply) (bool, error) {
+			active, err := tailscaleRunning(apply)
+			if err != nil {
+				return false, err
+			}
+			if active {
+				return false, nil
+			}
+			return runCommand("tailscale", args...)(apply)
+		}})
+	}
+}
+
+func tailscaleRunning(apply host.Apply) (bool, error) {
+	result, err := apply.Runner.Run(apply.ContextOrBackground(), host.Command{Program: "tailscale", Args: []string{"status", "--json"}})
+	if err != nil {
+		return false, err
+	}
+	if result.ExitCode != 0 {
+		return false, nil
+	}
+	return strings.Contains(string(result.Stdout), `"BackendState":"Running"`), nil
+}
+
+func addCloudflare(ops *[]operation, opts InstallOptions) {
+	*ops = append(*ops, operation{name: "cloudflared repo", run: func(apply host.Apply) (bool, error) {
+		return host.EnsureAptRepo(apply, host.AptRepo{
+			Name:       "cloudflared",
+			KeyURL:     "https://pkg.cloudflare.com/cloudflare-main.gpg",
+			KeyPath:    "/usr/share/keyrings/cloudflare-main.gpg",
+			SourcePath: "/etc/apt/sources.list.d/cloudflared.list",
+			SourceLine: "deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared any main",
+		})
+	}})
+	*ops = append(*ops, operation{name: "cloudflared package", run: func(apply host.Apply) (bool, error) { return host.EnsurePackage(apply, "cloudflared") }})
+	*ops = append(*ops, operation{name: "cloudflared user", run: func(apply host.Apply) (bool, error) {
+		return host.EnsureUser(apply, host.User{Name: "cloudflared", PrimaryGroup: "cloudflared", Shell: "/usr/sbin/nologin", Home: "/var/lib/cloudflared", System: true, CreateHome: true})
+	}})
+	*ops = append(*ops, operation{name: "cloudflared config dir", run: func(apply host.Apply) (bool, error) {
+		return host.EnsureDirectory(apply, host.Directory{Path: "/etc/cloudflared", Owner: "root", Group: "cloudflared", Mode: 0750})
+	}})
+	if opts.CloudflareTunnelToken != "" {
+		*ops = append(*ops, operation{name: "cloudflared token", run: func(apply host.Apply) (bool, error) {
+			return host.EnsureFile(apply, host.File{Path: "/etc/cloudflared/tunnel-token", Content: []byte(strings.TrimSpace(opts.CloudflareTunnelToken) + "\n"), Owner: "root", Group: "cloudflared", Mode: 0640})
+		}})
+	}
+	if opts.CloudflareAPIToken != "" {
+		*ops = append(*ops, operation{name: "cloudflare api token", run: func(apply host.Apply) (bool, error) {
+			return host.EnsureFile(apply, host.File{Path: "/etc/simple-vps/cloudflare-api-token", Content: []byte(strings.TrimSpace(opts.CloudflareAPIToken) + "\n"), Owner: "root", Group: "root", Mode: 0600})
+		}})
+		args := []string{"server", "cloudflare", "setup-tunnel", "--token-file", "/etc/simple-vps/cloudflare-api-token", "--name", "simple-vps-" + hostname()}
+		if opts.CloudflareAccountID != "" {
+			args = append(args, "--account-id", opts.CloudflareAccountID)
+		}
+		*ops = append(*ops, operation{name: "cloudflare setup tunnel", run: func(apply host.Apply) (bool, error) {
+			ready, err := cloudflareTunnelAlreadyConfigured(apply)
+			if err != nil {
+				return false, err
+			}
+			if ready {
+				return false, nil
+			}
+			return runCommand("simple-vps", args...)(apply)
+		}})
+	}
+	if opts.CloudflareTunnelToken != "" || opts.CloudflareAPIToken != "" || opts.CloudflareTunnelConfig != "" {
+		*ops = append(*ops, operation{name: "cloudflared service", run: func(apply host.Apply) (bool, error) {
+			execStart := "/usr/bin/cloudflared tunnel --no-autoupdate run --token-file /etc/cloudflared/tunnel-token"
+			if opts.CloudflareTunnelConfig != "" {
+				execStart = "/usr/bin/cloudflared --config " + opts.CloudflareTunnelConfig + " tunnel run"
+			}
+			return host.EnsureSystemdUnit(apply, host.SystemdUnit{Name: "cloudflared.service", Content: []byte(cloudflaredUnit(execStart)), Action: host.Restarted})
+		}})
+	}
+}
+
+func cloudflareTunnelAlreadyConfigured(apply host.Apply) (bool, error) {
+	if _, err := apply.Runner.ReadFile(apply.ContextOrBackground(), "/etc/cloudflared/tunnel-token"); err != nil {
+		if errors.Is(err, host.ErrNotExist) {
+			return false, nil
+		}
+		return false, err
+	}
+	data, err := apply.Runner.ReadFile(apply.ContextOrBackground(), "/etc/simple-vps/cloudflare.json")
+	if err != nil {
+		if errors.Is(err, host.ErrNotExist) {
+			return false, nil
+		}
+		return false, err
+	}
+	return strings.Contains(string(data.Content), `"tunnel_id"`) && strings.Contains(string(data.Content), `"tunnel_name"`), nil
+}
+
+func runCommand(program string, args ...string) func(host.Apply) (bool, error) {
+	return func(apply host.Apply) (bool, error) {
+		if apply.CheckMode {
+			return true, nil
+		}
+		result, err := apply.Runner.Run(apply.ContextOrBackground(), host.Command{Program: program, Args: args})
+		if err != nil {
+			return false, err
+		}
+		return true, commandOK(result, program, args)
+	}
+}
+
+func runCommandChangedUnlessOutputContains(program string, args []string, unchangedText string) func(host.Apply) (bool, error) {
+	return func(apply host.Apply) (bool, error) {
+		if apply.CheckMode {
+			return true, nil
+		}
+		result, err := apply.Runner.Run(apply.ContextOrBackground(), host.Command{Program: program, Args: args})
+		if err != nil {
+			return false, err
+		}
+		if err := commandOK(result, program, args); err != nil {
+			return false, err
+		}
+		output := strings.ToLower(string(result.Stdout) + string(result.Stderr))
+		return !strings.Contains(output, strings.ToLower(unchangedText)), nil
+	}
+}
+
+func commandOK(result host.CommandResult, program string, args []string) error {
+	if result.ExitCode == 0 {
+		return nil
+	}
+	return fmt.Errorf("command failed: %s %v: exit %d: %s", program, args, result.ExitCode, strings.TrimSpace(string(result.Stderr)))
+}
+
+func desiredHost(opts InstallOptions) state.HostDesired {
+	ingress := state.HostIngressDesired{Expose: state.ExposePublic, Tunnel: state.TunnelNone}
+	if opts.CloudflareTunnel {
+		ingress = state.HostIngressDesired{Expose: state.ExposePrivate, Tunnel: state.TunnelCloudflare}
+	}
+	packages := map[string]state.DesiredPackage{
+		"caddy": {Source: "caddy-apt", Track: "stable"},
+	}
+	if opts.InstallLitestream {
+		packages["litestream"] = state.DesiredPackage{Source: "github-release", Version: litestreamVersion}
+	}
+	if opts.InstallDocker {
+		packages["docker"] = state.DesiredPackage{Source: "docker-apt", Track: "stable"}
+	}
+	return state.HostDesired{
+		Users:   state.HostUsers{Operator: opts.OperatorUser, Deploy: opts.DeployUser},
+		Ingress: ingress,
+		Features: state.HostFeatures{
+			Docker:     opts.InstallDocker,
+			Litestream: opts.InstallLitestream,
+			Runtimes:   []string{},
+		},
+		Packages: packages,
+	}
+}
+
+func hostDesiredChanged(store state.Store, desired state.HostDesired) (bool, error) {
+	current, err := store.ReadHost()
+	if err != nil {
+		if os.IsNotExist(err) {
+			return true, nil
+		}
+		return false, err
+	}
+	currentData, err := json.Marshal(current.Desired)
+	if err != nil {
+		return false, err
+	}
+	nextData, err := json.Marshal(desired)
+	if err != nil {
+		return false, err
+	}
+	return string(currentData) != string(nextData), nil
+}
+
+func writeApplyState(store state.Store, opts InstallOptions, applyID string, startedAt time.Time, finishedAt time.Time, status string, changed int) error {
+	return store.WriteHostState(state.HostObserved{
+		Packages: map[string]state.ObservedPackage{},
+		Ingress:  state.HostIngressObserved{CloudflaredServiceActive: opts.CloudflareTunnel},
+	}, state.HostMeta{
+		SimpleVPSVersion: "dev",
+		LastApply: &state.ApplyMeta{
+			ID:                applyID,
+			StartedAt:         startedAt.Format(time.RFC3339),
+			FinishedAt:        finishedAt.Format(time.RFC3339),
+			Status:            status,
+			OperationsChanged: changed,
+		},
+	})
+}
+
+func normalizeOptions(opts InstallOptions) InstallOptions {
+	if opts.OperatorUser == "" {
+		opts.OperatorUser = "operator"
+	}
+	if opts.DeployUser == "" {
+		opts.DeployUser = "deploy"
+	}
+	if opts.Timezone == "" {
+		opts.Timezone = "UTC"
+	}
+	if opts.Locale == "" {
+		opts.Locale = "en_US.UTF-8"
+	}
+	if opts.Now == nil {
+		opts.Now = time.Now
+	}
+	return opts
+}
+
+func essentialPackages() []string {
+	return []string{
+		"apt-listchanges",
+		"apt-transport-https",
+		"build-essential",
+		"ca-certificates",
+		"curl",
+		"fail2ban",
+		"git",
+		"gnupg",
+		"jq",
+		"rsync",
+		"sudo",
+		"ufw",
+		"unattended-upgrades",
+		"unzip",
+		"wget",
+	}
+}
+
+func debArch(goarch string) string {
+	switch goarch {
+	case "amd64":
+		return "amd64"
+	case "arm64":
+		return "arm64"
+	default:
+		return goarch
+	}
+}
+
+func litestreamArch(goarch string) string {
+	switch goarch {
+	case "amd64":
+		return "x86_64"
+	case "arm64":
+		return "arm64"
+	default:
+		return ""
+	}
+}
+
+func hostname() string {
+	name, err := os.Hostname()
+	if err != nil || name == "" {
+		return "host"
+	}
+	return name
+}
+
+func cloudflaredUnit(execStart string) string {
+	return `[Unit]
+Description=Cloudflare Tunnel
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=cloudflared
+Group=cloudflared
+ExecStart=` + execStart + `
+Restart=on-failure
+RestartSec=5s
+TimeoutStartSec=0
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target
+`
+}
