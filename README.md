@@ -10,13 +10,9 @@ your app repo     ->  simple-vps deploy  ->  live app
 ## Packages
 
 ```text
-.
-  Go module for the unified simple-vps binary. It owns both the app deploy CLI
-  and the privileged server API.
-
-provisioning
-  Ansible roles and host convergence assets. The Go host installer runs these
-  playbooks and installs the Go server binary.
+simple-vps
+  Unified Go binary for the app deploy CLI, host installer, and privileged
+  server API.
 ```
 
 ## Start Here
@@ -52,4 +48,6 @@ make fake-vps-smoke   # Docker-backed Go client/helper smoke
 
 Implementation references:
 
-- [provisioning/SPEC.md](provisioning/SPEC.md)
+- [SPEC.md](SPEC.md)
+- [docs/adr/0001-replace-ansible-with-bounded-go-provisioner.md](docs/adr/0001-replace-ansible-with-bounded-go-provisioner.md)
+- [docs/adr/0002-state-file-layout.md](docs/adr/0002-state-file-layout.md)

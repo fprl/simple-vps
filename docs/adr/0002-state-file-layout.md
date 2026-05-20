@@ -4,7 +4,7 @@
 - **Date**: 2026-05-20
 - **Depends on**: ADR-0001 (bounded Go provisioner). This ADR describes the
   files that provisioner reads and writes.
-- **Related**: `docs/ansible-replacement-review.md`.
+- **Related**: ADR-0001.
 
 ## Context
 

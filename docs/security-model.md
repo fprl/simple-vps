@@ -93,7 +93,7 @@ bootstrap user   root or provider-created initial user
                  not a steady-state Simple VPS identity
 
 operator user    human/admin identity for host convergence and recovery
-                 allowed to run Ansible with root privileges
+                 allowed to run the Go host provisioner with root privileges
 
 deploy user      identity used by the app CLI and CI
                  allowed to invoke only the server-side Simple VPS helper
@@ -129,14 +129,13 @@ reported from that source of truth too.
 
 ## External Hardening References
 
-[`devsec.hardening`](https://github.com/dev-sec/ansible-collection-hardening)
-is a useful checklist, not a default dependency. The collection provides
-hardening roles for Linux, SSH, nginx, and MySQL, and its SSH role deliberately
-disables root login.
+A strict hardening checklist is useful reference material, not a default
+dependency. External hardening role collections often cover Linux, SSH, nginx,
+and MySQL, and many deliberately disable root login.
 
-Do not add it blindly to the default install. It overlaps with Simple VPS-owned
+Do not add those checks blindly to the default install. They overlap with Simple VPS-owned
 behavior: SSH bootstrap order, Tailscale reachability, UFW policy, optional
 Docker networking, and recovery access. If Simple VPS adopts pieces from it,
-they should be copied into explicit local tasks or exposed behind an optional
+they should be copied into explicit Go primitives or exposed behind an optional
 strict hardening profile with VM coverage for bootstrap, rerun idempotency,
 deploy, rollback, Tailscale access, Cloudflare Tunnel, and recovery.

@@ -1,8 +1,7 @@
 # Simple VPS Spec
 
 Source of truth for the Simple VPS product. Implementation details live in
-`provisioning/SPEC.md`, `cmd/`, and `internal/`; this file documents the public
-contract.
+`cmd/`, `internal/`, and `docs/adr/`; this file documents the public contract.
 
 ## Product
 
@@ -26,7 +25,8 @@ wrangler clone.
 
 ## Non-Goals
 
-- No Docker.
+- No Docker as the app deployment runtime. The host installer can install
+  Docker as an opt-in system package for users who need it outside Simple VPS.
 - No Kubernetes.
 - No managed bindings (KV/D1/queues abstraction).
 - No multi-provider abstraction.
@@ -75,8 +75,8 @@ simple-vps host install [install options]
 ```
 
 `status` and `doctor` report on host readiness through SSH. `host install` runs
-the Ansible-backed host installer from the Go binary. The public `install.sh`
-entrypoint remains as a tiny bootstrap for the one-line install path.
+the bounded Go host provisioner from the Go binary. The public `install.sh`
+entrypoint is a tiny bootstrap for the one-line install path.
 
 ### Diagnostics
 
@@ -181,21 +181,20 @@ The expected host security posture is documented in
 
 ```text
 SPEC.md                          public product contract (this file)
-provisioning/SPEC.md             host installer + Ansible roles
 cmd/, internal/                  active Go implementation
+docs/adr/                        architecture decisions
 ```
 
-The active implementation lives in the root Go module. Ansible remains the
-host convergence layer, but the CLI and privileged server API are both served
-by the compiled Go `simple-vps` binary.
+The active implementation lives in the root Go module. The CLI, host
+provisioner, and privileged server API are served by the compiled Go
+`simple-vps` binary.
 
 ## Implementation Direction
 
-The root Go module owns both sides of the product: the public deploy CLI and
-the privileged host API. Ansible remains the host convergence engine.
+The root Go module owns all product behavior: the public deploy CLI, the host
+provisioner, and the privileged host API.
 
-New behavior lands in Go. The maintained implementation is Go plus the
-provisioning shell/Ansible layer.
+New behavior lands in Go.
 
 ## Versioning
 
