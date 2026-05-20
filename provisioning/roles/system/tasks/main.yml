@@ -42,7 +42,7 @@
   user:
     name: "{{ operator_user }}"
     group: "{{ operator_user }}"
-    shell: "{{ simple_vps_admin_shell | default('/bin/bash') }}"
+    shell: "{{ simple_vps_operator_shell | default('/bin/bash') }}"
     groups: sudo
     append: yes
     create_home: yes

@@ -109,7 +109,7 @@ func TestPublishCommandsPutFlagsBeforeHost(t *testing.T) {
 		{
 			name: "cloudflare",
 			got:  cloudflarePublishCommand("api", "api.example.com"),
-			want: "sudo simple-vps cloudflare publish --app api api.example.com",
+			want: "sudo simple-vps server cloudflare publish --app api api.example.com",
 		},
 		{
 			name: "proxy",
@@ -118,7 +118,7 @@ func TestPublishCommandsPutFlagsBeforeHost(t *testing.T) {
 				Type:    "proxy",
 				Service: "web",
 			}),
-			want: "sudo simple-vps route proxy --port 3000 --app api api.example.com",
+			want: "sudo simple-vps server route proxy --port 3000 --app api api.example.com",
 		},
 		{
 			name: "static",
@@ -126,7 +126,7 @@ func TestPublishCommandsPutFlagsBeforeHost(t *testing.T) {
 				Host: "static.example.com",
 				Type: "static",
 			}),
-			want: "sudo simple-vps route static --root /var/apps/api/current --app api static.example.com",
+			want: "sudo simple-vps server route static --root /var/apps/api/current --app api static.example.com",
 		},
 		{
 			name: "redirect",
@@ -135,7 +135,7 @@ func TestPublishCommandsPutFlagsBeforeHost(t *testing.T) {
 				Type: "redirect",
 				To:   "https://new.example.com",
 			}),
-			want: "sudo simple-vps route redirect --to https://new.example.com --app api old.example.com",
+			want: "sudo simple-vps server route redirect --to https://new.example.com --app api old.example.com",
 		},
 	}
 

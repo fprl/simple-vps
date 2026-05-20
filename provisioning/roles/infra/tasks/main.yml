@@ -182,11 +182,6 @@
     content: "{{ deploy_user }} ALL=(root) NOPASSWD: /usr/local/bin/simple-vps\n"
     validate: 'visudo -cf %s'
 
-- name: Remove legacy Simple Deploy sudoers file
-  file:
-    path: /etc/sudoers.d/simple-deploy
-    state: absent
-
 - name: Add Caddy GPG key
   apt_key:
     url: https://dl.cloudsmith.io/public/caddy/stable/gpg.key
@@ -235,7 +230,7 @@
     state: started
 
 - name: Generate Simple VPS Caddyfile from state
-  command: simple-vps generate-caddy
+  command: simple-vps server generate-caddy
   register: infra_generate_caddy
   changed_when: "'Generated ' in infra_generate_caddy.stdout"
 
@@ -335,7 +330,7 @@
 
 - name: Create Cloudflare Tunnel through API
   command: >-
-    simple-vps cloudflare setup-tunnel
+    simple-vps server cloudflare setup-tunnel
     --token-file /etc/simple-vps/cloudflare-api-token
     --name "{{ simple_vps_cloudflare_tunnel_name }}"
     {% if simple_vps_cloudflare_account_id | default('') | length > 0 -%}

@@ -27,15 +27,6 @@ func (c routeListCmd) Run() error {
 	return nil
 }
 
-type routesCompatCmd struct {
-	JSON bool `name:"json" help:"Output JSON."`
-}
-
-func (c routesCompatCmd) Run() error {
-	CmdRoutes(c.JSON)
-	return nil
-}
-
 type routeProxyCmd struct {
 	Host    string   `arg:"" help:"Route hostname."`
 	Port    int      `required:"" help:"Local app port."`
@@ -135,39 +126,6 @@ func (c routeRemoveCmd) Run() error {
 		return nil
 	}
 
-	host, err := state.NormalizeHost(c.Host)
-	if err != nil {
-		utils.Die(err.Error(), 1)
-	}
-	removeRoute(host, c.Force)
-	return nil
-}
-
-type publishCompatCmd struct {
-	Host  string `required:"" help:"Host to route."`
-	Port  int    `required:"" help:"Port to route to."`
-	Force bool   `help:"Force routing."`
-}
-
-func (c publishCompatCmd) Run() error {
-	route, err := state.NormalizeRoute(state.StateRoute{
-		Host: c.Host,
-		Type: "proxy",
-		Port: &c.Port,
-	})
-	if err != nil {
-		utils.Die(err.Error(), 1)
-	}
-	upsertRoute(route, c.Force)
-	return nil
-}
-
-type unpublishCompatCmd struct {
-	Host  string `required:"" help:"Host to unpublish."`
-	Force bool   `help:"Force unpublish."`
-}
-
-func (c unpublishCompatCmd) Run() error {
 	host, err := state.NormalizeHost(c.Host)
 	if err != nil {
 		utils.Die(err.Error(), 1)

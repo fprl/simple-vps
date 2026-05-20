@@ -11,8 +11,8 @@ your app repo     ->  simple-vps deploy  ->  live app
 
 ```text
 .
-  Go module for the unified simple-vps binary. This is the migration target for
-  both the app deploy CLI and the privileged server helper.
+  Go module for the unified simple-vps binary. It owns both the app deploy CLI
+  and the privileged server API.
 
 provisioning
   Ansible roles and host convergence assets. The Go host installer runs these

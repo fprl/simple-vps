@@ -1,10 +1,6 @@
 package main
 
 import (
-	"fmt"
-	"os"
-	"strings"
-
 	"github.com/alecthomas/kong"
 	"github.com/fprl/simple-vps/cmd/client"
 	"github.com/fprl/simple-vps/cmd/helper"
@@ -12,20 +8,21 @@ import (
 )
 
 type cli struct {
-	Init     initCmd     `cmd:"" help:"Create a simple-vps.toml manifest."`
-	Check    checkCmd    `cmd:"" help:"Validate an app manifest."`
-	Setup    setupCmd    `cmd:"" help:"Create the app user and directories on a host."`
-	Deploy   deployCmd   `cmd:"" help:"Deploy an app release."`
-	Rollback rollbackCmd `cmd:"" help:"Rollback an app to a previous release."`
-	Destroy  destroyCmd  `cmd:"" help:"Destroy app services, routes, and optionally app data."`
-	Restart  restartCmd  `cmd:"" help:"Restart one app service."`
-	Status   statusCmd   `cmd:"" help:"Show app status, or server status when run on the host."`
-	Logs     logsCmd     `cmd:"" help:"Show app service logs."`
-	SSH      sshCmd      `cmd:"ssh" help:"Open an SSH session to an app environment."`
-	Secret   secretCmd   `cmd:"" help:"Manage remote app secrets."`
-	Env      envCmd      `cmd:"" help:"Manage remote app environment files."`
-	Host     hostCmd     `cmd:"" help:"Install or inspect a Simple VPS host."`
-	Route    routeCmd    `cmd:"" help:"Inspect routes from a laptop or CI runner."`
+	Init     initCmd          `cmd:"" help:"Create a simple-vps.toml manifest."`
+	Check    checkCmd         `cmd:"" help:"Validate an app manifest."`
+	Setup    setupCmd         `cmd:"" help:"Create the app user and directories on a host."`
+	Deploy   deployCmd        `cmd:"" help:"Deploy an app release."`
+	Rollback rollbackCmd      `cmd:"" help:"Rollback an app to a previous release."`
+	Destroy  destroyCmd       `cmd:"" help:"Destroy app services, routes, and optionally app data."`
+	Restart  restartCmd       `cmd:"" help:"Restart one app service."`
+	Status   statusCmd        `cmd:"" help:"Show app status."`
+	Logs     logsCmd          `cmd:"" help:"Show app service logs."`
+	SSH      sshCmd           `cmd:"ssh" help:"Open an SSH session to an app environment."`
+	Secret   secretCmd        `cmd:"" help:"Manage remote app secrets."`
+	Env      envCmd           `cmd:"" help:"Manage remote app environment files."`
+	Host     hostCmd          `cmd:"" help:"Install or inspect a Simple VPS host."`
+	Route    routeCmd         `cmd:"" help:"Inspect routes from a laptop or CI runner."`
+	Server   helper.ServerCmd `cmd:"" hidden:"" help:"Privileged host API."`
 }
 
 type initCmd struct{}
@@ -97,14 +94,10 @@ func (c restartCmd) Run() error {
 }
 
 type statusCmd struct {
-	Env string `arg:"" optional:"" help:"Environment to inspect. Omit on a host for server status."`
+	Env string `arg:"" help:"Environment to inspect."`
 }
 
 func (c statusCmd) Run() error {
-	if c.Env == "" {
-		helper.Run("status", nil)
-		return nil
-	}
 	client.CmdStatus(".", c.Env)
 	return nil
 }
@@ -184,11 +177,6 @@ type hostCmd struct {
 	Install hostInstallCmd `cmd:"" help:"Install or converge a host."`
 }
 
-func (hostCmd) Run() error {
-	client.CmdHost(nil)
-	return nil
-}
-
 type hostStatusCmd struct {
 	Server string `help:"SSH target like deploy@example.com."`
 }
@@ -215,10 +203,102 @@ func (c hostDoctorCmd) Run() error {
 	return nil
 }
 
-type hostInstallCmd struct{}
+type hostInstallCmd struct {
+	Mode                     string `enum:"auto,local,remote" default:"auto" help:"Execution mode."`
+	TargetHost               string `name:"host" help:"Target VPS host for remote mode."`
+	BootstrapUser            string `help:"SSH user for remote bootstrap."`
+	SSHKey                   string `name:"ssh-key" help:"SSH private key for remote mode."`
+	SSHPublicKeyFile         string `name:"ssh-public-key-file" help:"SSH public key file for operator access."`
+	OperatorSSHPublicKeyFile string `help:"SSH public key file for operator access."`
+	DeploySSHPublicKeyFile   string `help:"SSH public key file for deploy access."`
+	SharedKey                bool   `help:"Reuse operator SSH key for deploy."`
+	OperatorUser             string `help:"Operator user."`
+	DeployUser               string `help:"Deploy user."`
+	Timezone                 string `help:"Host timezone."`
+	Locale                   string `help:"Host locale."`
+	Tailscale                *bool  `negatable:"" help:"Install and configure Tailscale."`
+	TailscaleAuthKey         string `help:"Tailscale auth key."`
+	TailscaleHostname        string `help:"Tailscale hostname."`
+	CloudflareTunnel         *bool  `negatable:"" help:"Install and configure Cloudflare Tunnel."`
+	CloudflareAPIToken       string `help:"Cloudflare API token."`
+	CloudflareAccountID      string `help:"Cloudflare account ID."`
+	CloudflareTunnelToken    string `help:"Cloudflare tunnel token."`
+	CloudflareTunnelConfig   string `help:"Cloudflare tunnel config path."`
+	InstallDocker            *bool  `name:"docker" negatable:"" help:"Install Docker."`
+	InstallLitestream        *bool  `name:"litestream" negatable:"" help:"Install Litestream."`
+	CheckMode                bool   `name:"check" help:"Run Ansible in check mode."`
+	AssumeYes                bool   `name:"yes" help:"Non-interactive mode."`
+}
 
-func (hostInstallCmd) Run() error {
-	return hostinstall.Run(nil)
+func (c hostInstallCmd) Run() error {
+	opts := hostinstall.DefaultOptions(nil)
+	if c.Mode != "" {
+		opts.Mode = c.Mode
+	}
+	if c.TargetHost != "" {
+		opts.TargetHost = c.TargetHost
+	}
+	if c.BootstrapUser != "" {
+		opts.BootstrapUser = c.BootstrapUser
+	}
+	if c.SSHKey != "" {
+		opts.SSHKey = c.SSHKey
+	}
+	if c.SSHPublicKeyFile != "" {
+		opts.SSHPublicKeyFile = c.SSHPublicKeyFile
+	}
+	if c.OperatorSSHPublicKeyFile != "" {
+		opts.OperatorSSHPublicKeyFile = c.OperatorSSHPublicKeyFile
+	}
+	if c.DeploySSHPublicKeyFile != "" {
+		opts.DeploySSHPublicKeyFile = c.DeploySSHPublicKeyFile
+	}
+	if c.OperatorUser != "" {
+		opts.OperatorUser = c.OperatorUser
+	}
+	if c.DeployUser != "" {
+		opts.DeployUser = c.DeployUser
+	}
+	if c.Timezone != "" {
+		opts.Timezone = c.Timezone
+	}
+	if c.Locale != "" {
+		opts.Locale = c.Locale
+	}
+	if c.Tailscale != nil {
+		opts.Tailscale = *c.Tailscale
+	}
+	if c.TailscaleAuthKey != "" {
+		opts.TailscaleAuthKey = c.TailscaleAuthKey
+	}
+	if c.TailscaleHostname != "" {
+		opts.TailscaleHostname = c.TailscaleHostname
+	}
+	if c.CloudflareTunnel != nil {
+		opts.CloudflareTunnel = *c.CloudflareTunnel
+	}
+	if c.CloudflareAPIToken != "" {
+		opts.CloudflareAPIToken = c.CloudflareAPIToken
+	}
+	if c.CloudflareAccountID != "" {
+		opts.CloudflareAccountID = c.CloudflareAccountID
+	}
+	if c.CloudflareTunnelToken != "" {
+		opts.CloudflareTunnelToken = c.CloudflareTunnelToken
+	}
+	if c.CloudflareTunnelConfig != "" {
+		opts.CloudflareTunnelConfig = c.CloudflareTunnelConfig
+	}
+	if c.InstallDocker != nil {
+		opts.InstallDocker = *c.InstallDocker
+	}
+	if c.InstallLitestream != nil {
+		opts.InstallLitestream = *c.InstallLitestream
+	}
+	opts.SharedKey = c.SharedKey
+	opts.CheckMode = c.CheckMode
+	opts.AssumeYes = c.AssumeYes
+	return hostinstall.NewInstaller().RunOptions(opts)
 }
 
 type routeCmd struct {
@@ -231,15 +311,6 @@ type routeListCmd struct {
 }
 
 func (c routeListCmd) Run() error {
-	if c.Server == "" && !fileExists("simple-vps.toml") {
-		args := []string{"list"}
-		if c.JSON {
-			args = append(args, "--json")
-		}
-		helper.Run("route", args)
-		return nil
-	}
-
 	args := []string{"list"}
 	if c.JSON {
 		args = append(args, "--json")
@@ -252,11 +323,6 @@ func (c routeListCmd) Run() error {
 }
 
 func main() {
-	args := os.Args[1:]
-	if runHostInstall(args) || runInternalCommand(args) {
-		return
-	}
-
 	parser := kong.Parse(
 		&cli{},
 		kong.Name("simple-vps"),
@@ -264,70 +330,4 @@ func main() {
 		kong.UsageOnError(),
 	)
 	parser.FatalIfErrorf(parser.Run())
-}
-
-func runHostInstall(args []string) bool {
-	if len(args) < 2 || args[0] != "host" || args[1] != "install" {
-		return false
-	}
-	if err := hostinstall.Run(args[2:]); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %s\n", err)
-		os.Exit(1)
-	}
-	return true
-}
-
-func runInternalCommand(args []string) bool {
-	if len(args) == 0 {
-		return false
-	}
-
-	switch args[0] {
-	case "app", "cloudflare", "generate-caddy", "doctor", "publish", "unpublish", "routes":
-		helper.Run(args[0], args[1:])
-		return true
-	case "route":
-		if shouldUseInternalRoute(args[1:]) {
-			helper.Run("route", args[1:])
-			return true
-		}
-	}
-
-	return false
-}
-
-func shouldUseInternalRoute(args []string) bool {
-	if hasHelpFlag(args) {
-		return false
-	}
-	if len(args) == 0 || args[0] != "list" {
-		return true
-	}
-	if hasServerFlag(args) {
-		return false
-	}
-	return !fileExists("simple-vps.toml")
-}
-
-func hasHelpFlag(args []string) bool {
-	for _, arg := range args {
-		if arg == "--help" || arg == "-h" {
-			return true
-		}
-	}
-	return false
-}
-
-func hasServerFlag(args []string) bool {
-	for _, arg := range args {
-		if arg == "--server" || strings.HasPrefix(arg, "--server=") {
-			return true
-		}
-	}
-	return false
-}
-
-func fileExists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
 }

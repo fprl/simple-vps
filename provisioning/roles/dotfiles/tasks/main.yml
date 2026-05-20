@@ -9,16 +9,16 @@
 
 - name: Initialize Chezmoi with dotfiles repo (non-interactive, may fail)
   become: yes
-  become_user: "{{ admin_user }}"
+  become_user: "{{ operator_user }}"
   shell: |
-    export HOME="/home/{{ admin_user }}"
+    export HOME="/home/{{ operator_user }}"
     export GIT_TERMINAL_PROMPT=0
     export GIT_SSH_COMMAND='ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=7'
     chezmoi init {{ github_repo }} --apply
   args:
-    creates: "/home/{{ admin_user }}/.local/share/chezmoi"
+    creates: "/home/{{ operator_user }}/.local/share/chezmoi"
   environment:
-    HOME: "/home/{{ admin_user }}"
+    HOME: "/home/{{ operator_user }}"
   ignore_errors: yes
   when:
     - not ansible_check_mode

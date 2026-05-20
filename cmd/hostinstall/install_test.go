@@ -10,24 +10,20 @@ func TestBuildPlanAndRenderExtraVars(t *testing.T) {
 	operatorKeyFile := writeKeyFile(t, "ssh-ed25519 AAAAoperator test-operator\n")
 	deployKeyFile := writeKeyFile(t, "ssh-ed25519 AAAAdeploy test-deploy\n")
 
-	opts, err := ParseOptions([]string{
-		"--mode", "remote",
-		"--host", "203.0.113.10",
-		"--bootstrap-user", "root",
-		"--operator-user", "ops",
-		"--deploy-user", "deployer",
-		"--operator-ssh-public-key-file", operatorKeyFile,
-		"--deploy-ssh-public-key-file", deployKeyFile,
-		"--tailscale-auth-key", "tskey-auth-test",
-		"--cloudflare-api-token", "cf-token-test",
-		"--cloudflare-account-id", "account-test",
-		"--docker",
-		"--no-litestream",
-		"--check",
-	}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	opts := DefaultOptions(nil)
+	opts.Mode = "remote"
+	opts.TargetHost = "203.0.113.10"
+	opts.BootstrapUser = "root"
+	opts.OperatorUser = "ops"
+	opts.DeployUser = "deployer"
+	opts.OperatorSSHPublicKeyFile = operatorKeyFile
+	opts.DeploySSHPublicKeyFile = deployKeyFile
+	opts.TailscaleAuthKey = "tskey-auth-test"
+	opts.CloudflareAPIToken = "cf-token-test"
+	opts.CloudflareAccountID = "account-test"
+	opts.InstallDocker = true
+	opts.InstallLitestream = false
+	opts.CheckMode = true
 
 	plan, err := BuildPlan(opts, false, false)
 	if err != nil {
@@ -69,17 +65,13 @@ func TestBuildPlanAndRenderExtraVars(t *testing.T) {
 func TestSharedKeyRendersForOperatorAndDeploy(t *testing.T) {
 	operatorKeyFile := writeKeyFile(t, "ssh-ed25519 AAAAoperator test-operator\n")
 
-	opts, err := ParseOptions([]string{
-		"--mode", "remote",
-		"--host", "203.0.113.11",
-		"--operator-ssh-public-key-file", operatorKeyFile,
-		"--shared-key",
-		"--no-tailscale",
-		"--no-cloudflare-tunnel",
-	}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	opts := DefaultOptions(nil)
+	opts.Mode = "remote"
+	opts.TargetHost = "203.0.113.11"
+	opts.OperatorSSHPublicKeyFile = operatorKeyFile
+	opts.SharedKey = true
+	opts.Tailscale = false
+	opts.CloudflareTunnel = false
 
 	plan, err := BuildPlan(opts, false, false)
 	if err != nil {
@@ -104,18 +96,14 @@ func TestSharedKeyRendersForOperatorAndDeploy(t *testing.T) {
 }
 
 func TestCloudflareTokenRequiresTunnel(t *testing.T) {
-	opts, err := ParseOptions([]string{
-		"--mode", "remote",
-		"--host", "203.0.113.12",
-		"--deploy-ssh-public-key-file", "deploy.pub",
-		"--no-cloudflare-tunnel",
-		"--cloudflare-api-token", "cf-token-test",
-	}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	opts := DefaultOptions(nil)
+	opts.Mode = "remote"
+	opts.TargetHost = "203.0.113.12"
+	opts.DeploySSHPublicKeyFile = "deploy.pub"
+	opts.CloudflareTunnel = false
+	opts.CloudflareAPIToken = "cf-token-test"
 
-	_, err = BuildPlan(opts, false, false)
+	_, err := BuildPlan(opts, false, false)
 	if err == nil {
 		t.Fatal("expected invalid Cloudflare options to fail")
 	}
@@ -125,10 +113,7 @@ func TestCloudflareTokenRequiresTunnel(t *testing.T) {
 }
 
 func TestAutoModeChoosesLocalOnlyOnRootHost(t *testing.T) {
-	opts, err := ParseOptions(nil, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	opts := DefaultOptions(nil)
 
 	plan, err := BuildPlan(opts, true, true)
 	if err != nil {

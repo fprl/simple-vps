@@ -7,9 +7,13 @@ import (
 	"github.com/alecthomas/kong"
 )
 
-func parseServerCommand(t *testing.T, args ...string) *serverCLI {
+func parseServerCommand(t *testing.T, args ...string) *ServerCmd {
 	t.Helper()
-	cli := &serverCLI{}
+	previousRequireRoot := requireRoot
+	requireRoot = func() error { return nil }
+	t.Cleanup(func() { requireRoot = previousRequireRoot })
+
+	cli := &ServerCmd{}
 	parser, err := kong.New(cli, kong.Name("simple-vps"))
 	if err != nil {
 		t.Fatalf("parser setup failed: %v", err)
@@ -25,9 +29,9 @@ func TestServerCLIParsesPrivilegedCommands(t *testing.T) {
 		{"status"},
 		{"doctor"},
 		{"route", "list", "--json"},
-		{"route", "proxy", "api.example.com", "--port", "3000", "--app", "api", "--header", "X-Test: yes"},
-		{"route", "static", "static.example.com", "--root", "/var/apps/api/current", "--app", "api", "--header", "Cache-Control: no-store"},
-		{"route", "redirect", "old.example.com", "--to", "https://new.example.com", "--app", "api"},
+		{"route", "proxy", "--port", "3000", "--app", "api", "--header", "X-Test: yes", "api.example.com"},
+		{"route", "static", "--root", "/var/apps/api/current", "--app", "api", "--header", "Cache-Control: no-store", "static.example.com"},
+		{"route", "redirect", "--to", "https://new.example.com", "--app", "api", "old.example.com"},
 		{"route", "remove", "--app", "api"},
 		{"cloudflare", "setup-tunnel", "--name", "simple-vps", "--account-id", "account-test", "--token-file", "/tmp/token"},
 		{"cloudflare", "publish", "--app", "api", "api.example.com"},
@@ -42,9 +46,6 @@ func TestServerCLIParsesPrivilegedCommands(t *testing.T) {
 		{"app", "daemon-reload"},
 		{"app", "service", "restart", "api", "web"},
 		{"app", "run-as", "api", "--cwd", "/var/apps/api/current", "--", "npm", "install"},
-		{"publish", "--host", "api.example.com", "--port", "3000"},
-		{"unpublish", "--host", "api.example.com"},
-		{"routes", "--json"},
 	}
 
 	for _, tt := range tests {

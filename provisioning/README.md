@@ -50,17 +50,14 @@ public hostnames and CNAMEs, `SIMPLE_VPS_CLOUDFLARE_API_TOKEN` /
 Server-local route management:
 
 ```bash
-simple-vps status
-simple-vps route list
-simple-vps route proxy example.com --port 3000
-simple-vps route static data.example.com --root /var/apps/data/current/public
-simple-vps route redirect old.example.com --to https://new.example.com
-simple-vps route remove example.com
-simple-vps route remove --app my-app
+sudo simple-vps server status
+sudo simple-vps server route list
+sudo simple-vps server route proxy example.com --port 3000
+sudo simple-vps server route static data.example.com --root /var/apps/data/current/public
+sudo simple-vps server route redirect old.example.com --to https://new.example.com
+sudo simple-vps server route remove example.com
+sudo simple-vps server route remove --app my-app
 ```
-
-`publish`, `unpublish`, and `routes` remain compatibility aliases for simple
-proxy routes.
 
 ## Quick Start
 

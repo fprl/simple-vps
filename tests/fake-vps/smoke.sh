@@ -255,7 +255,7 @@ ssh fake-vps test -L /var/apps/api/current
 ssh fake-vps test -L /var/apps/api/current/db
 ssh fake-vps curl -fsS http://127.0.0.1:3000/health >/dev/null
 ssh fake-vps curl -fsS http://127.0.0.1:3000/ | grep -q '^mode-a$'
-ssh fake-vps sudo simple-vps route list --json | grep -q '"host": "api.example.com"'
+ssh fake-vps sudo simple-vps server route list --json | grep -q '"host": "api.example.com"'
 (cd "$mode_a" && simple_vps status production) | grep -q 'service web: active'
 (cd "$mode_a" && simple_vps logs production web) | grep -q 'server:mode-a'
 printf 'API_KEY=from-env\n' > "$mode_a/production.env"
@@ -392,12 +392,12 @@ ssh fake-vps curl -fsS http://127.0.0.1:3001/health >/dev/null
 ssh fake-vps grep -q '^asset$' /var/apps/web/current/public/asset.txt
 ssh fake-vps test -f /var/apps/web/current/package-lock.json
 ssh fake-vps test ! -e /var/apps/web/current/simple-vps.toml
-ssh fake-vps sudo simple-vps route list --json | grep -q '"host": "web.example.com"'
+ssh fake-vps sudo simple-vps server route list --json | grep -q '"host": "web.example.com"'
 (cd "$mode_b" && simple_vps destroy production --yes)
 ssh fake-vps test -d /var/apps/web/shared
 ssh fake-vps test -d /var/apps/web/releases
 ssh fake-vps test ! -e /var/apps/web/current
-if ssh fake-vps sudo simple-vps route list --json | grep -q '"app": "web"'; then
+if ssh fake-vps sudo simple-vps server route list --json | grep -q '"app": "web"'; then
   echo "destroy left web routes behind" >&2
   exit 1
 fi
@@ -434,10 +434,10 @@ commit_fixture "$mode_c"
 ssh fake-vps curl -fsS http://127.0.0.1:3002/health >/dev/null
 ssh fake-vps test ! -e /var/apps/bundle/current/package.json
 ssh fake-vps test ! -e /var/apps/bundle/current/simple-vps.toml
-ssh fake-vps sudo simple-vps route list --json | grep -q '"host": "bundle.example.com"'
+ssh fake-vps sudo simple-vps server route list --json | grep -q '"host": "bundle.example.com"'
 (cd "$mode_c" && simple_vps destroy production --purge --yes --confirm bundle)
 ssh fake-vps test ! -e /var/apps/bundle
-if ssh fake-vps sudo simple-vps route list --json | grep -q '"app": "bundle"'; then
+if ssh fake-vps sudo simple-vps server route list --json | grep -q '"app": "bundle"'; then
   echo "purge left bundle routes behind" >&2
   exit 1
 fi

@@ -14,7 +14,7 @@ make provisioning-test
 
 For installer or role changes, validate both paths:
 
-1. Existing VPS (compatibility + idempotency)
+1. Existing VPS (idempotency)
 2. Fresh VPS (true bootstrap)
 
 Recommended remote-mode test sequence:

@@ -59,7 +59,7 @@ func DeployTmpDir() string {
 	if p := os.Getenv("SIMPLE_VPS_DEPLOY_TMP_DIR"); p != "" {
 		return p
 	}
-	return "/tmp/simple-deploy"
+	return "/tmp/simple-vps-deploy"
 }
 
 func RequireRoot() {

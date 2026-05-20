@@ -90,7 +90,6 @@ func doctorIdentityFindings() []string {
 	helperFile := filepath.Join(dir, "simple-vps")
 
 	broadUsers := allSudoersUsersMatching(BroadSudoRe)
-	helperUsers := allSudoersUsersMatching(HelperSudoRe)
 
 	operatorUsersMap := sudoersUsersMatching(operatorFile, BroadSudoRe)
 	deployUsersMap := sudoersUsersMatching(helperFile, HelperSudoRe)
@@ -132,12 +131,6 @@ func doctorIdentityFindings() []string {
 		if broadUsers[deployUser] {
 			findings = append(findings, fmt.Sprintf("deploy user %s has broad passwordless sudo", deployUser))
 		}
-	}
-
-	if broadUsers["admin"] && helperUsers["admin"] {
-		findings = append(findings, "legacy admin conflation is present")
-	} else if broadUsers["admin"] && !operatorUsersMap["admin"] {
-		findings = append(findings, "legacy broad admin sudoers grant is present")
 	}
 
 	return findings

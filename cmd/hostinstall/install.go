@@ -36,8 +36,6 @@ type Options struct {
 	CheckMode                bool
 	AssumeYes                bool
 	SharedKey                bool
-	Interactive              bool
-	PassthroughArgs          []string
 }
 
 type Plan struct {
@@ -93,23 +91,7 @@ func NewInstaller() *Installer {
 	}
 }
 
-func Run(args []string) error {
-	return NewInstaller().Run(args)
-}
-
-func (i *Installer) Run(args []string) error {
-	opts, err := ParseOptions(args, i.Env)
-	if err != nil {
-		if errors.Is(err, errHelp) {
-			PrintUsage(i.Stdout)
-			return nil
-		}
-		return err
-	}
-	if opts.Interactive {
-		return errors.New("--interactive is not available in the Go installer yet; pass explicit flags or use --yes.")
-	}
-
+func (i *Installer) RunOptions(opts Options) error {
 	provisioningDir, repoRoot, err := locateProvisioningDir()
 	if err != nil {
 		return err
@@ -153,9 +135,9 @@ func (i *Installer) Run(args []string) error {
 
 	switch plan.Mode {
 	case "remote":
-		err = i.runRemote(plan, provisioningDir, repoRoot, opts.PassthroughArgs)
+		err = i.runRemote(plan, provisioningDir, repoRoot)
 	case "local":
-		err = i.runLocal(plan, provisioningDir, repoRoot, opts.PassthroughArgs)
+		err = i.runLocal(plan, provisioningDir, repoRoot)
 	default:
 		err = fmt.Errorf("invalid mode: %s", plan.Mode)
 	}
@@ -167,8 +149,11 @@ func (i *Installer) Run(args []string) error {
 	return nil
 }
 
-func ParseOptions(args []string, env map[string]string) (Options, error) {
-	opts := Options{
+func DefaultOptions(env map[string]string) Options {
+	if env == nil {
+		env = environMap()
+	}
+	return Options{
 		Mode:                     "auto",
 		BootstrapUser:            "root",
 		OperatorSSHPublicKeyFile: env["SIMPLE_VPS_OPERATOR_SSH_PUBLIC_KEY_FILE"],
@@ -188,189 +173,6 @@ func ParseOptions(args []string, env map[string]string) (Options, error) {
 		InstallDocker:            envBool(env, "SIMPLE_VPS_INSTALL_DOCKER", false),
 		InstallLitestream:        envBool(env, "SIMPLE_VPS_INSTALL_LITESTREAM", true),
 	}
-
-	for idx := 0; idx < len(args); {
-		arg := args[idx]
-		value := func() (string, error) {
-			if idx+1 >= len(args) {
-				return "", fmt.Errorf("%s requires a value", arg)
-			}
-			idx += 2
-			return args[idx-1], nil
-		}
-
-		switch arg {
-		case "--mode":
-			v, err := value()
-			if err != nil {
-				return Options{}, err
-			}
-			opts.Mode = v
-		case "--host", "--ip":
-			v, err := value()
-			if err != nil {
-				return Options{}, err
-			}
-			opts.TargetHost = v
-		case "--bootstrap-user":
-			v, err := value()
-			if err != nil {
-				return Options{}, err
-			}
-			opts.BootstrapUser = v
-		case "--ssh-key":
-			v, err := value()
-			if err != nil {
-				return Options{}, err
-			}
-			opts.SSHKey = v
-		case "--ssh-public-key-file":
-			v, err := value()
-			if err != nil {
-				return Options{}, err
-			}
-			opts.SSHPublicKeyFile = v
-		case "--operator-ssh-public-key-file":
-			v, err := value()
-			if err != nil {
-				return Options{}, err
-			}
-			opts.OperatorSSHPublicKeyFile = v
-		case "--deploy-ssh-public-key-file":
-			v, err := value()
-			if err != nil {
-				return Options{}, err
-			}
-			opts.DeploySSHPublicKeyFile = v
-		case "--shared-key":
-			opts.SharedKey = true
-			idx++
-		case "--operator-user", "--admin-user":
-			v, err := value()
-			if err != nil {
-				return Options{}, err
-			}
-			opts.OperatorUser = v
-		case "--deploy-user":
-			v, err := value()
-			if err != nil {
-				return Options{}, err
-			}
-			opts.DeployUser = v
-		case "--tailscale":
-			opts.Tailscale = true
-			idx++
-		case "--no-tailscale":
-			opts.Tailscale = false
-			idx++
-		case "--tailscale-auth-key":
-			v, err := value()
-			if err != nil {
-				return Options{}, err
-			}
-			opts.TailscaleAuthKey = v
-		case "--tailscale-hostname":
-			v, err := value()
-			if err != nil {
-				return Options{}, err
-			}
-			opts.TailscaleHostname = v
-		case "--cloudflare-tunnel":
-			opts.CloudflareTunnel = true
-			idx++
-		case "--no-cloudflare-tunnel":
-			opts.CloudflareTunnel = false
-			idx++
-		case "--cloudflare-api-token":
-			v, err := value()
-			if err != nil {
-				return Options{}, err
-			}
-			opts.CloudflareAPIToken = v
-		case "--cloudflare-account-id":
-			v, err := value()
-			if err != nil {
-				return Options{}, err
-			}
-			opts.CloudflareAccountID = v
-		case "--cloudflare-tunnel-token":
-			v, err := value()
-			if err != nil {
-				return Options{}, err
-			}
-			opts.CloudflareTunnelToken = v
-		case "--cloudflare-tunnel-config":
-			v, err := value()
-			if err != nil {
-				return Options{}, err
-			}
-			opts.CloudflareTunnelConfig = v
-		case "--docker":
-			opts.InstallDocker = true
-			idx++
-		case "--no-docker":
-			opts.InstallDocker = false
-			idx++
-		case "--litestream":
-			opts.InstallLitestream = true
-			idx++
-		case "--no-litestream":
-			opts.InstallLitestream = false
-			idx++
-		case "--check":
-			opts.CheckMode = true
-			idx++
-		case "--interactive":
-			opts.Interactive = true
-			idx++
-		case "--no-interactive":
-			idx++
-		case "--yes":
-			opts.AssumeYes = true
-			idx++
-		case "--help", "-h":
-			return Options{}, errHelp
-		case "--":
-			opts.PassthroughArgs = append([]string(nil), args[idx+1:]...)
-			idx = len(args)
-		default:
-			return Options{}, fmt.Errorf("unknown option: %s", arg)
-		}
-	}
-
-	return opts, nil
-}
-
-var errHelp = errors.New("help requested")
-
-func PrintUsage(w io.Writer) {
-	fmt.Fprintln(w, "Simple VPS host installer")
-	fmt.Fprintln(w)
-	fmt.Fprintln(w, "Usage:")
-	fmt.Fprintln(w, "  simple-vps host install [options]")
-	fmt.Fprintln(w)
-	fmt.Fprintln(w, "Options:")
-	fmt.Fprintln(w, "  --mode <local|remote|auto>     Execution mode (default: auto)")
-	fmt.Fprintln(w, "  --host <ip-or-hostname>        Target VPS host for remote mode")
-	fmt.Fprintln(w, "  --bootstrap-user <user>        SSH user for remote bootstrap (default: root)")
-	fmt.Fprintln(w, "  --ssh-key <path>               SSH private key for remote mode")
-	fmt.Fprintln(w, "  --operator-ssh-public-key-file <path>")
-	fmt.Fprintln(w, "  --deploy-ssh-public-key-file <path>")
-	fmt.Fprintln(w, "  --shared-key                   Reuse operator SSH key for deploy")
-	fmt.Fprintln(w, "  --operator-user <name>         Operator user (default: operator)")
-	fmt.Fprintln(w, "  --deploy-user <name>           Deploy user (default: deploy)")
-	fmt.Fprintln(w, "  --tailscale | --no-tailscale")
-	fmt.Fprintln(w, "  --tailscale-auth-key <key>")
-	fmt.Fprintln(w, "  --cloudflare-tunnel | --no-cloudflare-tunnel")
-	fmt.Fprintln(w, "  --cloudflare-api-token <token>")
-	fmt.Fprintln(w, "  --cloudflare-account-id <id>")
-	fmt.Fprintln(w, "  --cloudflare-tunnel-token <token>")
-	fmt.Fprintln(w, "  --cloudflare-tunnel-config <path>")
-	fmt.Fprintln(w, "  --docker | --no-docker")
-	fmt.Fprintln(w, "  --litestream | --no-litestream")
-	fmt.Fprintln(w, "  --check                        Run Ansible in check mode")
-	fmt.Fprintln(w, "  --yes                          Non-interactive mode")
-	fmt.Fprintln(w, "  -h, --help                     Show help")
 }
 
 func BuildPlan(opts Options, isRoot bool, osReleaseExists bool) (Plan, error) {
@@ -476,7 +278,7 @@ func BuildPlan(opts Options, isRoot bool, osReleaseExists bool) (Plan, error) {
 	}, nil
 }
 
-func (i *Installer) runRemote(plan Plan, provisioningDir string, repoRoot string, passthrough []string) error {
+func (i *Installer) runRemote(plan Plan, provisioningDir string, repoRoot string) error {
 	if _, err := i.look("ansible-playbook"); err != nil {
 		return errors.New("required command not found: ansible-playbook")
 	}
@@ -521,19 +323,19 @@ func (i *Installer) runRemote(plan Plan, provisioningDir string, repoRoot string
 	}
 
 	i.step("Phase 1/2: bootstrap")
-	if err := i.runAnsible(plan, provisioningDir, "vps-bootstrap.yml", bootstrapArgs, passthrough); err != nil {
+	if err := i.runAnsible(plan, provisioningDir, "vps-bootstrap.yml", bootstrapArgs); err != nil {
 		return err
 	}
 
 	i.step("Phase 2/2: apply")
-	if err := i.runAnsible(plan, provisioningDir, "vps-apply.yml", applyArgs, passthrough); err != nil {
+	if err := i.runAnsible(plan, provisioningDir, "vps-apply.yml", applyArgs); err != nil {
 		i.warn("Apply phase as '%s' failed; retrying as '%s'.", plan.OperatorUser, plan.BootstrapUser)
-		return i.runAnsible(plan, provisioningDir, "vps-apply.yml", bootstrapArgs, passthrough)
+		return i.runAnsible(plan, provisioningDir, "vps-apply.yml", bootstrapArgs)
 	}
 	return nil
 }
 
-func (i *Installer) runLocal(plan Plan, provisioningDir string, repoRoot string, passthrough []string) error {
+func (i *Installer) runLocal(plan Plan, provisioningDir string, repoRoot string) error {
 	if i.geteuid() != 0 {
 		return errors.New("local mode must run as root")
 	}
@@ -569,12 +371,12 @@ func (i *Installer) runLocal(plan Plan, provisioningDir string, repoRoot string,
 
 	commonArgs := []string{"-i", inventory, "-e", "target=simple_vps", "-e", "@" + extraVars}
 	i.step("Phase 1/2: bootstrap")
-	if err := i.runAnsible(plan, provisioningDir, "vps-bootstrap.yml", commonArgs, passthrough); err != nil {
+	if err := i.runAnsible(plan, provisioningDir, "vps-bootstrap.yml", commonArgs); err != nil {
 		return err
 	}
 
 	i.step("Phase 2/2: apply")
-	return i.runAnsible(plan, provisioningDir, "vps-apply.yml", commonArgs, passthrough)
+	return i.runAnsible(plan, provisioningDir, "vps-apply.yml", commonArgs)
 }
 
 func (i *Installer) dumpInstallPlan(plan Plan) error {
@@ -678,12 +480,11 @@ func (i *Installer) ensureAnsibleInplace() error {
 	return i.run("apt-get", []string{"install", "-y", "ansible"}, "")
 }
 
-func (i *Installer) runAnsible(plan Plan, provisioningDir string, playbook string, args []string, passthrough []string) error {
+func (i *Installer) runAnsible(plan Plan, provisioningDir string, playbook string, args []string) error {
 	fullArgs := append([]string{}, args...)
 	if plan.CheckMode {
 		fullArgs = append(fullArgs, "--check")
 	}
-	fullArgs = append(fullArgs, passthrough...)
 	fullArgs = append(fullArgs, filepath.Join(provisioningDir, "playbooks", playbook))
 	return i.run("ansible-playbook", fullArgs, "")
 }
@@ -722,7 +523,6 @@ func renderExtraVars(plan Plan, keys keyPlan) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "simple_vps_operator_user: \"%s\"\n", plan.OperatorUser)
 	fmt.Fprintf(&b, "simple_vps_deploy_user: \"%s\"\n", plan.DeployUser)
-	fmt.Fprintf(&b, "simple_vps_admin_user: \"%s\"\n", plan.OperatorUser)
 	fmt.Fprintf(&b, "simple_vps_allow_shared_ssh_key: %s\n", boolText(plan.SharedKey))
 	fmt.Fprintf(&b, "simple_vps_timezone: \"%s\"\n", plan.Timezone)
 	fmt.Fprintf(&b, "simple_vps_locale: \"%s\"\n", plan.Locale)

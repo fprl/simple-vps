@@ -49,9 +49,9 @@
           - bat
         state: present
 
-    - name: Set admin shell to zsh
+    - name: Set operator shell to zsh
       user:
-        name: "{{ admin_user }}"
+        name: "{{ operator_user }}"
         shell: /bin/zsh
 
     - name: Create bat symlink (Ubuntu names it batcat)
@@ -78,60 +78,60 @@
     - name: Install atuin
       shell: curl --proto '=https' --tlsv1.2 -LsSf https://setup.atuin.sh | sh
       args:
-        creates: "/home/{{ admin_user }}/.atuin/bin/atuin"
+        creates: "/home/{{ operator_user }}/.atuin/bin/atuin"
       become: yes
-      become_user: "{{ admin_user }}"
+      become_user: "{{ operator_user }}"
       environment:
-        HOME: "/home/{{ admin_user }}"
+        HOME: "/home/{{ operator_user }}"
       when: not ansible_check_mode
 
-    - name: Install Oh My Zsh (admin)
+    - name: Install Oh My Zsh (operator)
       become: yes
-      become_user: "{{ admin_user }}"
+      become_user: "{{ operator_user }}"
       git:
         repo: https://github.com/ohmyzsh/ohmyzsh
-        dest: "/home/{{ admin_user }}/.oh-my-zsh"
+        dest: "/home/{{ operator_user }}/.oh-my-zsh"
         depth: 1
 
-    - name: Install zsh-autosuggestions plugin (admin)
+    - name: Install zsh-autosuggestions plugin (operator)
       become: yes
-      become_user: "{{ admin_user }}"
+      become_user: "{{ operator_user }}"
       git:
         repo: https://github.com/zsh-users/zsh-autosuggestions
-        dest: "/home/{{ admin_user }}/.oh-my-zsh/custom/plugins/zsh-autosuggestions"
+        dest: "/home/{{ operator_user }}/.oh-my-zsh/custom/plugins/zsh-autosuggestions"
         depth: 1
 
-    - name: Install zsh-syntax-highlighting plugin (admin)
+    - name: Install zsh-syntax-highlighting plugin (operator)
       become: yes
-      become_user: "{{ admin_user }}"
+      become_user: "{{ operator_user }}"
       git:
         repo: https://github.com/zsh-users/zsh-syntax-highlighting
-        dest: "/home/{{ admin_user }}/.oh-my-zsh/custom/plugins/zsh-syntax-highlighting"
+        dest: "/home/{{ operator_user }}/.oh-my-zsh/custom/plugins/zsh-syntax-highlighting"
         depth: 1
 
-    - name: Install Powerlevel10k theme (admin)
+    - name: Install Powerlevel10k theme (operator)
       become: yes
-      become_user: "{{ admin_user }}"
+      become_user: "{{ operator_user }}"
       git:
         repo: https://github.com/romkatv/powerlevel10k.git
-        dest: "/home/{{ admin_user }}/.oh-my-zsh/custom/themes/powerlevel10k"
+        dest: "/home/{{ operator_user }}/.oh-my-zsh/custom/themes/powerlevel10k"
         depth: 1
 
-    - name: Install VPS-safe default .zshrc for admin (create only)
+    - name: Install VPS-safe default .zshrc for operator (create only)
       copy:
         src: vps-defaults/zshrc
-        dest: "/home/{{ admin_user }}/.zshrc"
-        owner: "{{ admin_user }}"
-        group: "{{ admin_user }}"
+        dest: "/home/{{ operator_user }}/.zshrc"
+        owner: "{{ operator_user }}"
+        group: "{{ operator_user }}"
         mode: '0644'
         force: no
 
-    - name: Install VPS-safe default .gitconfig for admin (create only)
+    - name: Install VPS-safe default .gitconfig for operator (create only)
       copy:
         src: vps-defaults/gitconfig
-        dest: "/home/{{ admin_user }}/.gitconfig"
-        owner: "{{ admin_user }}"
-        group: "{{ admin_user }}"
+        dest: "/home/{{ operator_user }}/.gitconfig"
+        owner: "{{ operator_user }}"
+        group: "{{ operator_user }}"
         mode: '0644'
         force: no
   when: simple_vps_install_devtools | default(false) | bool
@@ -171,23 +171,23 @@
         - "@openai/codex"
         - "@google/gemini-cli"
 
-    - name: Install OpenCode CLI (admin)
+    - name: Install OpenCode CLI (operator)
       become: yes
-      become_user: "{{ admin_user }}"
+      become_user: "{{ operator_user }}"
       shell: |
         set -e
-        export HOME="/home/{{ admin_user }}"
+        export HOME="/home/{{ operator_user }}"
         curl -fsSL https://opencode.ai/install | bash -s -- --no-modify-path
       args:
         creates: /usr/local/bin/opencode
       when: not ansible_check_mode
 
-    - name: Resolve OpenCode path after install (admin)
+    - name: Resolve OpenCode path after install (operator)
       become: yes
-      become_user: "{{ admin_user }}"
+      become_user: "{{ operator_user }}"
       shell: |
         set -e
-        export HOME="/home/{{ admin_user }}"
+        export HOME="/home/{{ operator_user }}"
         for p in \
           "$HOME/.opencode/bin/opencode" \
           "$HOME/.local/bin/opencode" \
@@ -221,13 +221,13 @@
         - opencode_path.rc == 0
         - opencode_path.stdout != '/usr/local/bin/opencode'
 
-    - name: Check if Claude is already installed (admin)
+    - name: Check if Claude is already installed (operator)
       become: yes
-      become_user: "{{ admin_user }}"
+      become_user: "{{ operator_user }}"
       ansible.builtin.shell:
         cmd: |
           set -e
-          export HOME="/home/{{ admin_user }}"
+          export HOME="/home/{{ operator_user }}"
           if [ -x /usr/local/bin/claude ]; then echo /usr/local/bin/claude; exit 0; fi
           if [ -x "$HOME/.local/bin/claude" ]; then echo "$HOME/.local/bin/claude"; exit 0; fi
           command -v claude
@@ -235,13 +235,13 @@
       changed_when: false
       failed_when: false
 
-    - name: Install Claude Code (admin; native installer, force IPv4, manual setup)
+    - name: Install Claude Code (operator; native installer, force IPv4, manual setup)
       become: yes
-      become_user: "{{ admin_user }}"
+      become_user: "{{ operator_user }}"
       ansible.builtin.shell:
         cmd: |
           set -e
-          export HOME="/home/{{ admin_user }}"
+          export HOME="/home/{{ operator_user }}"
 
           tmp="$(mktemp -d)"
           mkdir -p "$tmp/bin"
@@ -299,21 +299,21 @@
           ln -sf "$binary_path" "$HOME/.local/bin/claude"
           rm -rf "$tmp"
       args:
-        creates: "/home/{{ admin_user }}/.local/bin/claude"
+        creates: "/home/{{ operator_user }}/.local/bin/claude"
         executable: /bin/bash
       when:
         - not ansible_check_mode
         - claude_which_before.rc != 0
 
-    - name: Check for Claude launcher in admin local bin
+    - name: Check for Claude launcher in operator local bin
       stat:
-        path: "/home/{{ admin_user }}/.local/bin/claude"
+        path: "/home/{{ operator_user }}/.local/bin/claude"
       register: claude_local_bin
       when: not ansible_check_mode
 
     - name: Symlink claude into /usr/local/bin
       file:
-        src: "/home/{{ admin_user }}/.local/bin/claude"
+        src: "/home/{{ operator_user }}/.local/bin/claude"
         dest: /usr/local/bin/claude
         state: link
       when:

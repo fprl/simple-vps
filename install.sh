@@ -18,12 +18,7 @@ info() {
   printf '==> %s\n' "$*" >&2
 }
 
-cleanup() {
-  if [[ ${#TMP_FILES[@]} -gt 0 ]]; then
-    rm -rf "${TMP_FILES[@]}"
-  fi
-}
-trap cleanup EXIT
+trap 'rm -rf "${TMP_FILES[@]}"' EXIT
 
 require_cmd() {
   local cmd="$1"
@@ -180,15 +175,15 @@ main() {
     bootstrap_checkout "$@"
   fi
 
-  if binary_path="$(find_simple_vps_binary)"; then
-    run_host_installer "$binary_path" "$@"
-  fi
-
   if binary_path="$(download_simple_vps_binary)"; then
     run_host_installer "$binary_path" "$@"
   fi
 
   if binary_path="$(build_simple_vps_binary)"; then
+    run_host_installer "$binary_path" "$@"
+  fi
+
+  if binary_path="$(find_simple_vps_binary)"; then
     run_host_installer "$binary_path" "$@"
   fi
 

@@ -20,8 +20,8 @@ import (
 
 const (
 	ManifestFile         = "simple-vps.toml"
-	RemoteDeployTmpDir   = "/tmp/simple-deploy"
-	ReleaseSuccessMarker = ".simple-deploy-success"
+	RemoteDeployTmpDir   = "/tmp/simple-vps-deploy"
+	ReleaseSuccessMarker = ".simple-vps-release-success"
 )
 
 type CommandRunner struct {
@@ -328,6 +328,82 @@ func runSSHChecked(runner *CommandRunner, server string, command string, errMsg 
 	return stdout
 }
 
+func serverCommand(args ...string) string {
+	parts := []string{"sudo", "simple-vps", "server"}
+	for _, arg := range args {
+		parts = append(parts, utils.ShellEscape(arg))
+	}
+	return strings.Join(parts, " ")
+}
+
+func serverCommandWithRawSuffix(args []string, rawSuffix string) string {
+	cmd := serverCommand(args...)
+	if rawSuffix != "" {
+		cmd += " " + rawSuffix
+	}
+	return cmd
+}
+
+func serverStatusCommand() string {
+	return serverCommand("status")
+}
+
+func serverDoctorCommand() string {
+	return serverCommand("doctor")
+}
+
+func serverRouteListCommand(jsonFlag bool) string {
+	args := []string{"route", "list"}
+	if jsonFlag {
+		args = append(args, "--json")
+	}
+	return serverCommand(args...)
+}
+
+func serverAppCreateCommand(appName string) string {
+	return serverCommand("app", "create", appName)
+}
+
+func serverAppDestroyCommand(appName string) string {
+	return serverCommand("app", "destroy", appName)
+}
+
+func serverAppReadEnvCommand(appName string) string {
+	return serverCommand("app", "read-env", appName)
+}
+
+func serverAppInstallEnvCommand(appName string, envPath string) string {
+	return serverCommand("app", "install-env", appName, envPath)
+}
+
+func serverAppInstallUnitCommand(appName string, service string, unitPath string) string {
+	return serverCommand("app", "install-unit", appName, service, unitPath)
+}
+
+func serverAppUninstallUnitCommand(appName string, service string) string {
+	return serverCommand("app", "uninstall-unit", appName, service)
+}
+
+func serverAppDaemonReloadCommand() string {
+	return serverCommand("app", "daemon-reload")
+}
+
+func serverAppServiceCommand(action string, appName string, service string) string {
+	return serverCommand("app", "service", action, appName, service)
+}
+
+func serverAppRunAsCommand(appName string, cwd string, command string) string {
+	return serverCommandWithRawSuffix([]string{"app", "run-as", appName, "--cwd", cwd, "--"}, command)
+}
+
+func serverCloudflareRemoveAppCommand(appName string) string {
+	return serverCommand("cloudflare", "remove", "--app", appName)
+}
+
+func serverRouteRemoveAppCommand(appName string) string {
+	return serverCommand("route", "remove", "--app", appName)
+}
+
 func parseServerFlag(args []string) (string, []string, error) {
 	var rest []string
 	server := ""
@@ -495,7 +571,7 @@ func CmdSetup(root string, envName string) {
 	}
 
 	// 3. create app
-	runSSHChecked(runner, ctx.Server, fmt.Sprintf("sudo simple-vps app create %s", utils.ShellEscape(ctx.AppName)), "simple-vps app create failed; rerun the Simple VPS install")
+	runSSHChecked(runner, ctx.Server, serverAppCreateCommand(ctx.AppName), "simple-vps server app create failed; rerun the Simple VPS install")
 	fmt.Printf("Setup complete for %s (%s)\n", ctx.AppName, envName)
 }
 
@@ -516,7 +592,7 @@ func CmdStatus(root string, envName string) {
 		releaseName = filepath.Base(currentPath)
 	}
 
-	routesOut := runSSHChecked(runner, ctx.Server, "sudo simple-vps route list --json", "failed to read routes")
+	routesOut := runSSHChecked(runner, ctx.Server, serverRouteListCommand(true), "failed to read routes")
 	type rWrap struct {
 		Routes []struct {
 			Host string `json:"host"`
@@ -531,7 +607,7 @@ func CmdStatus(root string, envName string) {
 	fmt.Printf("current: %s\n", releaseName)
 
 	for svcName := range ctx.Services {
-		_, _, code, _ := runner.RunSSH(ctx.Server, fmt.Sprintf("sudo simple-vps app service is-active %s %s", ctx.AppName, svcName))
+		_, _, code, _ := runner.RunSSH(ctx.Server, serverAppServiceCommand("is-active", ctx.AppName, svcName))
 		status := "inactive"
 		if code == 0 {
 			status = "active"
@@ -630,7 +706,7 @@ func CmdSecretPut(root string, envName string, key string) {
 	}
 	defer runner.Close()
 
-	currentEnv := runSSHChecked(runner, ctx.Server, fmt.Sprintf("sudo simple-vps app read-env %s", ctx.AppName), "failed to read remote env")
+	currentEnv := runSSHChecked(runner, ctx.Server, serverAppReadEnvCommand(ctx.AppName), "failed to read remote env")
 	nextEnv := setEnvValue(currentEnv, key, val)
 
 	uploadEnvContent(runner, ctx, nextEnv)
@@ -648,7 +724,7 @@ func CmdSecretList(root string, envName string) {
 	}
 	defer runner.Close()
 
-	currentEnv := runSSHChecked(runner, ctx.Server, fmt.Sprintf("sudo simple-vps app read-env %s", ctx.AppName), "failed to read remote env")
+	currentEnv := runSSHChecked(runner, ctx.Server, serverAppReadEnvCommand(ctx.AppName), "failed to read remote env")
 	for _, k := range envKeys(currentEnv) {
 		fmt.Println(k)
 	}
@@ -665,7 +741,7 @@ func CmdSecretRm(root string, envName string, key string) {
 	}
 	defer runner.Close()
 
-	currentEnv := runSSHChecked(runner, ctx.Server, fmt.Sprintf("sudo simple-vps app read-env %s", ctx.AppName), "failed to read remote env")
+	currentEnv := runSSHChecked(runner, ctx.Server, serverAppReadEnvCommand(ctx.AppName), "failed to read remote env")
 	nextEnv := removeEnvValue(currentEnv, key)
 
 	if nextEnv == currentEnv {
@@ -749,7 +825,7 @@ func uploadEnvContent(runner *CommandRunner, ctx *config.AppContext, content str
 		utils.Die(fmt.Sprintf("env upload failed: %v", err), 1)
 	}
 
-	runSSHChecked(runner, ctx.Server, fmt.Sprintf("sudo simple-vps app install-env %s %s", utils.ShellEscape(ctx.AppName), utils.ShellEscape(remotePath)), "env install failed")
+	runSSHChecked(runner, ctx.Server, serverAppInstallEnvCommand(ctx.AppName, remotePath), "env install failed")
 }
 
 func CmdRestart(root string, envName string, service string) {
@@ -767,7 +843,7 @@ func CmdRestart(root string, envName string, service string) {
 	}
 	defer runner.Close()
 
-	runSSHChecked(runner, ctx.Server, fmt.Sprintf("sudo simple-vps app service restart %s %s", utils.ShellEscape(ctx.AppName), utils.ShellEscape(service)), fmt.Sprintf("failed to restart %s", service))
+	runSSHChecked(runner, ctx.Server, serverAppServiceCommand("restart", ctx.AppName, service), fmt.Sprintf("failed to restart %s", service))
 
 	// Health check
 	svc := ctx.Services[service]
@@ -812,10 +888,10 @@ func CmdHost(args []string) {
 	defer runner.Close()
 
 	if sub == "status" {
-		out := runSSHChecked(runner, server, "sudo simple-vps status", "failed to read server status")
+		out := runSSHChecked(runner, server, serverStatusCommand(), "failed to read server status")
 		fmt.Print(out)
 	} else {
-		out := runSSHChecked(runner, server, "sudo simple-vps doctor", "failed to run doctor")
+		out := runSSHChecked(runner, server, serverDoctorCommand(), "failed to run doctor")
 		fmt.Print(out)
 	}
 }
@@ -855,12 +931,7 @@ func CmdRoute(args []string) {
 	}
 	defer runner.Close()
 
-	cmd := "sudo simple-vps route list"
-	if jsonFlag {
-		cmd += " --json"
-	}
-
-	out := runSSHChecked(runner, server, cmd, "failed to list routes")
+	out := runSSHChecked(runner, server, serverRouteListCommand(jsonFlag), "failed to list routes")
 	fmt.Print(out)
 }
 
@@ -919,21 +990,21 @@ func CmdDestroy(root string, envName string, yes bool, confirmApp string, purge 
 
 	// 1. stop services
 	for svcName := range ctx.Services {
-		_, _, _, _ = runner.RunSSH(ctx.Server, fmt.Sprintf("sudo simple-vps app service stop %s %s", ctx.AppName, svcName))
-		_, _, _, _ = runner.RunSSH(ctx.Server, fmt.Sprintf("sudo simple-vps app service disable %s %s", ctx.AppName, svcName))
-		_, _, _, _ = runner.RunSSH(ctx.Server, fmt.Sprintf("sudo simple-vps app uninstall-unit %s %s", ctx.AppName, svcName))
+		_, _, _, _ = runner.RunSSH(ctx.Server, serverAppServiceCommand("stop", ctx.AppName, svcName))
+		_, _, _, _ = runner.RunSSH(ctx.Server, serverAppServiceCommand("disable", ctx.AppName, svcName))
+		_, _, _, _ = runner.RunSSH(ctx.Server, serverAppUninstallUnitCommand(ctx.AppName, svcName))
 	}
 
 	// 2. remove routes
-	_, _, _, _ = runner.RunSSH(ctx.Server, fmt.Sprintf("sudo simple-vps cloudflare remove --app %s", ctx.AppName))
-	_, _, _, _ = runner.RunSSH(ctx.Server, fmt.Sprintf("sudo simple-vps route remove --app %s", ctx.AppName))
+	_, _, _, _ = runner.RunSSH(ctx.Server, serverCloudflareRemoveAppCommand(ctx.AppName))
+	_, _, _, _ = runner.RunSSH(ctx.Server, serverRouteRemoveAppCommand(ctx.AppName))
 
 	// 3. remove current symlink
 	_, _, _, _ = runner.RunSSH(ctx.Server, fmt.Sprintf("rm -f %s/current", ctx.AppRoot))
 
 	// 4. purge app data if requested
 	if purge {
-		runSSHChecked(runner, ctx.Server, fmt.Sprintf("sudo simple-vps app destroy %s", ctx.AppName), "failed to purge app data")
+		runSSHChecked(runner, ctx.Server, serverAppDestroyCommand(ctx.AppName), "failed to purge app data")
 	}
 
 	fmt.Printf("Destroyed app %s (%s)\n", ctx.AppName, envName)
@@ -1006,7 +1077,7 @@ func CmdDeploy(root string, envName string, dirty bool, includeDotenv bool) {
 
 	// Dependencies install
 	if isInstallNeeded(ctx.Runtime, ctx.Build) && len(locks) > 0 {
-		runSSHChecked(runner, ctx.Server, fmt.Sprintf("sudo simple-vps app run-as %s --cwd %s -- %s", ctx.AppName, releaseDir, installCommandFor(locks[0])), "production install failed")
+		runSSHChecked(runner, ctx.Server, serverAppRunAsCommand(ctx.AppName, releaseDir, installCommandFor(locks[0])), "production install failed")
 	}
 
 	// Generate systemd unit files locally
@@ -1032,11 +1103,11 @@ func CmdDeploy(root string, envName string, dirty bool, includeDotenv bool) {
 
 	for svcName := range ctx.Services {
 		unitName := fmt.Sprintf("simple-%s-%s.service", ctx.AppName, svcName)
-		runSSHChecked(runner, ctx.Server, fmt.Sprintf("sudo simple-vps app install-unit %s %s %s/%s", ctx.AppName, svcName, remoteUnitDir, unitName), fmt.Sprintf("failed to install %s unit", svcName))
+		runSSHChecked(runner, ctx.Server, serverAppInstallUnitCommand(ctx.AppName, svcName, fmt.Sprintf("%s/%s", remoteUnitDir, unitName)), fmt.Sprintf("failed to install %s unit", svcName))
 	}
 
 	// reload daemon
-	runSSHChecked(runner, ctx.Server, "sudo simple-vps app daemon-reload", "systemd daemon-reload failed")
+	runSSHChecked(runner, ctx.Server, serverAppDaemonReloadCommand(), "systemd daemon-reload failed")
 
 	// activate release
 	activateRelease(runner, ctx, releaseDir)
@@ -1076,7 +1147,7 @@ func activateRelease(runner *CommandRunner, ctx *config.AppContext, releaseDir s
 
 	// Stop old services
 	for svcName := range ctx.Services {
-		_, _, _, _ = runner.RunSSH(ctx.Server, fmt.Sprintf("sudo simple-vps app service stop %s %s", ctx.AppName, svcName))
+		_, _, _, _ = runner.RunSSH(ctx.Server, serverAppServiceCommand("stop", ctx.AppName, svcName))
 	}
 
 	// Link current
@@ -1084,7 +1155,7 @@ func activateRelease(runner *CommandRunner, ctx *config.AppContext, releaseDir s
 
 	// Start new services
 	for svcName := range ctx.Services {
-		runSSHChecked(runner, ctx.Server, fmt.Sprintf("sudo simple-vps app service start %s %s", ctx.AppName, svcName), fmt.Sprintf("failed to start %s", svcName))
+		runSSHChecked(runner, ctx.Server, serverAppServiceCommand("start", ctx.AppName, svcName), fmt.Sprintf("failed to start %s", svcName))
 	}
 
 	// Health check
@@ -1111,12 +1182,12 @@ func activateRelease(runner *CommandRunner, ctx *config.AppContext, releaseDir s
 	if hcErr {
 		// Rollback services
 		for svcName := range ctx.Services {
-			_, _, _, _ = runner.RunSSH(ctx.Server, fmt.Sprintf("sudo simple-vps app service stop %s %s", ctx.AppName, svcName))
+			_, _, _, _ = runner.RunSSH(ctx.Server, serverAppServiceCommand("stop", ctx.AppName, svcName))
 		}
 		if previousCurrent != "" {
 			_, _, _, _ = runner.RunSSH(ctx.Server, fmt.Sprintf("ln -sfn %s %s/current", previousCurrent, ctx.AppRoot))
 			for svcName := range ctx.Services {
-				_, _, _, _ = runner.RunSSH(ctx.Server, fmt.Sprintf("sudo simple-vps app service start %s %s", ctx.AppName, svcName))
+				_, _, _, _ = runner.RunSSH(ctx.Server, serverAppServiceCommand("start", ctx.AppName, svcName))
 			}
 		}
 		utils.Die("health check failed; release rolled back", 1)
@@ -1207,7 +1278,7 @@ func publishRoutes(runner *CommandRunner, ctx *config.AppContext) {
 }
 
 func cloudflarePublishCommand(appName string, host string) string {
-	return fmt.Sprintf("sudo simple-vps cloudflare publish --app %s %s", utils.ShellEscape(appName), utils.ShellEscape(host))
+	return serverCommand("cloudflare", "publish", "--app", appName, host)
 }
 
 func routePublishCommand(ctx *config.AppContext, route config.Route) string {
@@ -1217,13 +1288,13 @@ func routePublishCommand(ctx *config.AppContext, route config.Route) string {
 		if svc.Port != nil {
 			p = *svc.Port
 		}
-		return fmt.Sprintf("sudo simple-vps route proxy --port %d --app %s %s", p, utils.ShellEscape(ctx.AppName), utils.ShellEscape(route.Host))
+		return serverCommand("route", "proxy", "--port", strconv.Itoa(p), "--app", ctx.AppName, route.Host)
 	}
 	if route.Type == "static" {
-		return fmt.Sprintf("sudo simple-vps route static --root %s/current --app %s %s", utils.ShellEscape(ctx.AppRoot), utils.ShellEscape(ctx.AppName), utils.ShellEscape(route.Host))
+		return serverCommand("route", "static", "--root", ctx.AppRoot+"/current", "--app", ctx.AppName, route.Host)
 	}
 	if route.Type == "redirect" {
-		return fmt.Sprintf("sudo simple-vps route redirect --to %s --app %s %s", utils.ShellEscape(route.To), utils.ShellEscape(ctx.AppName), utils.ShellEscape(route.Host))
+		return serverCommand("route", "redirect", "--to", route.To, "--app", ctx.AppName, route.Host)
 	}
 	return ""
 }

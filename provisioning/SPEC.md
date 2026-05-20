@@ -113,24 +113,23 @@ own the database path, replica credentials, and systemd service configuration.
 Keep the CLI tiny:
 
 ```bash
-simple-vps status
-simple-vps route list
-simple-vps route list --json
-simple-vps route proxy example.com --port 3000
-simple-vps route static data.example.com --root /var/apps/data/current/public
-simple-vps route redirect old.example.com --to https://new.example.com
-simple-vps route remove example.com
-simple-vps route remove --app my-app
-simple-vps app create my-app
-simple-vps app destroy my-app
-simple-vps app read-env my-app
-simple-vps app install-env my-app /tmp/simple-deploy/.env
-simple-vps app install-unit my-app web /tmp/simple-deploy/simple-my-app-web.service
-simple-vps app uninstall-unit my-app web
-simple-vps app daemon-reload
-simple-vps app service start my-app web
-simple-vps app run-as my-app --cwd /var/apps/my-app/releases/a1b2c3d -- bun install --production --frozen-lockfile
-simple-vps devtools install
+sudo simple-vps server status
+sudo simple-vps server route list
+sudo simple-vps server route list --json
+sudo simple-vps server route proxy example.com --port 3000
+sudo simple-vps server route static data.example.com --root /var/apps/data/current/public
+sudo simple-vps server route redirect old.example.com --to https://new.example.com
+sudo simple-vps server route remove example.com
+sudo simple-vps server route remove --app my-app
+sudo simple-vps server app create my-app
+sudo simple-vps server app destroy my-app
+sudo simple-vps server app read-env my-app
+sudo simple-vps server app install-env my-app /tmp/simple-vps-deploy/.env
+sudo simple-vps server app install-unit my-app web /tmp/simple-vps-deploy/simple-my-app-web.service
+sudo simple-vps server app uninstall-unit my-app web
+sudo simple-vps server app daemon-reload
+sudo simple-vps server app service start my-app web
+sudo simple-vps server app run-as my-app --cwd /var/apps/my-app/releases/a1b2c3d -- bun install --production --frozen-lockfile
 ```
 
 `route proxy` means expose a local service through the production ingress stack.
@@ -138,13 +137,10 @@ simple-vps devtools install
 Examples:
 
 ```bash
-simple-vps route proxy example.com --port 3000
-simple-vps route proxy api.example.com --port 8080
-simple-vps route static data.example.com --root /var/apps/data-feed/current/public
+sudo simple-vps server route proxy example.com --port 3000
+sudo simple-vps server route proxy api.example.com --port 8080
+sudo simple-vps server route static data.example.com --root /var/apps/data-feed/current/public
 ```
-
-`publish`, `unpublish`, and `routes` remain compatibility aliases for simple
-proxy routes.
 
 ## Routing State
 
@@ -197,29 +193,13 @@ operator user    human/admin identity for host convergence and recovery
 deploy user      CLI/CI identity for app deploys
 ```
 
-In 0.2 `admin` is both the operator user and the deploy user. This is an
-implementation compromise, not the target security model. It exists because
-remote install phase 2 connects as `admin` and runs Ansible with `become: true`.
-Without a passwordless root path for that operator identity, unattended
-converge breaks.
-
-The 0.2 Ansible role therefore grants:
-
-```text
-/etc/sudoers.d/admin
-  admin ALL=(ALL) NOPASSWD:ALL
-```
-
-The 0.2 deploy API also has one narrow sudoers line, granting passwordless `sudo`
-only for `simple-vps`:
+The operator identity needs a passwordless root path because remote install
+phase 2 connects as `operator` and runs Ansible with `become: true`.
 
 ```text
 /etc/sudoers.d/simple-vps
-  admin ALL=(root) NOPASSWD: /usr/local/bin/simple-vps
+  deploy ALL=(root) NOPASSWD: /usr/local/bin/simple-vps
 ```
-
-The 0.2.0 Ansible role removes the legacy `/etc/sudoers.d/simple-deploy`
-file when applying the renamed sudoers file.
 
 `simple-vps` is the gatekeeper. Every privileged subcommand validates its
 arguments (app/service name shape, unit file path and ownership, host, port,
@@ -229,30 +209,25 @@ sudoers; validation lives in code where it can be meaningful.
 This is a load-bearing maintenance rule: because sudoers grants
 `/usr/local/bin/simple-vps`, every mutating `simple-vps` subcommand must
 validate inputs and be designed as a safe root API. New subcommands must not
-assume interactive trust just because the caller is `admin`. Adding a
+assume interactive trust just because the caller is `deploy`. Adding a
 subcommand that shells out to user-supplied arguments without validation
 silently broadens the deploy sudoers surface.
 
-0.3.0 splits operator and deploy users so the app CLI and CI authenticate as a
-deploy identity with only the `/usr/local/bin/simple-vps` grant. Host
-convergence uses a separate operator identity. The detailed sub-spec lives in
-[`docs/0.3-operator-deploy-split.md`](../../docs/0.3-operator-deploy-split.md).
-
 ### App Subcommands
 
-The `simple-vps app ...` namespace covers per-app lifecycle operations:
+The `simple-vps server app ...` namespace covers per-app lifecycle operations:
 
 ```bash
-sudo simple-vps app create <name>
-sudo simple-vps app destroy <name>
-sudo simple-vps app read-env <name>
-sudo simple-vps app install-env <name> <path-to-env-file>
-sudo simple-vps app install-unit <name> <service> <path-to-unit-file>
-sudo simple-vps app uninstall-unit <name> <service>
-sudo simple-vps app daemon-reload
-sudo simple-vps app service <action> <name> <service>
+sudo simple-vps server app create <name>
+sudo simple-vps server app destroy <name>
+sudo simple-vps server app read-env <name>
+sudo simple-vps server app install-env <name> <path-to-env-file>
+sudo simple-vps server app install-unit <name> <service> <path-to-unit-file>
+sudo simple-vps server app uninstall-unit <name> <service>
+sudo simple-vps server app daemon-reload
+sudo simple-vps server app service <action> <name> <service>
   # action: start | stop | restart | status | is-active | enable | disable
-sudo simple-vps app run-as <name> --cwd <path> -- <command> [args...]
+sudo simple-vps server app run-as <name> --cwd <path> -- <command> [args...]
   # used for: bun install --production, npm ci --omit=dev, etc.
 ```
 
@@ -261,22 +236,21 @@ sudo simple-vps app run-as <name> --cwd <path> -- <command> [args...]
 `simple-vps destroy` path does not call it.
 
 `app install-env` is the only writer for `/var/apps/<name>/shared/.env`.
-It requires the source file to live under `/tmp/simple-deploy/`, validates
+It requires the source file to live under `/tmp/simple-vps-deploy/`, validates
 EnvironmentFile syntax, writes atomically, and sets `0600 app-<name>:app-<name>`.
 `app read-env` prints the current file for `simple-vps secret list|put|rm`.
 
-`/tmp/simple-deploy` is a retained internal server API path for 0.2.0. It is
-not a public product name and is not renamed in this slice.
+`/tmp/simple-vps-deploy` is an internal staging path used for env and unit uploads.
 
 ### Route Subcommands
 
-Routes use the existing `simple-vps route` namespace:
+Routes use the `simple-vps server route` namespace:
 
 ```bash
-sudo simple-vps route proxy <host> --port <port> --app <name>
-sudo simple-vps route static <host> --root <path> --app <name>
-sudo simple-vps route redirect <host> --to <url> --app <name>
-sudo simple-vps route remove --app <name>
+sudo simple-vps server route proxy <host> --port <port> --app <name>
+sudo simple-vps server route static <host> --root <path> --app <name>
+sudo simple-vps server route redirect <host> --to <url> --app <name>
+sudo simple-vps server route remove --app <name>
 ```
 
 ### Validation Rules
@@ -289,7 +263,7 @@ Enforced by `simple-vps` before any privileged action:
 - `<port>` is an integer in `[1, 65535]`.
 - `<path>` for static routes must resolve under `/var/apps/<name>/`.
 - `<url>` for redirects must be `http://...` or `https://...`.
-- Unit file paths must live under `/tmp/simple-deploy/` and be owned by the
+- Unit file paths must live under `/tmp/simple-vps-deploy/` and be owned by the
   invoking deploy user.
 - Unit file contents must start with `[Unit]` and reference `User=app-<name>`.
   Units that try to escalate are refused.
@@ -300,7 +274,7 @@ Enforced by `simple-vps` before any privileged action:
 `/var/apps/<name>` plus `/var/apps/<name>/releases` setgid group-writable
 (`2775`). That is the upload contract: the client CLI can rsync release
 artifacts as the deploy user, while services still run as `app-<name>`.
-It also ensures `/tmp/simple-deploy` exists with mode `1777`; unit uploads
+It also ensures `/tmp/simple-vps-deploy` exists with mode `1777`; unit uploads
 land there before `app install-unit` validates ownership and content.
 
 ### Failure Mode
@@ -419,8 +393,6 @@ Current sudo behavior:
   `/etc/sudoers.d/operator`.
 - `deploy ALL=(root) NOPASSWD: /usr/local/bin/simple-vps` is the narrow deploy
   API used by app operations via `/etc/sudoers.d/simple-vps`.
-- Existing 0.2 hosts with `admin` as both identities are supported as legacy
-  hosts but reported degraded by `simple-vps doctor`.
 
 Current optional variables:
 
@@ -462,35 +434,33 @@ Current Cloudflare Tunnel behavior:
   account.
 - If no API token, tunnel token, or config path is provided, `cloudflared` is
   installed but the service is not enabled.
-- Without API-managed mode, `simple-vps cloudflare publish HOST --app APP`
+- Without API-managed mode, `simple-vps server cloudflare publish HOST --app APP`
   prints the manual Cloudflare public-hostname settings and leaves Cloudflare
   unchanged.
-- With API-managed mode, `simple-vps cloudflare publish HOST --app APP` ensures
-  the tunnel public hostname routes to `http://127.0.0.1:8080` and a CNAME
-  points to `<tunnel-id>.cfargotunnel.com`.
-- With API-managed mode, `simple-vps cloudflare remove --app APP` removes
+- With API-managed mode, `simple-vps server cloudflare publish HOST --app APP`
+  ensures the tunnel public hostname routes to `http://127.0.0.1:8080` and a
+  CNAME points to `<tunnel-id>.cfargotunnel.com`.
+- With API-managed mode, `simple-vps server cloudflare remove --app APP` removes
   Cloudflare hostnames and CNAME records tracked for that app. Without
   API-managed mode it is a no-op.
 
 Current CLI behavior:
 
-- `simple-vps status` prints state path, route count, service status, and
+- `simple-vps server status` prints state path, route count, service status, and
   installed tool status for runtime primitives.
-- `simple-vps route list` lists routes from state.
-- `simple-vps route list --json` emits route state as JSON.
-- `simple-vps route proxy HOST --port PORT` writes a proxy route and regenerates
+- `simple-vps server route list` lists routes from state.
+- `simple-vps server route list --json` emits route state as JSON.
+- `simple-vps server route proxy HOST --port PORT` writes a proxy route and
+  regenerates managed Caddy files.
+- `simple-vps server route static HOST --root PATH` writes a static file route
+  and regenerates managed Caddy files.
+- `simple-vps server route redirect HOST --to URL` writes a redirect route and
+  regenerates managed Caddy files.
+- `simple-vps server route remove HOST` removes a route by host and regenerates
   managed Caddy files.
-- `simple-vps route static HOST --root PATH` writes a static file route and
+- `simple-vps server route remove --app APP` removes all routes for an app and
   regenerates managed Caddy files.
-- `simple-vps route redirect HOST --to URL` writes a redirect route and
-  regenerates managed Caddy files.
-- `simple-vps route remove HOST` removes a route by host and regenerates managed
-  Caddy files.
-- `simple-vps route remove --app APP` removes all routes for an app and
-  regenerates managed Caddy files.
-- `simple-vps publish`, `simple-vps unpublish`, and `simple-vps routes` remain
-  compatibility aliases.
-- `simple-vps generate-caddy` regenerates managed Caddy files from state.
+- `simple-vps server generate-caddy` regenerates managed Caddy files from state.
 - Mutating commands require root, validate the generated Caddyfile, keep
   backups under `/etc/simple-vps/backups`, and reload Caddy.
 
@@ -498,7 +468,8 @@ Known gaps:
 
 - Hosted installer needs fresh-VPS validation.
 - Public SSH is still needed during bootstrap unless Tailscale auth succeeds.
-- Static inventory/direct Ansible path is legacy and should not drive the product.
+- Hosted installer smoke coverage should keep expanding as fresh-host cases
+  surface edge conditions.
 
 ## Implementation Plan
 

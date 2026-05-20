@@ -22,7 +22,7 @@ RUN useradd -m -s /bin/bash -g operator operator \
   && useradd -m -s /bin/bash -U deploy \
   && printf 'operator:operator\n' | chpasswd \
   && printf 'deploy:deploy\n' | chpasswd \
-  && mkdir -p /home/deploy/.ssh /run/sshd /etc/simple-vps /etc/caddy/simple-vps /etc/caddy/conf.d /var/apps /tmp/simple-deploy \
+  && mkdir -p /home/deploy/.ssh /run/sshd /etc/simple-vps /etc/caddy/simple-vps /etc/caddy/conf.d /var/apps /tmp/simple-vps-deploy \
   && chown deploy:deploy /home/deploy/.ssh \
   && chmod 700 /home/deploy/.ssh
 
