@@ -71,6 +71,7 @@ PLAN_INSTALL_DOCKER=""
 PLAN_INSTALL_LITESTREAM=""
 PLAN_CHECK_MODE=""
 PLAN_SHARED_KEY=""
+PLAN_HELPER_BINARY_DIR=""
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -277,8 +278,38 @@ require_cmd() {
 
 cleanup_tmp_files() {
   if [[ ${#TMP_FILES[@]} -gt 0 ]]; then
-    rm -f "${TMP_FILES[@]}"
+    rm -rf "${TMP_FILES[@]}"
   fi
+}
+
+prepare_go_helper_binaries() {
+  local repo_root
+  local output_dir
+  local arch
+
+  PLAN_HELPER_BINARY_DIR=""
+  repo_root="$(cd "$SCRIPT_DIR/../.." && pwd)"
+
+  if [[ ! -f "$repo_root/go.mod" ]]; then
+    return
+  fi
+
+  if ! command -v go >/dev/null 2>&1; then
+    warn "Go toolchain not found; installer will keep using the bundled Python helper."
+    return
+  fi
+
+  output_dir="$(mktemp -d)"
+  TMP_FILES+=("$output_dir")
+  trap cleanup_tmp_files EXIT
+
+  info "Building Simple VPS Go helper binaries"
+  for arch in amd64 arm64; do
+    env CGO_ENABLED=0 GOOS=linux GOARCH="$arch" \
+      go -C "$repo_root" build -trimpath -ldflags="-s -w" -o "$output_dir/simple-vps-linux-$arch" .
+  done
+
+  PLAN_HELPER_BINARY_DIR="$output_dir"
 }
 
 confirm_or_prompt() {
@@ -1032,6 +1063,7 @@ write_extra_vars_file() {
   local escaped_cloudflare_account_id="${PLAN_CLOUDFLARE_ACCOUNT_ID//\'/\'\"\'\"\'}"
   local escaped_cloudflare_tunnel_token="${PLAN_CLOUDFLARE_TUNNEL_TOKEN//\'/\'\"\'\"\'}"
   local escaped_cloudflare_tunnel_config="${PLAN_CLOUDFLARE_TUNNEL_CONFIG//\'/\'\"\'\"\'}"
+  local escaped_helper_binary_dir="${PLAN_HELPER_BINARY_DIR//\'/\'\"\'\"\'}"
 
   {
     printf 'simple_vps_operator_user: "%s"\n' "$PLAN_OPERATOR_USER"
@@ -1050,6 +1082,9 @@ write_extra_vars_file() {
     printf "simple_vps_cloudflare_tunnel_config_path: '%s'\n" "$escaped_cloudflare_tunnel_config"
     printf 'simple_vps_install_docker: %s\n' "$PLAN_INSTALL_DOCKER"
     printf 'simple_vps_install_litestream: %s\n' "$PLAN_INSTALL_LITESTREAM"
+    if [[ -n "$PLAN_HELPER_BINARY_DIR" ]]; then
+      printf "simple_vps_helper_binary_dir: '%s'\n" "$escaped_helper_binary_dir"
+    fi
 
     if [[ -n "$operator_ssh_public_key_value" ]]; then
       local escaped_key="${operator_ssh_public_key_value//\'/\'\"\'\"\'}"
@@ -1151,6 +1186,7 @@ run_remote() {
 
   info "Running in remote mode against ${PLAN_TARGET_HOST}"
   preflight_ssh "$PLAN_BOOTSTRAP_USER" "$PLAN_TARGET_HOST" "$PLAN_SSH_KEY"
+  prepare_go_helper_binaries
 
   local tmp_inventory
   local tmp_vars
@@ -1206,6 +1242,7 @@ run_local() {
   local deploy_ssh_public_key_value=""
   local root_keys_path="/root/.ssh/authorized_keys"
   resolve_ssh_key_plan operator_ssh_public_key_value deploy_ssh_public_key_value true "$root_keys_path"
+  prepare_go_helper_binaries
 
   info "Running in local mode on localhost"
 
