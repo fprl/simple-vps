@@ -2,15 +2,14 @@
 
 - **Status**: Accepted
 - **Date**: 2026-05-20
-- **Supersedes**: implicit decisions in `SPEC.md` and `provisioning/SPEC.md`
-  that kept Ansible as the host convergence tool.
-- **Related**: ADR-0002 (state file layout), `docs/ansible-replacement-review.md`
-  (rationale brief).
+- **Supersedes**: earlier implementation notes that kept Ansible as the host
+  convergence tool.
+- **Related**: ADR-0002 (state file layout).
 
 ## Context
 
-`simple-vps host install` currently shells out to `ansible-playbook` from the
-user's laptop. That breaks the desired product flow: `curl -fsSL .../install.sh
+`simple-vps host install` previously shelled out to `ansible-playbook` from the
+user's laptop. That broke the desired product flow: `curl -fsSL .../install.sh
 | sh` should install one local CLI, not a CLI plus Ansible plus playbooks plus
 roles.
 
@@ -38,11 +37,10 @@ question is where the line goes, and this ADR draws it.
 ### 1. Package shape
 
 ```text
-cmd/hostinstall/        CLI surface - typed flags only
+cmd/hostinstall/        CLI surface and remote bootstrap over OpenSSH CLI
 internal/provision/     plan/apply/status/doctor orchestration
-internal/provision/remote/   SSH runner using OpenSSH CLI
 internal/provision/host/     the bounded operation primitives
-internal/provision/artifact/  verified Simple VPS server-helper artifact fetch
+internal/provision/local/    on-host runner for local apply
 internal/provision/state/    /etc/simple-vps/*.json schemas (see ADR-0002)
 ```
 
@@ -53,6 +51,7 @@ removing, or changing the contract of any of them requires a new ADR.
 
 | Operation | Purpose |
 |---|---|
+| `EnsureDirectory` | directory create/update with owner, group, mode |
 | `EnsurePackage` | apt package install/absent |
 | `EnsureAptRepo` | apt repo + GPG key + sources.list.d entry |
 | `EnsureUser` | system user with shell/home/uid policy |
@@ -66,19 +65,16 @@ removing, or changing the contract of any of them requires a new ADR.
 | `EnsureTimezone` | one-shot `timedatectl set-timezone` |
 | `EnsureLocale` | one-shot `localectl set-locale` |
 
-Twelve operations. No `EnsureCron`, no `EnsureMount`, no `EnsureSelinuxBoolean`,
+Thirteen operations. No `EnsureCron`, no `EnsureMount`, no `EnsureSelinuxBoolean`,
 no template engine, no plugin loader.
 
 ### 3. Operation contract
 
-Every operation has the same signature:
-
-```go
-type Operation func(ctx Context) (changed bool, err error)
-```
+Every operation accepts `host.Apply` plus typed arguments and returns
+`(changed bool, err error)`.
 
 - `changed=true` iff the operation mutated host state.
-- In check mode (`ctx.CheckMode == true`), operations return `(wouldChange,
+- In check mode (`apply.CheckMode == true`), operations return `(wouldChange,
   nil)` without writing.
 - Errors halt the apply unless the caller wraps with explicit
   `ContinueOnFailure`.
@@ -87,10 +83,14 @@ Restart logic is written as plain Go conditionals against the returned
 `changed` value:
 
 ```go
-caddyConfigChanged, err := host.EnsureFile(ctx, caddyConfigPath, content)
-if err != nil { return err }
+caddyConfigChanged, err := host.EnsureFile(apply, host.File{
+    Path: caddyConfigPath, Content: content, Owner: "root", Group: "root", Mode: 0644,
+})
+if err != nil {
+    return err
+}
 if caddyConfigChanged {
-    if _, err := host.EnsureSystemdUnit(ctx, "caddy", host.Reloaded); err != nil {
+    if _, err := host.EnsureSystemdUnit(apply, host.SystemdUnit{Name: "caddy.service", Action: host.Reloaded}); err != nil {
         return err
     }
 }
@@ -103,19 +103,20 @@ No handler registry, no event bus, no notify table.
 The laptop CLI is OS-specific. A Darwin binary cannot be copied to an Ubuntu
 VPS and run as `/usr/local/bin/simple-vps`.
 
-During `host install`, the Go provisioner installs a Linux `simple-vps` helper
-binary on the target host. The default source is a verified release artifact
-matching the local CLI version and target architecture. The provisioner may
-reuse the local binary only when the local OS/arch matches the target.
+During remote `host install`, the laptop CLI builds or finds Linux
+`simple-vps` helper binaries, uploads the binary matching the target
+architecture, and executes `simple-vps host install --mode local` on the
+target. During local install, the current binary is installed as
+`/usr/local/bin/simple-vps`.
 
 This preserves the product trust boundary:
 
 - `curl | sh` installs the local CLI only.
 - `simple-vps host install` is the explicit infrastructure mutation and may
-  download the matching Linux helper needed by the target host.
+  build or upload the Linux helper needed by the target host.
 
-The helper artifact path/source can be overridden for local development and
-CI, but the default product path must verify checksums before upload.
+Release artifact download and checksum verification can be added later without
+reintroducing a second convergence engine.
 
 ### 5. Check mode from day one
 
@@ -128,9 +129,14 @@ A PR adding an operation without check-mode support is incomplete.
 Use the system OpenSSH CLI via `os/exec`, not a Go SSH library. OpenSSH already
 handles agent, `known_hosts`, `~/.ssh/config`, `ProxyJump`, multiple identities,
 and platform quirks. Re-implementing those would expand the audit surface
-without product benefit. The `internal/provision/remote` package wraps OpenSSH
-with a typed `Runner` interface; tests substitute a `FakeRunner` that records
-typed operations.
+without product benefit.
+
+Remote install is bootstrap-only: `cmd/hostinstall` builds or finds Linux helper
+binaries, detects the target architecture with `ssh`, copies the matching helper
+with `scp`, then runs `simple-vps host install --mode local` on the VPS. The
+bounded provisioner executes on the target through `internal/provision/local`.
+Tests substitute the `host.Runner` interface at that local apply boundary and
+record typed operations there.
 
 ### 7. Dependency policy
 
@@ -154,21 +160,19 @@ Language runtimes (Node, Bun, pnpm) are **not installed by default during
 message if the runtime is missing. Surprise installs at deploy time are
 explicitly excluded.
 
-### 8. Migration plan
+### 8. Cutover plan
 
-1. Land the Go provisioner behind a `--provisioner=go` opt-in flag. Default
-   stays Ansible.
-2. Bring the Docker fake-VPS smoke to parity:
-   - fresh install (ingress `cloudflare`)
-   - fresh install (ingress `public`)
-   - rerun idempotency
-   - `host doctor` after either install
-   - `setup` + `deploy` against the resulting host
-3. Flip the default to `--provisioner=go`. Keep the Ansible path one release.
-4. Delete `provisioning/playbooks/`, `provisioning/roles/`,
-   `provisioning/inventory/`, `provisioning/install.sh`, and Ansible-specific
-   install paths in a separate cleanup commit, not folded into the replacement
-   PR.
+This project is pre-user. There is no compatibility window and no legacy
+provisioner flag. The Go provisioner is the only host convergence engine.
+
+Cutover is complete when:
+
+1. `simple-vps host install` uses Go primitives in local and remote mode.
+2. `/etc/simple-vps/*.json` state follows ADR-0002.
+3. CI and Make targets exercise only the Go installer path.
+4. Ansible playbooks, roles, inventories, and install scripts are deleted.
+5. Fake-VPS coverage includes fresh install, rerun idempotency, `host doctor`,
+   `setup`, and `deploy`.
 
 ## Consequences
 
@@ -182,14 +186,14 @@ explicitly excluded.
 
 ### What this gives up
 
-- Ansible's `lineinfile`/`blockinfile`/`template` idempotency, hand-rolled in
+- Mature module idempotency such as `lineinfile`/`blockinfile`/`template`,
+  hand-rolled in
   `EnsureLineInFile` / `EnsureBlockInFile` / `EnsureFile`. These will have
-  edge cases (encoding, line endings, empty-file behavior) the Ansible modules
-  have already handled. Plan: each primitive ships with table-driven tests
-  covering at least the cases Ansible documents.
+  edge cases (encoding, line endings, empty-file behavior). Plan: each
+  primitive ships with table-driven tests covering the expected product cases.
 - Multi-distro support. Ubuntu 24.04 only. Adding RHEL or Debian-non-Ubuntu
   requires its own ADR and a different package implementation.
-- Ansible's apt-cache amortization across a play. The provisioner runs
+- Apt-cache amortization across a full play-style run. The provisioner runs
   `apt update` at most once per apply, tracked via a per-apply flag.
 
 ### What becomes harder
@@ -205,20 +209,16 @@ explicitly excluded.
 
 - Multi-distro support.
 - A plugin or module system.
-- Full `--check` parity with Ansible (per-task diff output, fact gathering,
-  free-form `command:` execution).
+- Per-task diff output, fact gathering, and free-form remote command
+  execution.
 - A declarative DAG of operations with dependencies. Apply is a linear
   sequence in Go code.
-- `ansible-vault`-equivalent secret storage. Secrets live under
-  `/etc/simple-vps/secrets/` (see ADR-0002).
+- Vault-style secret storage. Secrets live under `/etc/simple-vps/secrets/`
+  (see ADR-0002).
 - Multi-host orchestration. One apply targets one host.
 
 ## Notes
 
-- `docs/ansible-replacement-review.md` contains the original rationale and the
-  three-way review (laptop author, Claude, ChatGPT) that fed this ADR. Once
-  this ADR lands, that brief should either be archived or its open questions
-  removed.
 - The `(changed bool, err error)` contract is the single design decision most
   likely to age well: it forces every primitive to answer "did this matter?"
   before the caller decides what to do next.

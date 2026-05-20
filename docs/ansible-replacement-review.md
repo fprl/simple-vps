@@ -31,8 +31,12 @@ The accepted direction:
 
 ## Open Implementation Work
 
-- Add the Go provisioner behind an opt-in flag.
-- Keep the Ansible path until Docker fake-VPS smoke reaches parity.
-- Migrate `/etc/simple-vps/state.json` to the ADR-0002 layout in a separate
-  state-package change.
-- Delete Ansible assets only after the Go path is defaulted and covered.
+Closed by the cutover work:
+
+- `simple-vps host install` now runs the Go provisioner directly.
+- The state package owns the ADR-0002 `/etc/simple-vps/*.json` layout.
+- The legacy playbooks, roles, inventory, and installer scripts were deleted.
+
+The remaining work is product coverage, not a compatibility bridge: expand
+fake-VPS coverage for fresh host install, rerun idempotency, `host doctor`,
+`setup`, and `deploy`.

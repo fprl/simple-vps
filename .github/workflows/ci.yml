@@ -14,15 +14,10 @@ jobs:
       - name: Bash syntax checks
         run: |
           bash -n install.sh
-          bash -n provisioning/install.sh
-          bash -n provisioning/tests/bootstrap_tarball_smoke.sh
-          bash -n provisioning/tests/install_plan_test.sh
+          bash -n tests/fake-vps/smoke.sh
       - name: Shellcheck
         run: |
-          shellcheck install.sh provisioning/install.sh provisioning/tests/bootstrap_tarball_smoke.sh provisioning/tests/install_plan_test.sh
-      - name: Bootstrap tarball smoke test
-        run: |
-          provisioning/tests/bootstrap_tarball_smoke.sh
+          shellcheck install.sh tests/fake-vps/smoke.sh
 
   go:
     runs-on: ubuntu-latest
@@ -50,21 +45,3 @@ jobs:
       - uses: oven-sh/setup-bun@v2
       - name: Go fake VPS smoke
         run: make fake-vps-smoke
-
-  ansible:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install Ansible
-        run: |
-          python3 -m pip install --upgrade pip
-          python3 -m pip install ansible ansible-lint
-      - name: Ansible syntax checks
-        working-directory: provisioning
-        run: |
-          ansible-playbook --syntax-check playbooks/vps-bootstrap.yml
-          ansible-playbook --syntax-check playbooks/vps-apply.yml
-      - name: Ansible lint
-        working-directory: provisioning
-        run: |
-          ansible-lint --profile min playbooks/vps-bootstrap.yml playbooks/vps-apply.yml

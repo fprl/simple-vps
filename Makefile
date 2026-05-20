@@ -1,9 +1,9 @@
-.PHONY: test go-test go-build go-vet provisioning-test fake-vps-smoke build build-linux build-darwin build-release clean
+.PHONY: test go-test go-build go-vet shell-test fake-vps-smoke build build-linux build-darwin build-release clean
 
 GO ?= go
 DIST_DIR ?= dist
 
-test: go-test go-build go-vet provisioning-test
+test: go-test go-build go-vet shell-test
 
 go-test:
 	$(GO) test ./...
@@ -14,13 +14,9 @@ go-build:
 go-vet:
 	$(GO) vet ./...
 
-provisioning-test:
+shell-test:
 	bash -n install.sh
-	bash -n provisioning/install.sh
-	provisioning/tests/install_plan_test.sh
-	provisioning/tests/bootstrap_tarball_smoke.sh
-	if command -v ansible-playbook >/dev/null 2>&1; then ANSIBLE_CONFIG=provisioning/ansible.cfg ansible-playbook --syntax-check -i provisioning/inventory/hosts.ini provisioning/playbooks/vps-bootstrap.yml; else echo "ansible-playbook not found; skipping bootstrap syntax check"; fi
-	if command -v ansible-playbook >/dev/null 2>&1; then ANSIBLE_CONFIG=provisioning/ansible.cfg ansible-playbook --syntax-check -i provisioning/inventory/hosts.ini provisioning/playbooks/vps-apply.yml; else echo "ansible-playbook not found; skipping apply syntax check"; fi
+	bash -n tests/fake-vps/smoke.sh
 
 fake-vps-smoke:
 	tests/fake-vps/smoke.sh
