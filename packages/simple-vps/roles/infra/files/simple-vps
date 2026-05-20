@@ -1130,6 +1130,12 @@ def ensure_app_user_absent(name):
         run_checked(["userdel", user])
 
 
+def ensure_app_group_absent(name):
+    group = app_user(name)
+    if command_succeeds(["getent", "group", group]):
+        run_checked(["groupdel", group])
+
+
 def deploy_user_from_sudo():
     user = os.environ.get("SUDO_USER")
     if not user or user == "root":
@@ -1196,6 +1202,7 @@ def cmd_app_destroy(args):
     if root.exists():
         shutil.rmtree(root)
     ensure_app_user_absent(name)
+    ensure_app_group_absent(name)
     print(f"Removed app {name}")
 
 

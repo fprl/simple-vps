@@ -526,6 +526,7 @@ class SimpleVpsCliTest(unittest.TestCase):
 
             self.assertFalse(root.exists())
             self.assertIn(["userdel", "app-my-app"], commands)
+            self.assertIn(["groupdel", "app-my-app"], commands)
 
     def test_app_read_env_prints_shared_env(self):
         with tempfile.TemporaryDirectory() as tmp:
