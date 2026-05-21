@@ -29,6 +29,8 @@ func TestFreshHostInstall(t *testing.T) {
 	env.configureSSH(t, "root")
 	env.waitForSSH(t)
 
+	env.assertHostDoctorNotInstalled(t)
+
 	keyPath := filepath.Join(env.tmp, "operator.pub")
 	mustWrite(t, keyPath, "ssh-ed25519 AAAAoperator test-operator\n")
 
@@ -38,6 +40,7 @@ func TestFreshHostInstall(t *testing.T) {
 	}
 
 	env.assertFreshHostInstalled(t)
+	env.assertHostDoctorHealthy(t)
 
 	second := env.installHost(t, keyPath)
 	if second != 0 {
@@ -137,6 +140,25 @@ func (e *smokeEnv) assertFreshHostInstalled(t *testing.T) {
 	}
 	assertEqual(t, strings.TrimSpace(e.ssh(t, "cat /run/simple-vps-fresh-host/timezone")), "Europe/Madrid")
 	assertEqual(t, strings.TrimSpace(e.ssh(t, "cat /run/simple-vps-fresh-host/locale")), "en_US.UTF-8")
+}
+
+func (e *smokeEnv) assertHostDoctorNotInstalled(t *testing.T) {
+	t.Helper()
+	result := e.runSimpleVPS(t, e.repoRoot, nil, "host", "doctor", "--server", "fake-vps")
+	if result.err == nil {
+		t.Fatalf("host doctor passed before install\nstdout:\n%s\nstderr:\n%s", result.stdout, result.stderr)
+	}
+	output := result.stdout + result.stderr
+	assertContains(t, output, "failed to run doctor")
+	assertContains(t, output, "host is not installed")
+}
+
+func (e *smokeEnv) assertHostDoctorHealthy(t *testing.T) {
+	t.Helper()
+	output := e.simpleVPS(t, e.repoRoot, nil, "host", "doctor", "--server", "fake-vps")
+	assertContains(t, output, "Simple VPS doctor")
+	assertContains(t, output, "state: healthy")
+	assertContains(t, output, "identity: healthy")
 }
 
 func changedOperations(t *testing.T, output string) int {
