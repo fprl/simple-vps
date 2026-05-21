@@ -170,6 +170,185 @@ func TestCloudflareTunnelGuardReadsADRProviderState(t *testing.T) {
 	}
 }
 
+func TestRunInstallDoesNotRestartConvergedCloudflaredService(t *testing.T) {
+	root := t.TempDir()
+	helper := filepath.Join(root, "simple-vps")
+	if err := os.WriteFile(helper, []byte("helper"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	unit := cloudflaredUnit("/usr/bin/cloudflared tunnel --no-autoupdate run --token-file /etc/cloudflared/tunnel-token")
+	runner := &installFakeRunner{files: map[string]host.FileState{
+		"/etc/cloudflared/tunnel-token": {
+			Content: []byte("token-test\n"),
+			Owner:   "root",
+			Group:   "cloudflared",
+			Mode:    0640,
+		},
+		"/etc/systemd/system/cloudflared.service": {
+			Content: []byte(unit),
+			Owner:   "root",
+			Group:   "root",
+			Mode:    0644,
+		},
+	}}
+
+	_, err := RunInstall(context.Background(), runner, InstallOptions{
+		OperatorUser:          "operator",
+		DeployUser:            "deploy",
+		OperatorSSHPublicKeys: []string{"ssh-ed25519 AAAAoperator test"},
+		DeploySSHPublicKeys:   []string{"ssh-ed25519 AAAAdeploy test"},
+		Tailscale:             false,
+		CloudflareTunnel:      true,
+		CloudflareTunnelToken: "token-test",
+		InstallLitestream:     false,
+		StateRoot:             root,
+		HelperBinaryPath:      helper,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, command := range runner.commands {
+		if command.Program == "systemctl" && strings.Join(command.Args, " ") == "restart cloudflared.service" {
+			t.Fatalf("cloudflared restart should be gated on unit/token drift, commands: %+v", runner.commands)
+		}
+	}
+}
+
+func TestRunInstallRestartsCloudflaredWhenTokenChanges(t *testing.T) {
+	root := t.TempDir()
+	helper := filepath.Join(root, "simple-vps")
+	if err := os.WriteFile(helper, []byte("helper"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	unit := cloudflaredUnit("/usr/bin/cloudflared tunnel --no-autoupdate run --token-file /etc/cloudflared/tunnel-token")
+	runner := &installFakeRunner{files: map[string]host.FileState{
+		"/etc/cloudflared/tunnel-token": {
+			Content: []byte("old-token\n"),
+			Owner:   "root",
+			Group:   "cloudflared",
+			Mode:    0640,
+		},
+		"/etc/systemd/system/cloudflared.service": {
+			Content: []byte(unit),
+			Owner:   "root",
+			Group:   "root",
+			Mode:    0644,
+		},
+	}}
+
+	_, err := RunInstall(context.Background(), runner, InstallOptions{
+		OperatorUser:          "operator",
+		DeployUser:            "deploy",
+		OperatorSSHPublicKeys: []string{"ssh-ed25519 AAAAoperator test"},
+		DeploySSHPublicKeys:   []string{"ssh-ed25519 AAAAdeploy test"},
+		Tailscale:             false,
+		CloudflareTunnel:      true,
+		CloudflareTunnelToken: "new-token",
+		InstallLitestream:     false,
+		StateRoot:             root,
+		HelperBinaryPath:      helper,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !runner.ranCommand("systemctl", "restart cloudflared.service") {
+		t.Fatalf("expected cloudflared restart after token drift, commands: %+v", runner.commands)
+	}
+}
+
+func TestRunInstallStartsInactiveConvergedCloudflaredService(t *testing.T) {
+	root := t.TempDir()
+	helper := filepath.Join(root, "simple-vps")
+	if err := os.WriteFile(helper, []byte("helper"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	unit := cloudflaredUnit("/usr/bin/cloudflared tunnel --no-autoupdate run --token-file /etc/cloudflared/tunnel-token")
+	runner := &installFakeRunner{
+		files: map[string]host.FileState{
+			"/etc/cloudflared/tunnel-token": {
+				Content: []byte("token-test\n"),
+				Owner:   "root",
+				Group:   "cloudflared",
+				Mode:    0640,
+			},
+			"/etc/systemd/system/cloudflared.service": {
+				Content: []byte(unit),
+				Owner:   "root",
+				Group:   "root",
+				Mode:    0644,
+			},
+		},
+		commandResults: map[string]host.CommandResult{
+			"systemctl is-active --quiet cloudflared.service": {ExitCode: 3},
+		},
+	}
+
+	_, err := RunInstall(context.Background(), runner, InstallOptions{
+		OperatorUser:          "operator",
+		DeployUser:            "deploy",
+		OperatorSSHPublicKeys: []string{"ssh-ed25519 AAAAoperator test"},
+		DeploySSHPublicKeys:   []string{"ssh-ed25519 AAAAdeploy test"},
+		Tailscale:             false,
+		CloudflareTunnel:      true,
+		CloudflareTunnelToken: "token-test",
+		InstallLitestream:     false,
+		StateRoot:             root,
+		HelperBinaryPath:      helper,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runner.ranCommand("systemctl", "restart cloudflared.service") {
+		t.Fatalf("did not expect restart for inactive converged service, commands: %+v", runner.commands)
+	}
+	if !runner.ranCommand("systemctl", "start cloudflared.service") {
+		t.Fatalf("expected start for inactive converged service, commands: %+v", runner.commands)
+	}
+}
+
+func TestRunInstallUsesHostUbuntuCodenameForDockerAndTailscaleRepos(t *testing.T) {
+	root := t.TempDir()
+	helper := filepath.Join(root, "simple-vps")
+	if err := os.WriteFile(helper, []byte("helper"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	runner := &installFakeRunner{files: map[string]host.FileState{
+		"/etc/os-release": {
+			Content: []byte("ID=ubuntu\nVERSION_CODENAME=jammy\n"),
+			Owner:   "root",
+			Group:   "root",
+			Mode:    0644,
+		},
+	}}
+
+	_, err := RunInstall(context.Background(), runner, InstallOptions{
+		OperatorUser:          "operator",
+		DeployUser:            "deploy",
+		OperatorSSHPublicKeys: []string{"ssh-ed25519 AAAAoperator test"},
+		DeploySSHPublicKeys:   []string{"ssh-ed25519 AAAAdeploy test"},
+		Tailscale:             true,
+		CloudflareTunnel:      false,
+		InstallDocker:         true,
+		InstallLitestream:     false,
+		StateRoot:             root,
+		HelperBinaryPath:      helper,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dockerSource := string(runner.files["/etc/apt/sources.list.d/docker.list"].Content)
+	tailscaleSource := string(runner.files["/etc/apt/sources.list.d/tailscale.list"].Content)
+	if !strings.Contains(dockerSource, " jammy stable") {
+		t.Fatalf("docker repo did not use host codename:\n%s", dockerSource)
+	}
+	if !strings.Contains(tailscaleSource, " jammy main") {
+		t.Fatalf("tailscale repo did not use host codename:\n%s", tailscaleSource)
+	}
+	if !runner.ranCommand("curl", "-fsSL https://pkgs.tailscale.com/stable/ubuntu/jammy.noarmor.gpg -o /usr/share/keyrings/tailscale-archive-keyring.gpg") {
+		t.Fatalf("tailscale key URL did not use host codename, commands: %+v", runner.commands)
+	}
+}
+
 type installFakeRunner struct {
 	files          map[string]host.FileState
 	commands       []host.Command
@@ -227,6 +406,15 @@ func (r *installFakeRunner) Run(_ context.Context, command host.Command) (host.C
 
 func installCommandKey(command host.Command) string {
 	return command.Program + " " + strings.Join(command.Args, " ")
+}
+
+func (r *installFakeRunner) ranCommand(program string, args string) bool {
+	for _, command := range r.commands {
+		if command.Program == program && strings.Join(command.Args, " ") == args {
+			return true
+		}
+	}
+	return false
 }
 
 var _ host.Runner = (*installFakeRunner)(nil)

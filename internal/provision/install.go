@@ -386,12 +386,16 @@ func litestreamInstalled(apply host.Apply) (bool, error) {
 
 func addDocker(ops *[]operation, opts InstallOptions) {
 	*ops = append(*ops, operation{name: "docker repo", run: func(apply host.Apply) (bool, error) {
+		codename, err := ubuntuCodename(apply)
+		if err != nil {
+			return false, err
+		}
 		return host.EnsureAptRepo(apply, host.AptRepo{
 			Name:       "docker",
 			KeyURL:     "https://download.docker.com/linux/ubuntu/gpg",
 			KeyPath:    "/usr/share/keyrings/docker.asc",
 			SourcePath: "/etc/apt/sources.list.d/docker.list",
-			SourceLine: "deb [arch=" + debArch(runtime.GOARCH) + " signed-by=/usr/share/keyrings/docker.asc] https://download.docker.com/linux/ubuntu noble stable",
+			SourceLine: "deb [arch=" + debArch(runtime.GOARCH) + " signed-by=/usr/share/keyrings/docker.asc] https://download.docker.com/linux/ubuntu " + codename + " stable",
 		})
 	}})
 	for _, pkg := range []string{"docker-ce", "docker-ce-cli", "containerd.io", "docker-buildx-plugin", "docker-compose-plugin"} {
@@ -411,12 +415,16 @@ func addDocker(ops *[]operation, opts InstallOptions) {
 
 func addTailscale(ops *[]operation, opts InstallOptions) {
 	*ops = append(*ops, operation{name: "tailscale repo", run: func(apply host.Apply) (bool, error) {
+		codename, err := ubuntuCodename(apply)
+		if err != nil {
+			return false, err
+		}
 		return host.EnsureAptRepo(apply, host.AptRepo{
 			Name:       "tailscale",
-			KeyURL:     "https://pkgs.tailscale.com/stable/ubuntu/noble.noarmor.gpg",
+			KeyURL:     "https://pkgs.tailscale.com/stable/ubuntu/" + codename + ".noarmor.gpg",
 			KeyPath:    "/usr/share/keyrings/tailscale-archive-keyring.gpg",
 			SourcePath: "/etc/apt/sources.list.d/tailscale.list",
-			SourceLine: "deb [signed-by=/usr/share/keyrings/tailscale-archive-keyring.gpg] https://pkgs.tailscale.com/stable/ubuntu noble main",
+			SourceLine: "deb [signed-by=/usr/share/keyrings/tailscale-archive-keyring.gpg] https://pkgs.tailscale.com/stable/ubuntu " + codename + " main",
 		})
 	}})
 	*ops = append(*ops, operation{name: "tailscale package", run: func(apply host.Apply) (bool, error) { return host.EnsurePackage(apply, "tailscale") }})
@@ -469,9 +477,14 @@ func addCloudflare(ops *[]operation, opts InstallOptions) {
 	*ops = append(*ops, operation{name: "cloudflared config dir", run: func(apply host.Apply) (bool, error) {
 		return host.EnsureDirectory(apply, host.Directory{Path: "/etc/cloudflared", Owner: "root", Group: "cloudflared", Mode: 0750})
 	}})
+	cloudflaredRuntimeChanged := false
 	if opts.CloudflareTunnelToken != "" {
 		*ops = append(*ops, operation{name: "cloudflared token", run: func(apply host.Apply) (bool, error) {
-			return host.EnsureFile(apply, host.File{Path: "/etc/cloudflared/tunnel-token", Content: []byte(strings.TrimSpace(opts.CloudflareTunnelToken) + "\n"), Owner: "root", Group: "cloudflared", Mode: 0640})
+			changed, err := host.EnsureFile(apply, host.File{Path: "/etc/cloudflared/tunnel-token", Content: []byte(strings.TrimSpace(opts.CloudflareTunnelToken) + "\n"), Owner: "root", Group: "cloudflared", Mode: 0640})
+			if changed {
+				cloudflaredRuntimeChanged = true
+			}
+			return changed, err
 		}})
 	}
 	if opts.CloudflareAPIToken != "" {
@@ -490,7 +503,11 @@ func addCloudflare(ops *[]operation, opts InstallOptions) {
 			if ready {
 				return false, nil
 			}
-			return runCommand("simple-vps", args...)(apply)
+			changed, err := runCommand("simple-vps", args...)(apply)
+			if changed {
+				cloudflaredRuntimeChanged = true
+			}
+			return changed, err
 		}})
 	}
 	if opts.CloudflareTunnelToken != "" || opts.CloudflareAPIToken != "" || opts.CloudflareTunnelConfig != "" {
@@ -499,9 +516,49 @@ func addCloudflare(ops *[]operation, opts InstallOptions) {
 			if opts.CloudflareTunnelConfig != "" {
 				execStart = "/usr/bin/cloudflared --config " + opts.CloudflareTunnelConfig + " tunnel run"
 			}
-			return host.EnsureSystemdUnit(apply, host.SystemdUnit{Name: "cloudflared.service", Content: []byte(cloudflaredUnit(execStart)), Action: host.Restarted})
+			return ensureCloudflaredService(apply, []byte(cloudflaredUnit(execStart)), cloudflaredRuntimeChanged)
 		}})
 	}
+}
+
+func ensureCloudflaredService(apply host.Apply, unitContent []byte, restartOnChange bool) (bool, error) {
+	unitChanged, err := host.EnsureSystemdUnit(apply, host.SystemdUnit{Name: "cloudflared.service", Content: unitContent})
+	if err != nil {
+		return false, err
+	}
+	if unitChanged || restartOnChange {
+		if apply.CheckMode {
+			return true, nil
+		}
+		result, err := apply.Runner.Run(apply.ContextOrBackground(), host.Command{Program: "systemctl", Args: []string{"restart", "cloudflared.service"}})
+		if err != nil {
+			return false, err
+		}
+		return true, commandOK(result, "systemctl", []string{"restart", "cloudflared.service"})
+	}
+	active, err := systemdServiceActive(apply, "cloudflared.service")
+	if err != nil {
+		return false, err
+	}
+	if active {
+		return false, nil
+	}
+	if apply.CheckMode {
+		return true, nil
+	}
+	result, err := apply.Runner.Run(apply.ContextOrBackground(), host.Command{Program: "systemctl", Args: []string{"start", "cloudflared.service"}})
+	if err != nil {
+		return false, err
+	}
+	return true, commandOK(result, "systemctl", []string{"start", "cloudflared.service"})
+}
+
+func systemdServiceActive(apply host.Apply, name string) (bool, error) {
+	result, err := apply.Runner.Run(apply.ContextOrBackground(), host.Command{Program: "systemctl", Args: []string{"is-active", "--quiet", name}})
+	if err != nil {
+		return false, err
+	}
+	return result.ExitCode == 0, nil
 }
 
 func cloudflareTunnelAlreadyConfigured(apply host.Apply) (bool, error) {
@@ -662,6 +719,38 @@ func essentialPackages() []string {
 		"unzip",
 		"wget",
 	}
+}
+
+func ubuntuCodename(apply host.Apply) (string, error) {
+	file, err := apply.Runner.ReadFile(apply.ContextOrBackground(), "/etc/os-release")
+	if err != nil {
+		if errors.Is(err, host.ErrNotExist) {
+			return "noble", nil
+		}
+		return "", err
+	}
+	if codename := osReleaseValue(file.Content, "VERSION_CODENAME"); codename != "" {
+		return codename, nil
+	}
+	if codename := osReleaseValue(file.Content, "UBUNTU_CODENAME"); codename != "" {
+		return codename, nil
+	}
+	return "noble", nil
+}
+
+func osReleaseValue(content []byte, key string) string {
+	for _, line := range strings.Split(strings.ReplaceAll(string(content), "\r\n", "\n"), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		name, value, ok := strings.Cut(line, "=")
+		if !ok || name != key {
+			continue
+		}
+		return strings.Trim(strings.TrimSpace(value), `"'`)
+	}
+	return ""
 }
 
 func debArch(goarch string) string {
