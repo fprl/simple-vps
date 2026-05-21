@@ -168,8 +168,10 @@ PY
     env_file="$(unit_value EnvironmentFile "$file")"
     port="$(unit_env PORT "$file")"
     exec_start="$(unit_value ExecStart "$file")"
-    command="${exec_start#/usr/bin/env bash -c 'exec }"
-    command="${command%\'}"
+    exec_prefix="/usr/bin/env bash -c 'exec "
+    exec_suffix="'"
+    command="${exec_start#"$exec_prefix"}"
+    command="${command%"$exec_suffix"}"
     file_env=()
     if [[ -f "$env_file" ]]; then
       while IFS= read -r line || [[ -n "$line" ]]; do

@@ -29,7 +29,7 @@ fingerprint_for_path() {
 }
 
 if [[ "$*" == *"--show-keys"* ]]; then
-  path="${@: -1}"
+  path="${*: -1}"
   fingerprint="$(fingerprint_for_path "$path")"
   if [[ -z "$fingerprint" ]]; then
     echo "fake gpg: unknown key $path" >&2
