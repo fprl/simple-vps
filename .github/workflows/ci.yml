@@ -14,10 +14,12 @@ jobs:
       - name: Bash syntax checks
         run: |
           bash -n install.sh
-          bash -n tests/fake-vps/smoke.sh
+          bash -n tests/fake-vps/fake-caddy
+          bash -n tests/fake-vps/fake-journalctl
+          bash -n tests/fake-vps/fake-systemctl
       - name: Shellcheck
         run: |
-          shellcheck install.sh tests/fake-vps/smoke.sh
+          shellcheck install.sh tests/fake-vps/fake-caddy tests/fake-vps/fake-journalctl tests/fake-vps/fake-systemctl
 
   go:
     runs-on: ubuntu-latest

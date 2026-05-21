@@ -16,10 +16,12 @@ go-vet:
 
 shell-test:
 	bash -n install.sh
-	bash -n tests/fake-vps/smoke.sh
+	bash -n tests/fake-vps/fake-caddy
+	bash -n tests/fake-vps/fake-journalctl
+	bash -n tests/fake-vps/fake-systemctl
 
 fake-vps-smoke:
-	tests/fake-vps/smoke.sh
+	SIMPLE_VPS_RUN_FAKE_VPS_SMOKE=1 $(GO) test ./tests/fake-vps -run TestSmoke -count=1 -timeout 20m
 
 build:
 	mkdir -p $(DIST_DIR)
