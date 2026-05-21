@@ -105,7 +105,7 @@ func TestEnsureAptRepoReplacesUntrustedKey(t *testing.T) {
 		"gpg --show-keys --with-colons --fingerprint /usr/share/keyrings/example.gpg": {
 			Stdout: []byte(gpgFingerprintOutput("BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB")),
 		},
-		"gpg --show-keys --with-colons --fingerprint /tmp/simple-vps-example-apt-key": {
+		"gpg --show-keys --with-colons --fingerprint /tmp/simple-vps-example-apt.TEST/key": {
 			Stdout: []byte(gpgFingerprintOutput("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")),
 		},
 	}
@@ -128,10 +128,11 @@ func TestEnsureAptRepoReplacesUntrustedKey(t *testing.T) {
 
 	wantCommands := []Command{
 		{Program: "gpg", Args: []string{"--show-keys", "--with-colons", "--fingerprint", "/usr/share/keyrings/example.gpg"}},
-		{Program: "curl", Args: []string{"-fsSL", "https://example.test/repo.gpg", "-o", "/tmp/simple-vps-example-apt-key"}},
-		{Program: "gpg", Args: []string{"--show-keys", "--with-colons", "--fingerprint", "/tmp/simple-vps-example-apt-key"}},
-		{Program: "install", Args: []string{"-o", "root", "-g", "root", "-m", "0644", "/tmp/simple-vps-example-apt-key", "/usr/share/keyrings/example.gpg"}},
-		{Program: "rm", Args: []string{"-f", "/tmp/simple-vps-example-apt-key"}},
+		{Program: "mktemp", Args: []string{"-d", "/tmp/simple-vps-example-apt.XXXXXX"}},
+		{Program: "curl", Args: []string{"-fsSL", "https://example.test/repo.gpg", "-o", "/tmp/simple-vps-example-apt.TEST/key"}},
+		{Program: "gpg", Args: []string{"--show-keys", "--with-colons", "--fingerprint", "/tmp/simple-vps-example-apt.TEST/key"}},
+		{Program: "install", Args: []string{"-o", "root", "-g", "root", "-m", "0644", "/tmp/simple-vps-example-apt.TEST/key", "/usr/share/keyrings/example.gpg"}},
+		{Program: "rm", Args: []string{"-rf", "--", "/tmp/simple-vps-example-apt.TEST"}},
 		{Program: "apt-get", Args: []string{"update", "-y"}},
 	}
 	if !reflect.DeepEqual(runner.commands, wantCommands) {
@@ -186,7 +187,7 @@ func TestEnsureAptRepoSkipsTrustedKeyAndConvergedSource(t *testing.T) {
 func TestEnsureAptRepoRejectsDownloadedKeyWithWrongFingerprint(t *testing.T) {
 	runner := newFakeRunner()
 	runner.commandResults = map[string]CommandResult{
-		"gpg --show-keys --with-colons --fingerprint /tmp/simple-vps-example-apt-key": {
+		"gpg --show-keys --with-colons --fingerprint /tmp/simple-vps-example-apt.TEST/key": {
 			Stdout: []byte(gpgFingerprintOutput("BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB")),
 		},
 	}
@@ -209,7 +210,7 @@ func TestEnsureAptRepoRejectsDownloadedKeyWithWrongFingerprint(t *testing.T) {
 	if _, ok := runner.files["/etc/apt/sources.list.d/example.list"]; ok {
 		t.Fatal("failed fingerprint check must not write source list")
 	}
-	if runner.ranCommand("install", "-o root -g root -m 0644 /tmp/simple-vps-example-apt-key /usr/share/keyrings/example.gpg") {
+	if runner.ranCommand("install", "-o root -g root -m 0644 /tmp/simple-vps-example-apt.TEST/key /usr/share/keyrings/example.gpg") {
 		t.Fatalf("failed fingerprint check installed key, commands: %+v", runner.commands)
 	}
 	if runner.ranCommand("apt-get", "update -y") {
@@ -242,10 +243,10 @@ func TestEnsureAptRepoRequiresFingerprintForKey(t *testing.T) {
 func TestEnsureAptRepoDearmorsArmoredKeyBeforeInstall(t *testing.T) {
 	runner := newFakeRunner()
 	runner.commandResults = map[string]CommandResult{
-		"gpg --show-keys --with-colons --fingerprint /tmp/simple-vps-example-apt-key": {
+		"gpg --show-keys --with-colons --fingerprint /tmp/simple-vps-example-apt.TEST/key": {
 			Stdout: []byte(gpgFingerprintOutput("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")),
 		},
-		"gpg --show-keys --with-colons --fingerprint /tmp/simple-vps-example-apt-key.gpg": {
+		"gpg --show-keys --with-colons --fingerprint /tmp/simple-vps-example-apt.TEST/key.gpg": {
 			Stdout: []byte(gpgFingerprintOutput("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")),
 		},
 	}
@@ -268,12 +269,13 @@ func TestEnsureAptRepoDearmorsArmoredKeyBeforeInstall(t *testing.T) {
 	}
 
 	wantCommands := []Command{
-		{Program: "curl", Args: []string{"-fsSL", "https://example.test/repo.asc", "-o", "/tmp/simple-vps-example-apt-key"}},
-		{Program: "gpg", Args: []string{"--show-keys", "--with-colons", "--fingerprint", "/tmp/simple-vps-example-apt-key"}},
-		{Program: "gpg", Args: []string{"--dearmor", "--yes", "-o", "/tmp/simple-vps-example-apt-key.gpg", "/tmp/simple-vps-example-apt-key"}},
-		{Program: "gpg", Args: []string{"--show-keys", "--with-colons", "--fingerprint", "/tmp/simple-vps-example-apt-key.gpg"}},
-		{Program: "install", Args: []string{"-o", "root", "-g", "root", "-m", "0644", "/tmp/simple-vps-example-apt-key.gpg", "/usr/share/keyrings/example.gpg"}},
-		{Program: "rm", Args: []string{"-f", "/tmp/simple-vps-example-apt-key", "/tmp/simple-vps-example-apt-key.gpg"}},
+		{Program: "mktemp", Args: []string{"-d", "/tmp/simple-vps-example-apt.XXXXXX"}},
+		{Program: "curl", Args: []string{"-fsSL", "https://example.test/repo.asc", "-o", "/tmp/simple-vps-example-apt.TEST/key"}},
+		{Program: "gpg", Args: []string{"--show-keys", "--with-colons", "--fingerprint", "/tmp/simple-vps-example-apt.TEST/key"}},
+		{Program: "gpg", Args: []string{"--dearmor", "--yes", "-o", "/tmp/simple-vps-example-apt.TEST/key.gpg", "/tmp/simple-vps-example-apt.TEST/key"}},
+		{Program: "gpg", Args: []string{"--show-keys", "--with-colons", "--fingerprint", "/tmp/simple-vps-example-apt.TEST/key.gpg"}},
+		{Program: "install", Args: []string{"-o", "root", "-g", "root", "-m", "0644", "/tmp/simple-vps-example-apt.TEST/key.gpg", "/usr/share/keyrings/example.gpg"}},
+		{Program: "rm", Args: []string{"-rf", "--", "/tmp/simple-vps-example-apt.TEST"}},
 		{Program: "apt-get", Args: []string{"update", "-y"}},
 	}
 	if !reflect.DeepEqual(runner.commands, wantCommands) {
@@ -293,10 +295,10 @@ func TestEnsureAptRepoReplacesArmoredKeyWhenDearmorRequired(t *testing.T) {
 		"gpg --show-keys --with-colons --fingerprint /usr/share/keyrings/example.gpg": {
 			Stdout: []byte(gpgFingerprintOutput("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")),
 		},
-		"gpg --show-keys --with-colons --fingerprint /tmp/simple-vps-example-apt-key": {
+		"gpg --show-keys --with-colons --fingerprint /tmp/simple-vps-example-apt.TEST/key": {
 			Stdout: []byte(gpgFingerprintOutput("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")),
 		},
-		"gpg --show-keys --with-colons --fingerprint /tmp/simple-vps-example-apt-key.gpg": {
+		"gpg --show-keys --with-colons --fingerprint /tmp/simple-vps-example-apt.TEST/key.gpg": {
 			Stdout: []byte(gpgFingerprintOutput("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")),
 		},
 	}
@@ -317,8 +319,46 @@ func TestEnsureAptRepoReplacesArmoredKeyWhenDearmorRequired(t *testing.T) {
 	if !changed {
 		t.Fatal("expected armored key to be replaced when dearmor is required")
 	}
-	if !runner.ranCommand("gpg", "--dearmor --yes -o /tmp/simple-vps-example-apt-key.gpg /tmp/simple-vps-example-apt-key") {
+	if !runner.ranCommand("gpg", "--dearmor --yes -o /tmp/simple-vps-example-apt.TEST/key.gpg /tmp/simple-vps-example-apt.TEST/key") {
 		t.Fatalf("expected dearmor command, commands: %+v", runner.commands)
+	}
+}
+
+func TestEnsureAptRepoRejectsDearmoredKeyWithWrongFingerprint(t *testing.T) {
+	runner := newFakeRunner()
+	runner.commandResults = map[string]CommandResult{
+		"gpg --show-keys --with-colons --fingerprint /tmp/simple-vps-example-apt.TEST/key": {
+			Stdout: []byte(gpgFingerprintOutput("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")),
+		},
+		"gpg --show-keys --with-colons --fingerprint /tmp/simple-vps-example-apt.TEST/key.gpg": {
+			Stdout: []byte(gpgFingerprintOutput("BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB")),
+		},
+	}
+	apply := Apply{Context: context.Background(), Runner: runner, State: &RunState{}}
+
+	changed, err := EnsureAptRepo(apply, AptRepo{
+		Name:           "example",
+		KeyURL:         "https://example.test/repo.asc",
+		KeyPath:        "/usr/share/keyrings/example.gpg",
+		KeyFingerprint: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+		KeyDearmor:     true,
+		SourcePath:     "/etc/apt/sources.list.d/example.list",
+		SourceLine:     "deb [signed-by=/usr/share/keyrings/example.gpg] https://example.test stable main",
+	})
+	if err == nil {
+		t.Fatal("expected dearmored fingerprint mismatch to fail")
+	}
+	if changed {
+		t.Fatal("failed dearmored fingerprint check must not report changed")
+	}
+	if _, ok := runner.files["/etc/apt/sources.list.d/example.list"]; ok {
+		t.Fatal("failed dearmored fingerprint check must not write source list")
+	}
+	if runner.ranCommand("install", "-o root -g root -m 0644 /tmp/simple-vps-example-apt.TEST/key.gpg /usr/share/keyrings/example.gpg") {
+		t.Fatalf("failed dearmored fingerprint check installed key, commands: %+v", runner.commands)
+	}
+	if runner.ranCommand("apt-get", "update -y") {
+		t.Fatalf("failed dearmored fingerprint check updated apt, commands: %+v", runner.commands)
 	}
 }
 
@@ -665,6 +705,9 @@ func (r *fakeRunner) Run(_ context.Context, command Command) (CommandResult, err
 	r.commands = append(r.commands, command)
 	if result, ok := r.commandResults[commandKey(command)]; ok {
 		return result, nil
+	}
+	if command.Program == "mktemp" && len(command.Args) == 2 && command.Args[0] == "-d" {
+		return CommandResult{Stdout: []byte(strings.TrimSuffix(command.Args[1], ".XXXXXX") + ".TEST\n")}, nil
 	}
 	return CommandResult{}, nil
 }

@@ -183,6 +183,8 @@ func ensureAptRepoKey(apply Apply, repo AptRepo) (bool, error) {
 		currentKey = file
 	}
 	if keyExists {
+		// gpg is a hard dependency here; RunInstall installs gnupg with the
+		// essential packages before any third-party apt repo setup runs.
 		trusted, err := aptKeyHasFingerprint(apply, repo.KeyPath, expected)
 		if err != nil {
 			return false, err
@@ -202,6 +204,8 @@ func ensureAptRepoKey(apply Apply, repo AptRepo) (bool, error) {
 }
 
 func aptKeyNeedsDearmor(repo AptRepo, current FileState) bool {
+	// A trusted armored key still gets replaced when the repo expects the
+	// canonical dearmored keyring form.
 	return repo.KeyDearmor && bytes.Contains(current.Content, []byte("-----BEGIN PGP"))
 }
 
@@ -275,14 +279,17 @@ func gpgOutputHasFingerprint(output []byte, expected string) bool {
 }
 
 func downloadTrustedAptKey(apply Apply, repo AptRepo, expected string) error {
-	keyPath := aptRepoTempPath(repo.Name, "apt-key")
-	installPath := keyPath
-	cleanup := []string{keyPath}
-	if repo.KeyDearmor {
-		installPath = keyPath + ".gpg"
-		cleanup = append(cleanup, installPath)
+	tempDir, err := createAptRepoTempDir(apply, repo.Name)
+	if err != nil {
+		return err
 	}
-	defer cleanupAptRepoTempFiles(apply, cleanup)
+	defer cleanupAptRepoTempDir(apply, tempDir)
+
+	keyPath := tempDir + "/key"
+	installPath := keyPath
+	if repo.KeyDearmor {
+		installPath = tempDir + "/key.gpg"
+	}
 
 	result, err := apply.Runner.Run(apply.ContextOrBackground(), Command{Program: "curl", Args: []string{"-fsSL", repo.KeyURL, "-o", keyPath}})
 	if err != nil {
@@ -315,19 +322,35 @@ func downloadTrustedAptKey(apply Apply, repo AptRepo, expected string) error {
 	return requireZero(result, "install", args)
 }
 
-func cleanupAptRepoTempFiles(apply Apply, paths []string) {
-	args := append([]string{"-f"}, paths...)
+func createAptRepoTempDir(apply Apply, name string) (string, error) {
+	args := []string{"-d", aptRepoTempTemplate(name)}
+	result, err := apply.Runner.Run(apply.ContextOrBackground(), Command{Program: "mktemp", Args: args})
+	if err != nil {
+		return "", err
+	}
+	if err := requireZero(result, "mktemp", args); err != nil {
+		return "", err
+	}
+	path := strings.TrimSpace(string(result.Stdout))
+	if path == "" {
+		return "", fmt.Errorf("apt repo %s temp dir creation returned empty path", name)
+	}
+	return path, nil
+}
+
+func cleanupAptRepoTempDir(apply Apply, path string) {
+	args := []string{"-rf", "--", path}
 	_, _ = apply.Runner.Run(apply.ContextOrBackground(), Command{Program: "rm", Args: args})
 }
 
-func aptRepoTempPath(name string, suffix string) string {
+func aptRepoTempTemplate(name string) string {
 	safe := strings.ToLower(strings.TrimSpace(name))
 	safe = regexp.MustCompile(`[^a-z0-9_.-]+`).ReplaceAllString(safe, "-")
 	safe = strings.Trim(safe, "-.")
 	if safe == "" {
 		safe = "repo"
 	}
-	return "/tmp/simple-vps-" + safe + "-" + suffix
+	return "/tmp/simple-vps-" + safe + "-apt.XXXXXX"
 }
 
 func EnsureUser(apply Apply, user User) (bool, error) {

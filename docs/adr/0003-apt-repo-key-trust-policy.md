@@ -26,8 +26,9 @@ the provisioner must include:
 - whether the downloaded key must be dearmored before installation
 
 The operation verifies the fingerprint of an existing key before accepting it.
-If the key is missing or has the wrong fingerprint, it downloads the key to a
-temporary path, verifies the downloaded key, optionally dearmors it, verifies the
+If the key is missing or has the wrong fingerprint, it creates an unpredictable
+root-owned temporary directory with `mktemp -d`, downloads the key inside that
+directory, verifies the downloaded key, optionally dearmors it, verifies the
 installed-form key again, and only then installs it into the keyring path.
 
 A downloaded key with the wrong fingerprint is a hard apply failure. The source

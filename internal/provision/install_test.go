@@ -344,7 +344,7 @@ func TestRunInstallUsesHostUbuntuCodenameForDockerAndTailscaleRepos(t *testing.T
 	if !strings.Contains(tailscaleSource, " jammy main") {
 		t.Fatalf("tailscale repo did not use host codename:\n%s", tailscaleSource)
 	}
-	if !runner.ranCommand("curl", "-fsSL https://pkgs.tailscale.com/stable/ubuntu/jammy.noarmor.gpg -o /tmp/simple-vps-tailscale-apt-key") {
+	if !runner.ranCommand("curl", "-fsSL https://pkgs.tailscale.com/stable/ubuntu/jammy.noarmor.gpg -o /tmp/simple-vps-tailscale-apt.TEST/key") {
 		t.Fatalf("tailscale key URL did not use host codename, commands: %+v", runner.commands)
 	}
 }
@@ -460,6 +460,10 @@ func (r *installFakeRunner) Run(_ context.Context, command host.Command) (host.C
 		return host.CommandResult{Stdout: []byte("System Locale: LANG=en_US.UTF-8\n")}, nil
 	case "gpg":
 		return r.runGPG(command)
+	case "mktemp":
+		if len(command.Args) == 2 && command.Args[0] == "-d" {
+			return host.CommandResult{Stdout: []byte(strings.TrimSuffix(command.Args[1], ".XXXXXX") + ".TEST\n")}, nil
+		}
 	}
 	return host.CommandResult{}, nil
 }
