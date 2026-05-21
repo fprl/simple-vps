@@ -477,6 +477,8 @@ func addCloudflare(ops *[]operation, opts InstallOptions) {
 	*ops = append(*ops, operation{name: "cloudflared config dir", run: func(apply host.Apply) (bool, error) {
 		return host.EnsureDirectory(apply, host.Directory{Path: "/etc/cloudflared", Owner: "root", Group: "cloudflared", Mode: 0750})
 	}})
+	// Token/setup ops intentionally precede the service op; this flag carries
+	// their drift forward so service convergence can restart only when needed.
 	cloudflaredRuntimeChanged := false
 	if opts.CloudflareTunnelToken != "" {
 		*ops = append(*ops, operation{name: "cloudflared token", run: func(apply host.Apply) (bool, error) {

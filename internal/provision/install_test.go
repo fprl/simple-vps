@@ -349,6 +349,64 @@ func TestRunInstallUsesHostUbuntuCodenameForDockerAndTailscaleRepos(t *testing.T
 	}
 }
 
+func TestOSReleaseValue(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		key     string
+		want    string
+	}{
+		{
+			name:    "plain",
+			content: "VERSION_CODENAME=jammy\n",
+			key:     "VERSION_CODENAME",
+			want:    "jammy",
+		},
+		{
+			name:    "double quoted",
+			content: "VERSION_CODENAME=\"noble\"\n",
+			key:     "VERSION_CODENAME",
+			want:    "noble",
+		},
+		{
+			name:    "single quoted crlf",
+			content: "VERSION_CODENAME='oracular'\r\n",
+			key:     "VERSION_CODENAME",
+			want:    "oracular",
+		},
+		{
+			name:    "ignores comments",
+			content: "# VERSION_CODENAME=wrong\nUBUNTU_CODENAME=plucky\n",
+			key:     "UBUNTU_CODENAME",
+			want:    "plucky",
+		},
+		{
+			name:    "missing",
+			content: "ID=ubuntu\n",
+			key:     "VERSION_CODENAME",
+			want:    "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := osReleaseValue([]byte(tt.content), tt.key); got != tt.want {
+				t.Fatalf("osReleaseValue() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestUbuntuCodenameFallsBackToNoble(t *testing.T) {
+	runner := &installFakeRunner{files: map[string]host.FileState{}}
+	got, err := ubuntuCodename(host.Apply{Context: context.Background(), Runner: runner})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "noble" {
+		t.Fatalf("ubuntuCodename() = %q, want noble", got)
+	}
+}
+
 type installFakeRunner struct {
 	files          map[string]host.FileState
 	commands       []host.Command

@@ -211,6 +211,7 @@ func runtimeCheckCommand(runtime string, lockfiles []string) string {
 	}
 	parts := []string{"missing=0"}
 	for _, tool := range tools {
+		// Tool names are closed over manifest runtime and known lockfile names.
 		parts = append(parts, fmt.Sprintf("command -v %s >/dev/null 2>&1 || { echo 'missing runtime tool: %s' >&2; missing=1; }", tool, tool))
 	}
 	parts = append(parts, `exit "$missing"`)
