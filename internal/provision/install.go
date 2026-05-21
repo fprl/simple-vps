@@ -12,10 +12,16 @@ import (
 	"time"
 
 	"github.com/fprl/simple-vps/internal/provision/host"
-	"github.com/fprl/simple-vps/internal/provision/state"
+	"github.com/fprl/simple-vps/internal/store"
 )
 
-const litestreamVersion = "0.5.8"
+const (
+	litestreamVersion           = "0.5.8"
+	caddyAptKeyFingerprint      = "65760C51EDEA2017CEA2CA15155B6D79CA56EA34"
+	dockerAptKeyFingerprint     = "9DC858229FC7DD38854AE2D88D81803C0EBFCD88"
+	tailscaleAptKeyFingerprint  = "2596A99EAAB33821893C0A79458CA832957F5868"
+	cloudflareAptKeyFingerprint = "CC94B39C77AE7342A68B89628A682D308D4E5E73"
+)
 
 type InstallOptions struct {
 	OperatorUser           string
@@ -59,20 +65,20 @@ func RunInstall(ctx context.Context, runner host.Runner, opts InstallOptions) (I
 		CheckMode: opts.CheckMode,
 		State:     &host.RunState{},
 	}
-	store := state.Store{Root: opts.StateRoot}
+	stateStore := store.Store{Root: opts.StateRoot}
 	startedAt := opts.Now().UTC()
 	applyID := opts.ApplyID
 	if applyID == "" {
 		applyID = startedAt.Format("20060102T150405Z")
 	}
 
-	ops := installOperations(opts, store)
+	ops := installOperations(opts, stateStore)
 	changedCount := 0
 	for _, op := range ops {
 		changed, err := op.run(apply)
 		if err != nil {
 			if !opts.CheckMode {
-				_ = writeApplyState(store, opts, applyID, startedAt, opts.Now().UTC(), "failed", changedCount)
+				_ = writeApplyState(stateStore, opts, applyID, startedAt, opts.Now().UTC(), "failed", changedCount)
 			}
 			return InstallSummary{ApplyID: applyID, OperationsChanged: changedCount}, fmt.Errorf("%s: %w", op.name, err)
 		}
@@ -82,14 +88,14 @@ func RunInstall(ctx context.Context, runner host.Runner, opts InstallOptions) (I
 	}
 
 	if !opts.CheckMode {
-		if err := writeApplyState(store, opts, applyID, startedAt, opts.Now().UTC(), "ok", changedCount); err != nil {
+		if err := writeApplyState(stateStore, opts, applyID, startedAt, opts.Now().UTC(), "ok", changedCount); err != nil {
 			return InstallSummary{ApplyID: applyID, OperationsChanged: changedCount}, err
 		}
 	}
 	return InstallSummary{ApplyID: applyID, OperationsChanged: changedCount}, nil
 }
 
-func installOperations(opts InstallOptions, store state.Store) []operation {
+func installOperations(opts InstallOptions, stateStore store.Store) []operation {
 	var ops []operation
 	add := func(name string, run func(host.Apply) (bool, error)) {
 		ops = append(ops, operation{name: name, run: run})
@@ -97,12 +103,12 @@ func installOperations(opts InstallOptions, store state.Store) []operation {
 
 	add("write host desired state", func(apply host.Apply) (bool, error) {
 		desired := desiredHost(opts)
-		changed, err := hostDesiredChanged(store, desired)
+		changed, err := hostDesiredChanged(stateStore, desired)
 		if err != nil {
 			return false, err
 		}
 		if changed && !opts.CheckMode {
-			if err := store.WriteHostDesired(desired); err != nil {
+			if err := stateStore.WriteHostDesired(desired); err != nil {
 				return false, err
 			}
 		}
@@ -318,11 +324,13 @@ func addHelper(ops *[]operation, opts InstallOptions) {
 func addCaddy(ops *[]operation) {
 	*ops = append(*ops, operation{name: "caddy repo", run: func(apply host.Apply) (bool, error) {
 		return host.EnsureAptRepo(apply, host.AptRepo{
-			Name:       "caddy",
-			KeyURL:     "https://dl.cloudsmith.io/public/caddy/stable/gpg.key",
-			KeyPath:    "/usr/share/keyrings/caddy-stable-archive-keyring.gpg",
-			SourcePath: "/etc/apt/sources.list.d/caddy-stable.list",
-			SourceLine: "deb [signed-by=/usr/share/keyrings/caddy-stable-archive-keyring.gpg] https://dl.cloudsmith.io/public/caddy/stable/deb/debian any-version main",
+			Name:           "caddy",
+			KeyURL:         "https://dl.cloudsmith.io/public/caddy/stable/gpg.key",
+			KeyPath:        "/usr/share/keyrings/caddy-stable-archive-keyring.gpg",
+			KeyFingerprint: caddyAptKeyFingerprint,
+			KeyDearmor:     true,
+			SourcePath:     "/etc/apt/sources.list.d/caddy-stable.list",
+			SourceLine:     "deb [signed-by=/usr/share/keyrings/caddy-stable-archive-keyring.gpg] https://dl.cloudsmith.io/public/caddy/stable/deb/debian any-version main",
 		})
 	}})
 	*ops = append(*ops, operation{name: "caddy package", run: func(apply host.Apply) (bool, error) { return host.EnsurePackage(apply, "caddy") }})
@@ -386,12 +394,17 @@ func litestreamInstalled(apply host.Apply) (bool, error) {
 
 func addDocker(ops *[]operation, opts InstallOptions) {
 	*ops = append(*ops, operation{name: "docker repo", run: func(apply host.Apply) (bool, error) {
+		codename, err := ubuntuCodename(apply)
+		if err != nil {
+			return false, err
+		}
 		return host.EnsureAptRepo(apply, host.AptRepo{
-			Name:       "docker",
-			KeyURL:     "https://download.docker.com/linux/ubuntu/gpg",
-			KeyPath:    "/usr/share/keyrings/docker.asc",
-			SourcePath: "/etc/apt/sources.list.d/docker.list",
-			SourceLine: "deb [arch=" + debArch(runtime.GOARCH) + " signed-by=/usr/share/keyrings/docker.asc] https://download.docker.com/linux/ubuntu noble stable",
+			Name:           "docker",
+			KeyURL:         "https://download.docker.com/linux/ubuntu/gpg",
+			KeyPath:        "/usr/share/keyrings/docker.asc",
+			KeyFingerprint: dockerAptKeyFingerprint,
+			SourcePath:     "/etc/apt/sources.list.d/docker.list",
+			SourceLine:     "deb [arch=" + debArch(runtime.GOARCH) + " signed-by=/usr/share/keyrings/docker.asc] https://download.docker.com/linux/ubuntu " + codename + " stable",
 		})
 	}})
 	for _, pkg := range []string{"docker-ce", "docker-ce-cli", "containerd.io", "docker-buildx-plugin", "docker-compose-plugin"} {
@@ -411,12 +424,17 @@ func addDocker(ops *[]operation, opts InstallOptions) {
 
 func addTailscale(ops *[]operation, opts InstallOptions) {
 	*ops = append(*ops, operation{name: "tailscale repo", run: func(apply host.Apply) (bool, error) {
+		codename, err := ubuntuCodename(apply)
+		if err != nil {
+			return false, err
+		}
 		return host.EnsureAptRepo(apply, host.AptRepo{
-			Name:       "tailscale",
-			KeyURL:     "https://pkgs.tailscale.com/stable/ubuntu/noble.noarmor.gpg",
-			KeyPath:    "/usr/share/keyrings/tailscale-archive-keyring.gpg",
-			SourcePath: "/etc/apt/sources.list.d/tailscale.list",
-			SourceLine: "deb [signed-by=/usr/share/keyrings/tailscale-archive-keyring.gpg] https://pkgs.tailscale.com/stable/ubuntu noble main",
+			Name:           "tailscale",
+			KeyURL:         "https://pkgs.tailscale.com/stable/ubuntu/" + codename + ".noarmor.gpg",
+			KeyPath:        "/usr/share/keyrings/tailscale-archive-keyring.gpg",
+			KeyFingerprint: tailscaleAptKeyFingerprint,
+			SourcePath:     "/etc/apt/sources.list.d/tailscale.list",
+			SourceLine:     "deb [signed-by=/usr/share/keyrings/tailscale-archive-keyring.gpg] https://pkgs.tailscale.com/stable/ubuntu " + codename + " main",
 		})
 	}})
 	*ops = append(*ops, operation{name: "tailscale package", run: func(apply host.Apply) (bool, error) { return host.EnsurePackage(apply, "tailscale") }})
@@ -455,11 +473,12 @@ func tailscaleRunning(apply host.Apply) (bool, error) {
 func addCloudflare(ops *[]operation, opts InstallOptions) {
 	*ops = append(*ops, operation{name: "cloudflared repo", run: func(apply host.Apply) (bool, error) {
 		return host.EnsureAptRepo(apply, host.AptRepo{
-			Name:       "cloudflared",
-			KeyURL:     "https://pkg.cloudflare.com/cloudflare-main.gpg",
-			KeyPath:    "/usr/share/keyrings/cloudflare-main.gpg",
-			SourcePath: "/etc/apt/sources.list.d/cloudflared.list",
-			SourceLine: "deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared any main",
+			Name:           "cloudflared",
+			KeyURL:         "https://pkg.cloudflare.com/cloudflare-main.gpg",
+			KeyPath:        "/usr/share/keyrings/cloudflare-main.gpg",
+			KeyFingerprint: cloudflareAptKeyFingerprint,
+			SourcePath:     "/etc/apt/sources.list.d/cloudflared.list",
+			SourceLine:     "deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared any main",
 		})
 	}})
 	*ops = append(*ops, operation{name: "cloudflared package", run: func(apply host.Apply) (bool, error) { return host.EnsurePackage(apply, "cloudflared") }})
@@ -469,9 +488,16 @@ func addCloudflare(ops *[]operation, opts InstallOptions) {
 	*ops = append(*ops, operation{name: "cloudflared config dir", run: func(apply host.Apply) (bool, error) {
 		return host.EnsureDirectory(apply, host.Directory{Path: "/etc/cloudflared", Owner: "root", Group: "cloudflared", Mode: 0750})
 	}})
+	// Token/setup ops intentionally precede the service op; this flag carries
+	// their drift forward so service convergence can restart only when needed.
+	cloudflaredRuntimeChanged := false
 	if opts.CloudflareTunnelToken != "" {
 		*ops = append(*ops, operation{name: "cloudflared token", run: func(apply host.Apply) (bool, error) {
-			return host.EnsureFile(apply, host.File{Path: "/etc/cloudflared/tunnel-token", Content: []byte(strings.TrimSpace(opts.CloudflareTunnelToken) + "\n"), Owner: "root", Group: "cloudflared", Mode: 0640})
+			changed, err := host.EnsureFile(apply, host.File{Path: "/etc/cloudflared/tunnel-token", Content: []byte(strings.TrimSpace(opts.CloudflareTunnelToken) + "\n"), Owner: "root", Group: "cloudflared", Mode: 0640})
+			if changed {
+				cloudflaredRuntimeChanged = true
+			}
+			return changed, err
 		}})
 	}
 	if opts.CloudflareAPIToken != "" {
@@ -490,7 +516,11 @@ func addCloudflare(ops *[]operation, opts InstallOptions) {
 			if ready {
 				return false, nil
 			}
-			return runCommand("simple-vps", args...)(apply)
+			changed, err := runCommand("simple-vps", args...)(apply)
+			if changed {
+				cloudflaredRuntimeChanged = true
+			}
+			return changed, err
 		}})
 	}
 	if opts.CloudflareTunnelToken != "" || opts.CloudflareAPIToken != "" || opts.CloudflareTunnelConfig != "" {
@@ -499,9 +529,49 @@ func addCloudflare(ops *[]operation, opts InstallOptions) {
 			if opts.CloudflareTunnelConfig != "" {
 				execStart = "/usr/bin/cloudflared --config " + opts.CloudflareTunnelConfig + " tunnel run"
 			}
-			return host.EnsureSystemdUnit(apply, host.SystemdUnit{Name: "cloudflared.service", Content: []byte(cloudflaredUnit(execStart)), Action: host.Restarted})
+			return ensureCloudflaredService(apply, []byte(cloudflaredUnit(execStart)), cloudflaredRuntimeChanged)
 		}})
 	}
+}
+
+func ensureCloudflaredService(apply host.Apply, unitContent []byte, restartOnChange bool) (bool, error) {
+	unitChanged, err := host.EnsureSystemdUnit(apply, host.SystemdUnit{Name: "cloudflared.service", Content: unitContent})
+	if err != nil {
+		return false, err
+	}
+	if unitChanged || restartOnChange {
+		if apply.CheckMode {
+			return true, nil
+		}
+		result, err := apply.Runner.Run(apply.ContextOrBackground(), host.Command{Program: "systemctl", Args: []string{"restart", "cloudflared.service"}})
+		if err != nil {
+			return false, err
+		}
+		return true, commandOK(result, "systemctl", []string{"restart", "cloudflared.service"})
+	}
+	active, err := systemdServiceActive(apply, "cloudflared.service")
+	if err != nil {
+		return false, err
+	}
+	if active {
+		return false, nil
+	}
+	if apply.CheckMode {
+		return true, nil
+	}
+	result, err := apply.Runner.Run(apply.ContextOrBackground(), host.Command{Program: "systemctl", Args: []string{"start", "cloudflared.service"}})
+	if err != nil {
+		return false, err
+	}
+	return true, commandOK(result, "systemctl", []string{"start", "cloudflared.service"})
+}
+
+func systemdServiceActive(apply host.Apply, name string) (bool, error) {
+	result, err := apply.Runner.Run(apply.ContextOrBackground(), host.Command{Program: "systemctl", Args: []string{"is-active", "--quiet", name}})
+	if err != nil {
+		return false, err
+	}
+	return result.ExitCode == 0, nil
 }
 
 func cloudflareTunnelAlreadyConfigured(apply host.Apply) (bool, error) {
@@ -511,14 +581,20 @@ func cloudflareTunnelAlreadyConfigured(apply host.Apply) (bool, error) {
 		}
 		return false, err
 	}
-	data, err := apply.Runner.ReadFile(apply.ContextOrBackground(), "/etc/simple-vps/cloudflare.json")
+	stateStore := store.Default()
+	cloudflarePath := stateStore.CloudflarePath()
+	data, err := apply.Runner.ReadFile(apply.ContextOrBackground(), cloudflarePath)
 	if err != nil {
 		if errors.Is(err, host.ErrNotExist) {
 			return false, nil
 		}
 		return false, err
 	}
-	return strings.Contains(string(data.Content), `"tunnel_id"`) && strings.Contains(string(data.Content), `"tunnel_name"`), nil
+	var file store.CloudflareFile
+	if err := json.Unmarshal(data.Content, &file); err != nil {
+		return false, fmt.Errorf("invalid %s: %w", cloudflarePath, err)
+	}
+	return file.TunnelID != "" && file.TunnelName != "", nil
 }
 
 func runCommand(program string, args ...string) func(host.Apply) (bool, error) {
@@ -558,24 +634,24 @@ func commandOK(result host.CommandResult, program string, args []string) error {
 	return fmt.Errorf("command failed: %s %v: exit %d: %s", program, args, result.ExitCode, strings.TrimSpace(string(result.Stderr)))
 }
 
-func desiredHost(opts InstallOptions) state.HostDesired {
-	ingress := state.HostIngressDesired{Expose: state.ExposePublic, Tunnel: state.TunnelNone}
+func desiredHost(opts InstallOptions) store.HostDesired {
+	ingress := store.HostIngressDesired{Expose: store.ExposePublic, Tunnel: store.TunnelNone}
 	if opts.CloudflareTunnel {
-		ingress = state.HostIngressDesired{Expose: state.ExposePrivate, Tunnel: state.TunnelCloudflare}
+		ingress = store.HostIngressDesired{Expose: store.ExposePrivate, Tunnel: store.TunnelCloudflare}
 	}
-	packages := map[string]state.DesiredPackage{
+	packages := map[string]store.DesiredPackage{
 		"caddy": {Source: "caddy-apt", Track: "stable"},
 	}
 	if opts.InstallLitestream {
-		packages["litestream"] = state.DesiredPackage{Source: "github-release", Version: litestreamVersion}
+		packages["litestream"] = store.DesiredPackage{Source: "github-release", Version: litestreamVersion}
 	}
 	if opts.InstallDocker {
-		packages["docker"] = state.DesiredPackage{Source: "docker-apt", Track: "stable"}
+		packages["docker"] = store.DesiredPackage{Source: "docker-apt", Track: "stable"}
 	}
-	return state.HostDesired{
-		Users:   state.HostUsers{Operator: opts.OperatorUser, Deploy: opts.DeployUser},
+	return store.HostDesired{
+		Users:   store.HostUsers{Operator: opts.OperatorUser, Deploy: opts.DeployUser},
 		Ingress: ingress,
-		Features: state.HostFeatures{
+		Features: store.HostFeatures{
 			Docker:     opts.InstallDocker,
 			Litestream: opts.InstallLitestream,
 			Runtimes:   []string{},
@@ -584,8 +660,8 @@ func desiredHost(opts InstallOptions) state.HostDesired {
 	}
 }
 
-func hostDesiredChanged(store state.Store, desired state.HostDesired) (bool, error) {
-	current, err := store.ReadHost()
+func hostDesiredChanged(stateStore store.Store, desired store.HostDesired) (bool, error) {
+	current, err := stateStore.ReadHost()
 	if err != nil {
 		if os.IsNotExist(err) {
 			return true, nil
@@ -603,13 +679,13 @@ func hostDesiredChanged(store state.Store, desired state.HostDesired) (bool, err
 	return string(currentData) != string(nextData), nil
 }
 
-func writeApplyState(store state.Store, opts InstallOptions, applyID string, startedAt time.Time, finishedAt time.Time, status string, changed int) error {
-	return store.WriteHostState(state.HostObserved{
-		Packages: map[string]state.ObservedPackage{},
-		Ingress:  state.HostIngressObserved{CloudflaredServiceActive: opts.CloudflareTunnel},
-	}, state.HostMeta{
+func writeApplyState(stateStore store.Store, opts InstallOptions, applyID string, startedAt time.Time, finishedAt time.Time, status string, changed int) error {
+	return stateStore.WriteHostState(store.HostObserved{
+		Packages: map[string]store.ObservedPackage{},
+		Ingress:  store.HostIngressObserved{CloudflaredServiceActive: opts.CloudflareTunnel},
+	}, store.HostMeta{
 		SimpleVPSVersion: "dev",
-		LastApply: &state.ApplyMeta{
+		LastApply: &store.ApplyMeta{
 			ID:                applyID,
 			StartedAt:         startedAt.Format(time.RFC3339),
 			FinishedAt:        finishedAt.Format(time.RFC3339),
@@ -656,6 +732,38 @@ func essentialPackages() []string {
 		"unzip",
 		"wget",
 	}
+}
+
+func ubuntuCodename(apply host.Apply) (string, error) {
+	file, err := apply.Runner.ReadFile(apply.ContextOrBackground(), "/etc/os-release")
+	if err != nil {
+		if errors.Is(err, host.ErrNotExist) {
+			return "noble", nil
+		}
+		return "", err
+	}
+	if codename := osReleaseValue(file.Content, "VERSION_CODENAME"); codename != "" {
+		return codename, nil
+	}
+	if codename := osReleaseValue(file.Content, "UBUNTU_CODENAME"); codename != "" {
+		return codename, nil
+	}
+	return "noble", nil
+}
+
+func osReleaseValue(content []byte, key string) string {
+	for _, line := range strings.Split(strings.ReplaceAll(string(content), "\r\n", "\n"), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		name, value, ok := strings.Cut(line, "=")
+		if !ok || name != key {
+			continue
+		}
+		return strings.Trim(strings.TrimSpace(value), `"'`)
+	}
+	return ""
 }
 
 func debArch(goarch string) string {

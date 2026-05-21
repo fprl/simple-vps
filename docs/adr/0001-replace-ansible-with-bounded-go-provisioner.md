@@ -41,7 +41,7 @@ cmd/hostinstall/        CLI surface and remote bootstrap over OpenSSH CLI
 internal/provision/     plan/apply/status/doctor orchestration
 internal/provision/host/     the bounded operation primitives
 internal/provision/local/    on-host runner for local apply
-internal/provision/state/    /etc/simple-vps/*.json schemas (see ADR-0002)
+internal/store/         /etc/simple-vps/*.json schemas (see ADR-0002)
 ```
 
 ### 2. Operation Budget - Exactly These Primitives
@@ -53,7 +53,7 @@ removing, or changing the contract of any of them requires a new ADR.
 |---|---|
 | `EnsureDirectory` | directory create/update with owner, group, mode |
 | `EnsurePackage` | apt package install/absent |
-| `EnsureAptRepo` | apt repo + GPG key + sources.list.d entry |
+| `EnsureAptRepo` | apt repo + pinned GPG key fingerprint + sources.list.d entry |
 | `EnsureUser` | system user with shell/home/uid policy |
 | `EnsureGroupMembership` | user-in-group |
 | `EnsureSudoersFile` | a single `/etc/sudoers.d/*` entry, `visudo -c` validated |
@@ -150,15 +150,19 @@ ADR-0002). The provisioner records observed versions alongside.
 | cloudflared | Cloudflare apt repo | stable track |
 | Litestream | GitHub release `.deb` | pinned exact |
 | Docker | Docker apt repo | stable track, opt-in only |
-| Node | NodeSource | pinned major LTS, app-driven install |
-| Bun | official installer | pinned exact, app-driven install |
+| Node | external host prerequisite | app-driven requirement |
+| Bun | external host prerequisite | app-driven requirement |
+
+Third-party apt repositories verify their signing keys by pinned OpenPGP
+fingerprint before the `signed-by=` source entry is trusted. See ADR-0003.
 
 Language runtimes (Node, Bun, pnpm) are **not installed by default during
-`host install`**. They install only when explicitly requested via
-`--features=node22,bun` or equivalent. `simple-vps deploy` fails fast with a
-"run `simple-vps host install --features=bun` to enable Bun on this host"
-message if the runtime is missing. Surprise installs at deploy time are
-explicitly excluded.
+`host install`**. In the current product shape they are explicit host
+prerequisites: `simple-vps deploy` fails fast when the manifest runtime or
+lockfile requires a missing host tool (`node`, `npm`, `bun`, `pnpm`, or
+`yarn`). Surprise installs at deploy time are explicitly excluded. A future ADR
+can add first-class `host install` runtime feature flags once version and source
+policy are pinned.
 
 ### 8. Cutover plan
 

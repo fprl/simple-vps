@@ -141,6 +141,11 @@ Schema, validation rules, three build modes (A/B/C), env override blocks,
 include/dotenv handling, and lockfile detection are owned by the Go config
 package and covered by the Go test suite.
 
+Language runtimes are host prerequisites, not surprise deploy-time installs.
+`deploy` checks the selected runtime and lockfile before creating a release and
+fails fast if the host is missing the required tool (`node`, `npm`, `bun`,
+`pnpm`, or `yarn`).
+
 ## Installation
 
 Bootstrapping a fresh Ubuntu 24.04 host starts with `install.sh`. The script

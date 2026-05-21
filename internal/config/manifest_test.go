@@ -125,3 +125,24 @@ type = "static"
 		t.Fatalf("expected no errors, got %v", errors)
 	}
 }
+
+func TestCheckManifestRejectsUnknownRuntime(t *testing.T) {
+	root := t.TempDir()
+	writeLockfile(t, root)
+	writeManifest(t, root, `
+name = "api"
+
+[env.production]
+server = "deploy@100.x.y.z"
+runtime = "deno"
+
+[services.web]
+command = "deno run server.ts"
+port = 3000
+`)
+
+	errors := checkErrors(t, root, "production")
+	if !slices.Contains(errors, "[env.production].runtime must be bun, node, or static") {
+		t.Fatalf("expected unknown runtime error, got %v", errors)
+	}
+}

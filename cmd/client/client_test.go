@@ -118,7 +118,15 @@ func TestPublishCommandsPutFlagsBeforeHost(t *testing.T) {
 				Type:    "proxy",
 				Service: "web",
 			}),
-			want: "sudo simple-vps server route proxy --port 3000 --app api api.example.com",
+			want: "sudo simple-vps server route proxy --port 3000 --app api --service web api.example.com",
+		},
+		{
+			name: "proxy without service",
+			got: routePublishCommand(ctx, config.Route{
+				Host: "api.example.com",
+				Type: "proxy",
+			}),
+			want: "sudo simple-vps server route proxy --port 80 --app api api.example.com",
 		},
 		{
 			name: "static",
@@ -158,5 +166,39 @@ func TestReleasePermissionsCommandGrantsAppGroupWrite(t *testing.T) {
 	}, " && ")
 	if got != want {
 		t.Fatalf("unexpected command:\nwant: %s\n got: %s", want, got)
+	}
+}
+
+func TestRuntimeCheckCommandRequiresHostTools(t *testing.T) {
+	tests := []struct {
+		name      string
+		runtime   string
+		lockfiles []string
+		wantTools []string
+	}{
+		{name: "static", runtime: "static"},
+		{name: "node", runtime: "node", lockfiles: []string{"package-lock.json"}, wantTools: []string{"node", "npm"}},
+		{name: "bun", runtime: "bun", lockfiles: []string{"bun.lock"}, wantTools: []string{"bun"}},
+		{name: "pnpm node app", runtime: "node", lockfiles: []string{"pnpm-lock.yaml"}, wantTools: []string{"node", "pnpm"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := runtimeCheckCommand(tt.runtime, tt.lockfiles)
+			if len(tt.wantTools) == 0 {
+				if got != "" {
+					t.Fatalf("expected no runtime check, got %s", got)
+				}
+				return
+			}
+			for _, tool := range tt.wantTools {
+				if !strings.Contains(got, "command -v "+tool+" ") {
+					t.Fatalf("expected runtime check for %s:\n%s", tool, got)
+				}
+				if !strings.Contains(got, "missing runtime tool: "+tool) {
+					t.Fatalf("expected missing-tool message for %s:\n%s", tool, got)
+				}
+			}
+		})
 	}
 }
