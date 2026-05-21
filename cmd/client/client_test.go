@@ -168,3 +168,37 @@ func TestReleasePermissionsCommandGrantsAppGroupWrite(t *testing.T) {
 		t.Fatalf("unexpected command:\nwant: %s\n got: %s", want, got)
 	}
 }
+
+func TestRuntimeCheckCommandRequiresHostTools(t *testing.T) {
+	tests := []struct {
+		name      string
+		runtime   string
+		lockfiles []string
+		wantTools []string
+	}{
+		{name: "static", runtime: "static"},
+		{name: "node", runtime: "node", lockfiles: []string{"package-lock.json"}, wantTools: []string{"node", "npm"}},
+		{name: "bun", runtime: "bun", lockfiles: []string{"bun.lock"}, wantTools: []string{"bun"}},
+		{name: "pnpm node app", runtime: "node", lockfiles: []string{"pnpm-lock.yaml"}, wantTools: []string{"node", "pnpm"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := runtimeCheckCommand(tt.runtime, tt.lockfiles)
+			if len(tt.wantTools) == 0 {
+				if got != "" {
+					t.Fatalf("expected no runtime check, got %s", got)
+				}
+				return
+			}
+			for _, tool := range tt.wantTools {
+				if !strings.Contains(got, "command -v "+tool+" ") {
+					t.Fatalf("expected runtime check for %s:\n%s", tool, got)
+				}
+				if !strings.Contains(got, "missing runtime tool: "+tool) {
+					t.Fatalf("expected missing-tool message for %s:\n%s", tool, got)
+				}
+			}
+		})
+	}
+}

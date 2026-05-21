@@ -204,6 +204,50 @@ func installCommandFor(lockfile string) string {
 	return "bun install --production --frozen-lockfile"
 }
 
+func runtimeCheckCommand(runtime string, lockfiles []string) string {
+	tools := runtimeRequiredTools(runtime, lockfiles)
+	if len(tools) == 0 {
+		return ""
+	}
+	parts := []string{"missing=0"}
+	for _, tool := range tools {
+		parts = append(parts, fmt.Sprintf("command -v %s >/dev/null 2>&1 || { echo 'missing runtime tool: %s' >&2; missing=1; }", tool, tool))
+	}
+	parts = append(parts, `exit "$missing"`)
+	return strings.Join(parts, "; ")
+}
+
+func runtimeRequiredTools(runtime string, lockfiles []string) []string {
+	var tools []string
+	add := func(tool string) {
+		for _, existing := range tools {
+			if existing == tool {
+				return
+			}
+		}
+		tools = append(tools, tool)
+	}
+	switch runtime {
+	case "static":
+		return nil
+	case "bun":
+		add("bun")
+	case "node":
+		add("node")
+	}
+	for _, lockfile := range lockfiles {
+		switch lockfile {
+		case "package-lock.json":
+			add("npm")
+		case "pnpm-lock.yaml":
+			add("pnpm")
+		case "yarn.lock":
+			add("yarn")
+		}
+	}
+	return tools
+}
+
 func isInstallNeeded(runtime string, build *config.Build) bool {
 	if runtime == "static" {
 		return false
@@ -1058,6 +1102,9 @@ func CmdDeploy(root string, envName string, dirty bool, includeDotenv bool) {
 		if err := validateArtifactDotenv(artifactDir); err != nil {
 			utils.Die(err.Error(), 1)
 		}
+	}
+	if cmd := runtimeCheckCommand(ctx.Runtime, locks); cmd != "" {
+		runSSHChecked(runner, ctx.Server, cmd, "host runtime check failed")
 	}
 
 	// Create release dir

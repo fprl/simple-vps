@@ -150,15 +150,16 @@ ADR-0002). The provisioner records observed versions alongside.
 | cloudflared | Cloudflare apt repo | stable track |
 | Litestream | GitHub release `.deb` | pinned exact |
 | Docker | Docker apt repo | stable track, opt-in only |
-| Node | NodeSource | pinned major LTS, app-driven install |
-| Bun | official installer | pinned exact, app-driven install |
+| Node | external host prerequisite | app-driven requirement |
+| Bun | external host prerequisite | app-driven requirement |
 
 Language runtimes (Node, Bun, pnpm) are **not installed by default during
-`host install`**. They install only when explicitly requested via
-`--features=node22,bun` or equivalent. `simple-vps deploy` fails fast with a
-"run `simple-vps host install --features=bun` to enable Bun on this host"
-message if the runtime is missing. Surprise installs at deploy time are
-explicitly excluded.
+`host install`**. In the current product shape they are explicit host
+prerequisites: `simple-vps deploy` fails fast when the manifest runtime or
+lockfile requires a missing host tool (`node`, `npm`, `bun`, `pnpm`, or
+`yarn`). Surprise installs at deploy time are explicitly excluded. A future ADR
+can add first-class `host install` runtime feature flags once version and source
+policy are pinned.
 
 ### 8. Cutover plan
 
