@@ -56,6 +56,15 @@ Static is preserved as a first-class shape because Caddy already terminates
 TLS and serves files. Wrapping a static directory in a container to serve it
 adds cost with no benefit.
 
+"Static" here means the build output requires no runtime to serve.
+Frameworks that produce static output by default qualify: Hugo, 11ty,
+Jekyll, Astro `output: 'static'`, SvelteKit `adapter-static`, and plain
+SPAs (Vite + React/Vue). Frameworks running in SSR mode are container
+apps regardless of how "static-looking" the source tree appears: Astro
+`output: 'server'`/`'hybrid'`, Next.js with server features, Remix,
+SvelteKit `adapter-node`. The shape is determined by what the build
+produces, not by which framework was used.
+
 ### 2. Container engine: Podman
 
 Podman is rootless by default, has no long-running daemon, integrates with
@@ -68,10 +77,22 @@ required, but Podman is the supported default.
 
 ### 3. Required Dockerfile — no `image:` field
 
-Pre-built images always need configuration (env vars, init scripts, custom
-configs). Supporting an `image:` field in the manifest grows the schema
-toward docker-compose. The Dockerfile is the natural place to express "use
-this image with these tweaks":
+Two shapes were considered:
+
+- **A. Support both `image = "repo@sha256:..."` and a Dockerfile.** A
+  digest-pinned image string is a legitimate shape for apps where the
+  upstream image needs zero configuration. Small, verifiable, explicit.
+- **B. Require a Dockerfile, even a one-liner.** Single schema; the
+  moment any tweak is needed (env init script, custom config, alternate
+  entrypoint), the Dockerfile is the only place that can express it.
+
+Chosen: **B**. The argument for A is real — a no-config image is one
+line either way. The argument against A: any non-trivial container deploy
+eventually wants configuration, at which point users migrate from
+`image:` to `dockerfile:` and the schema has carried both forms
+indefinitely for nothing. The uniformity of one path through the
+build/run pipeline is worth the small friction of writing a one-line
+Dockerfile for the no-config edge case:
 
 ```dockerfile
 # apps/postgres/Dockerfile
@@ -79,9 +100,9 @@ FROM postgres:16-alpine
 # config tweaks live here, if any
 ```
 
-Every container app has a Dockerfile, even a one-liner. The manifest carries
-only VPS-facing concerns: ports, health checks, routes, secret bindings,
-resource limits.
+Every container app has a Dockerfile, even a one-liner. The manifest
+carries only VPS-facing concerns: ports, health checks, routes, secret
+bindings, resource limits.
 
 ### 4. Convention-driven volumes
 
@@ -95,11 +116,12 @@ directory) uses a small `mounts = ["other-app"]` field that resolves to
 `--mount type=bind,src=/var/apps/other-app/shared,dst=/var/apps/other-app/shared,ro`
 on the container.
 
-### 5. Image-based releases — `releases/` directory removed
+### 5. Image-based releases — `releases/` removed for container apps
 
-Container images are the immutable release artifact. The per-deploy
-`releases/<sha>` checkout directory is removed. Per-app on-disk state
-shrinks to:
+Container images are the immutable release artifact. For **container
+apps**, the per-deploy `releases/<sha>` source checkout pattern (current
+code) is removed; images replace it. Per-app on-disk state for container
+apps shrinks to:
 
 ```
 /var/apps/<name>/
@@ -109,6 +131,9 @@ shrinks to:
 Images are tagged `simple-vps/<app>:<sha>` with labels `app=<name>` and
 `simple_vps_release=<sha>`. Listing deploys: `podman images --filter
 label=app=<name>`. Rollback: run an older tagged image.
+
+Static apps keep a `releases/` directory for snapshot-based retention;
+see Section 12. The `keep_releases` knob is shared by both worlds.
 
 ### 6. Release retention
 
@@ -240,8 +265,8 @@ new `manifest_hash`; `git_sha` is unchanged.
 
 ### 12. Static deploy: ship a directory, no build
 
-simple-vps does **not** run any build for static apps. The user produces the
-directory however they want (`bun run build`, `npm run build`, Astro, Hugo,
+simple-vps does **not** run any build for static apps. The user produces
+the directory however they want (`astro build`, `npm run build`, Hugo,
 plain HTML) before calling `simple-vps deploy`. The manifest's `static`
 field points at the produced directory.
 
@@ -249,19 +274,42 @@ This is deliberate: it keeps simple-vps language- and build-tool-agnostic
 for static deploys, just as the Dockerfile owns the build for container
 apps. simple-vps owns deployment, not source-to-artifact transformation.
 
+Per-app on-disk layout for static apps:
+
+```
+/var/apps/<name>/
+  shared/                       persistent app state (env file, etc.)
+  web -> releases/<id>          symlink: active release
+  releases/
+    20260524-153045-abc1234/    deploy snapshot
+    20260523-092311-def5678/
+```
+
 Lifecycle:
 
-1. **Client:** copy the directory at the manifest's `static` path → tarball.
-2. **Client → helper (SSH):** stream tarball, extract to
-   `/var/apps/<name>/shared/web/` (atomic swap via a sibling temp dir +
-   rename).
-3. **Helper:** reconcile manifest routes (Caddy `file_server` directive
-   pointing at `/var/apps/<name>/shared/web/`).
-4. `caddy reload`.
+1. **Client:** copy the directory at the manifest's `static` path →
+   tarball.
+2. **Client → helper (SSH):** stream tarball.
+3. **Helper:** extract to `/var/apps/<name>/releases/<id>/`, where
+   `<id>` is timestamp + short git SHA (or `dirty-<timestamp>` for an
+   unclean worktree).
+4. **Helper:** atomic symlink swap, `ln -sfn releases/<id> web`.
+5. **Helper:** reconcile manifest routes (Caddy `root` pointing at
+   `/var/apps/<name>/web` + `file_server`).
+6. `caddy reload`.
+7. Prune older release directories per Section 6 semantics (current +
+   previous-successful + keep N most recent).
 
-No container, no port, no health check. The "release" is the directory
-content; rollback is `git checkout <sha>` and `simple-vps deploy` (since
-the user's git history holds the build inputs, and the tool just ships).
+No container, no port, no health check. Rollback for static apps:
+`simple-vps rollback <env> [release-id]` swaps the symlink to an older
+release directory. No rebuild, no re-upload.
+
+The retention pattern (filesystem releases dir + active symlink) is
+different from container apps (tagged images in Podman storage), but the
+`keep_releases` knob means the same thing in both worlds: how many old
+releases stay available for rollback. The user-facing `static = "..."`
+field is the only knob; the server-side layout is internal and not
+configurable.
 
 ### 13. CLI shape: manifest is the source of truth
 
@@ -312,8 +360,13 @@ One primary noun ("app"), few verbs operating on it, one source of truth
 
 `internal/provision/install.go`:
 
-- **Adds:** Podman install via the official Ubuntu apt repository, key
-  fingerprint pinned per ADR-0003.
+- **Adds:** Podman install from Ubuntu 24.04 Universe (`apt install
+  podman`). ADR-0003 (third-party apt repo key trust) does not apply
+  here — first-party Ubuntu archives are trusted via
+  `ubuntu-keyring`. The Universe-shipped Podman (4.9.x) provides
+  rootless mode, systemd integration, and the security flags Section 7
+  relies on. Upstream Podman 5.x via Kubic is not required and not
+  configured by default.
 - **Removes:** Node, Bun, npm, pnpm, yarn install paths and runtime
   prerequisite checks.
 
@@ -330,6 +383,37 @@ them.
 
 The bounded operation budget from ADR-0001 does not change; only the set of
 packages provisioned does. No new primitives are required.
+
+### 15. Helper owns root-side artifact generation
+
+The helper runs as root via passwordless sudo from the `deploy@` user.
+Every helper command is a root operation initiated remotely. The current
+code accepts uploaded systemd unit files and installs them, which gives
+the client effective control over root-installed unit content — more
+privilege than the design needs.
+
+The container pivot is the right moment to tighten this boundary. After
+the pivot:
+
+- The client uploads **only typed input**: the manifest, a source
+  tarball (for container builds), a static-directory tarball, and
+  secret values.
+- The helper **synthesizes all privileged artifacts** server-side from
+  that typed input: systemd unit files, Caddyfile, `podman run` flag
+  sets, env files.
+- The helper rejects any unit file, runtime flag, or Caddy directive
+  that did not originate from its own synthesis.
+
+In practice the helper exports verbs like `app apply --from-manifest`,
+`route apply --from-manifest`, and `secret put`. It does **not** export
+verbs like `app install-unit <unit-file>` that accept uploaded unit
+content. Where current code uploads a rendered unit, the new code
+uploads the manifest and the helper renders the unit.
+
+This narrows the trust boundary to "manifest schema + secret values,"
+both validated server-side. Compromised client credentials still grant
+deploy access — unavoidable — but cannot inject arbitrary unit content,
+container flags, or out-of-schema Caddy directives.
 
 ## Consequences
 
@@ -350,6 +434,9 @@ packages provisioned does. No new primitives are required.
 - One mental model: edit the manifest, run deploy. The system picks the
   cheapest reconcile path. No drift between CLI-mutated state and
   manifest-declared state.
+- Privileged-helper trust boundary narrows to typed manifest input plus
+  secret values (Section 15). Clients can no longer inject arbitrary
+  systemd unit content, container flags, or Caddy directives.
 
 ### What this gives up
 
@@ -372,6 +459,10 @@ packages provisioned does. No new primitives are required.
 - VPS needs outbound HTTPS for `podman build` (base image pulls, language
   package installs). Air-gapped VPS scenarios are not supported and would
   require build-on-client, which is out of scope here.
+- No client-side escape hatch for systemd unit content or container
+  flags. Custom needs must be expressed through the manifest schema; if
+  the schema cannot express it, the answer is to extend the schema in a
+  follow-up ADR, not to side-channel unit content through the helper.
 
 ### What becomes harder
 
@@ -400,6 +491,15 @@ packages provisioned does. No new primitives are required.
 - **BuildKit on Docker.** Podman build is the supported tool.
 - **Cross-app `--force` route takeover.** Same-`(host, path)` collisions
   across apps require explicit removal from the owning manifest first.
+- **Force-Docker for static apps.** Wrapping a static directory in a
+  Caddy/nginx container would simplify the codebase (one lifecycle) but
+  cost ~30–50 MB RAM per static app, slower deploys, and friction for
+  the most common static use case. Rejected on RAM + UX grounds.
+- **Container supply-chain enforcement.** Digest-pinned base images are
+  the supply-chain-strict equivalent of ADR-0003/0004 for the build
+  context. The friction of manual SHA lookups on every base image bump
+  outweighs the win for the solo-dev VPS audience this tool targets.
+  Documented in Notes; not enforced.
 
 ## Cutover plan
 
@@ -434,6 +534,16 @@ Cutover is complete when:
 12. Fake-VPS coverage exercises: container build, blue/green swap,
     health-check rollback, static deploy, image prune, path-based routing
     collision, no-op deploy, config-only deploy.
+13. Static deploys land in `/var/apps/<name>/releases/<id>/` with an
+    atomic `web` symlink swap; rollback swaps the symlink, never
+    rebuilds.
+14. Podman is installed from Ubuntu 24.04 Universe (no third-party repo
+    configured).
+15. Helper rejects uploaded systemd unit files and uploaded
+    `podman run` flag sets. All privileged artifacts are synthesized
+    server-side from typed manifest input. The current
+    `app install-unit` verb is removed; `app apply --from-manifest`
+    replaces it.
 
 ## Notes
 
@@ -455,3 +565,17 @@ Cutover is complete when:
   rebuild only the code-copy step (typically 2-5 seconds). For static apps
   it scaffolds a `simple-vps.toml` pointing at the conventional output
   directory (`dist/` or `out/`).
+- **Container supply-chain (base image trust).** Dockerfiles routinely
+  reference mutable upstream tags (`FROM node:22`), which resolve to
+  whatever the registry serves at build time. ADR-0003 and ADR-0004 are
+  strict about host-side downloads; the equivalent strictness inside a
+  build context is digest pinning (`FROM node:22@sha256:...`).
+  simple-vps does not enforce digest pinning — the friction of manual
+  SHA lookups on every base image bump outweighs the supply-chain win
+  for the solo-dev VPS audience. `init` scaffolds with human-readable
+  tags; users may pin to digests for apps where supply chain matters.
+- Static apps share the `keep_releases` knob with container apps even
+  though the retention mechanism differs (filesystem release dirs +
+  symlink for static; tagged images in Podman storage for container).
+  Same number, same meaning ("how many old releases stay rollbackable"),
+  different storage. The user-facing model is uniform.
