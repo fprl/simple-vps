@@ -700,6 +700,14 @@ files directly via `file_server` (Section 12).
   Elixir, Ruby, Python, Go, Rust, PHP, Bun, Node, Deno — same code path.
 - Third-party self-hosted tools (Postgres, Redis, Plausible, n8n, Umami)
   deploy with a one-line Dockerfile.
+- No mandatory local container toolchain. `podman build` runs on the
+  VPS (Section 10), so a clean machine can deploy without Docker or
+  Podman installed locally — only `git`, `ssh`, and the `simple-vps`
+  client are required on the deploying machine. In practice, users
+  iterating on a custom Dockerfile will still want a local container
+  runtime for fast feedback; but the happy path (init-scaffolded
+  Dockerfiles or one-line `FROM <image>` Dockerfiles) requires nothing
+  on the client.
 - Manifest shrinks ~60% for typical apps. `runtime`, `command`,
   `build.install`, lockfile detection all delete.
 - ~600–800 net lines removed from the codebase. ~150–200 added back for
@@ -807,7 +815,12 @@ files directly via `file_server` (Section 12).
   invisible platform contract; users self-hosting need the build
   recipe inspectable in git, debuggable with standard container
   tooling. The "init scaffolds, user owns" model is the answer to
-  zero-config UX without sacrificing transparency.
+  zero-config UX without sacrificing transparency. This rejection
+  covers the auto-detect-and-build-on-server category as a whole —
+  Cloud Native Buildpacks (Paketo / Heroku), Nixpacks, and similar
+  source-to-image tooling are all out for the same reason: the
+  Dockerfile is the contract `simple-vps` relies on, not an
+  auto-generated artifact the user cannot see or version.
 
 ## Cutover plan
 
