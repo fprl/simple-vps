@@ -65,6 +65,18 @@ apps regardless of how "static-looking" the source tree appears: Astro
 SvelteKit `adapter-node`. The shape is determined by what the build
 produces, not by which framework was used.
 
+**Identity constraints** (so derived system names fit Linux limits):
+
+| Field | Regex max | Rationale |
+|---|---|---|
+| App name | 16 chars | system user `app-<app>-<env>` must fit in 32 chars |
+| Env name | 8 chars | `prod`, `staging`, `dev`, `preview` all fit |
+| Service name | 10 chars | only appears in container / systemd names, not users |
+
+Worst-case system user `app-<app>-<env>` = 4 + 16 + 1 + 8 = 29 chars,
+safely under the effective Linux username limit of 31. Manifests with
+longer names fail `simple-vps check` with a clear error.
+
 ### 2. Container engine: Podman
 
 Podman has no long-running daemon, integrates with systemd via
@@ -74,9 +86,9 @@ smaller blast radius — no persistent root daemon, no socket to leak.
 
 The helper invokes Podman as **root** (it already holds root via
 passwordless sudo from `deploy@`). Container *processes* run as the
-per-app user `app-<name>` per Section 7's security floor (`--user`,
-`--cap-drop=ALL`, `--security-opt=no-new-privileges`, read-only rootfs,
-resource caps).
+per-`(app, env)` user `app-<app>-<env>` per Section 7's security
+floor (`--user`, `--cap-drop=ALL`,
+`--security-opt=no-new-privileges`, read-only rootfs, resource caps).
 
 Truly rootless Podman per app user was considered and rejected:
 per-user image storage breaks shared image caches across apps, rootless
@@ -136,17 +148,21 @@ on the container.
 
 Container images are the immutable release artifact. For **container
 apps**, the per-deploy `releases/<sha>` source checkout pattern (current
-code) is removed; images replace it. Per-app on-disk state for container
-apps shrinks to:
+code) is removed; images replace it. Per-app-per-env on-disk state for
+container apps shrinks to:
 
 ```
-/var/apps/<name>/
+/var/apps/<app>/<env>/
   shared/            bind-mounted into container, persists across deploys
 ```
 
-Images are tagged `simple-vps/<app>:<sha>` with labels `app=<name>` and
-`simple_vps_release=<sha>`. Listing deploys: `podman images --filter
-label=app=<name>`. Rollback: run an older tagged image.
+Path is `(app, env)`-scoped per Section 1's identity constraints, so
+prod and staging on the same VPS never collide on disk.
+
+Images are tagged `simple-vps/<app>-<env>:<sha>` with labels
+`app=<app>`, `env=<env>`, and `simple_vps_release=<sha>`. Listing
+deploys: `podman images --filter label=app=<app> --filter label=env=<env>`.
+Rollback: run an older tagged image for the same `(app, env)`.
 
 Static apps keep a `releases/` directory for snapshot-based retention;
 see Section 12. The `keep_releases` knob is shared by both worlds.
@@ -170,7 +186,7 @@ keep N) are preserved end-to-end.
 Every container starts with:
 
 ```
---user $(id -u app-<name>):$(id -g app-<name>)
+--user $(id -u app-<app>-<env>):$(id -g app-<app>-<env>)
 --cap-drop=ALL
 --cap-add=NET_BIND_SERVICE        # only when binding <1024
 --security-opt=no-new-privileges
@@ -179,8 +195,13 @@ Every container starts with:
 --memory=<from manifest>
 --cpus=<from manifest>
 --pids-limit=512
---network=app-<name>
+--network=app-<app>-<env>
 ```
+
+Identity is `(app, env)`-scoped: per-env system user, per-env Podman
+network. Prod and staging on the same VPS run as different users on
+different networks, with separate filesystem ownership over
+`/var/apps/<app>/<env>/`.
 
 Disallowed at the API level: `--privileged`, `docker.sock` mounts,
 `--pid=host`, `--ipc=host`, `--network=host`. These defeat the security
@@ -188,17 +209,23 @@ floor and have no use case the manifest needs to express.
 
 ### 8. Routes can share a host via path
 
-Today routes are keyed by host. The new key is `(host, path)`. Two apps may
-share a host when their path prefixes differ:
+Today routes are keyed by host. The new uniqueness key is
+`(server, host, path)` — same `(host, path)` on the same VPS belongs to
+exactly one `(app, env)` pair. Two app/env combinations may share a
+host when their path prefixes differ:
 
 ```toml
-[apps.api.routes.api]
+# in api app's manifest
+[routes.api]
 host = "myapp.com"
 path = "/api"
 type = "proxy"
 service = "web"
+```
 
-[apps.spa.routes.www]
+```toml
+# in spa app's manifest
+[routes.www]
 host = "myapp.com"
 # path defaults to "/"
 type = "static"
@@ -206,13 +233,15 @@ type = "static"
 
 Caddy emits one site block per host and one `handle` block per path.
 
-Same `(host, path)` for different apps is a hard conflict and a deploy-time
-error. The `--force` flag exists only for same-app collisions (replacing
-one's own route definition). It does not transfer ownership across apps.
+Same `(host, path)` for different `(app, env)` pairs is a hard conflict
+and a deploy-time error. The `--force` flag exists only for same
+`(app, env)` collisions (replacing one's own route definition). It does
+not transfer ownership across apps or across envs.
 
-Moving a route from app A to app B is a two-step operation: remove the
-route from app A's manifest and deploy A; add the route to app B's manifest
-and deploy B. Two explicit, grep-able actions; no hidden takeover path.
+Moving a route between app/env pairs is a two-step operation: remove
+the route from the owning manifest and deploy it; add the route to the
+new manifest and deploy it. Two explicit, grep-able actions; no hidden
+takeover path.
 
 ### 9. Deploy is content-addressed
 
@@ -220,27 +249,33 @@ and deploy B. Two explicit, grep-able actions; no hidden takeover path.
 is the universal verb; there is no separate `deploy --config-only` or
 `apply` flag.
 
-Mode is selected by comparing a **content signature** against the
-helper's last-successful-deploy record. The signature components depend
-on app shape:
+**Content signature** components depend on app shape:
 
 - **Container apps:** `(git_sha, manifest_hash)`. The git SHA covers
   the build context because `git archive HEAD` is content-addressed by
-  SHA. Dirty-worktree deploys add a timestamp suffix that forces a
-  fresh signature.
+  SHA.
 - **Static apps:** `(static_tree_hash, manifest_hash)`. The static
-  directory is gitignored in the common case, so git SHA does not
-  cover what is actually shipped. `static_tree_hash` is computed
-  deterministically server-side from the uploaded tarball (e.g.,
-  `sha256sum` over a sorted listing of file paths, modes, and content
-  hashes) so a rebuilt `dist/` with byte-different content always
-  triggers a deploy.
+  directory is typically gitignored, so git SHA does not cover what
+  is actually shipped. `static_tree_hash` is computed by the client
+  deterministically (sha256 over a sorted list of
+  `(path, mode, content_sha256)` for each file in the static tree).
+
+**Client-side signature computation.** All signature components are
+known to the client without uploading anything — `git_sha` and
+`manifest_hash` come from the local working tree; `static_tree_hash`
+is computed locally over the static directory. The client asks the
+helper for the last-deployed signature via a cheap SSH probe
+(`simple-vps server signature <app> <env>`), compares locally, and
+decides whether to upload at all. The helper re-verifies after upload
+to catch tampering.
+
+Deploy modes:
 
 | Diff | Action | Typical time |
 |---|---|---|
-| No diff | No-op, report "nothing to deploy" | ~1 s (one SSH check) |
+| No diff | No-op, report "nothing to deploy", no upload | ~1 s (one SSH probe) |
 | Manifest only | Reconcile config (routes / env / secrets / mounts / limits) | 1-3 s; +container restart if runtime flags changed |
-| Container: code or Dockerfile changed | Build new image, blue/green swap, reconcile config | 5-90 s depending on layer cache |
+| Container: code or Dockerfile changed | Build new image, atomic multi-service swap (Section 10), reconcile config | 5-90 s depending on layer cache |
 | Static: tree hash changed | Upload tarball, snapshot to `releases/<id>`, atomic symlink swap | 1-3 s |
 
 This collapses the wrangler-style "many imperative verbs" surface into
@@ -249,40 +284,94 @@ intent. It matches `fly deploy`. The user's mental model is uniform:
 edit manifest (or rebuild the static output), run deploy, the system
 figures out the cheapest path.
 
-The helper persists the last-successful-deploy signature per app in
-its state file (extending the ADR-0002 schema).
+**`--dirty` flag.** Skips the "clean worktree" check and tars the
+working tree directly (instead of `git archive HEAD`). Signature
+becomes `(dirty-<unix-timestamp>, manifest_hash)`, which is always
+unique — every dirty deploy goes through the full build path. Useful
+for iterating on a staging env without committing.
+
+**`--rebuild` flag.** Forces the build path even when the signature
+matches. Used to pick up upstream base image changes when bases are
+mutable tags (e.g., `FROM oven/bun:1`). Passes
+`--no-cache --pull=always` to `podman build`:
+
+- `--no-cache` busts Podman's layer cache (every `RUN` step
+  re-executes).
+- `--pull=always` forces re-pull of every `FROM` base from the
+  registry (Podman's default pull policy is `missing`, which only
+  pulls when not locally cached, so `--no-cache` alone does **not**
+  refresh bases).
+
+Both are needed together. Digest-pinned bases
+(`FROM oven/bun:1@sha256:...`) remain the recommended approach for
+strict supply-chain control; `--rebuild` is the pragmatic escape
+hatch when bases are unpinned.
+
+**Pre-deploy reference resolution.** Before any state mutation, the
+helper resolves every `@secret:KEY` reference in the manifest against
+the `(app, env, key)` secret store (see Section 13). Any missing
+reference → fail immediately, no half-apply.
+
+The helper persists the last-successful-deploy signature in its state
+file (extending the ADR-0002 schema), keyed by `(app, env)`.
 
 ### 10. Container deploy lifecycle (full-build path)
 
-When Section 9 selects the full-build mode:
+When Section 9 selects the full-build mode, the deploy is **atomic at
+the app level**: all services of the app come up as a new set, all are
+verified healthy together, then Caddy swaps to the new set in a single
+reload. Any failure during verification tears down the entire new set
+and leaves the previous set serving traffic.
 
-1. **Client:** `git archive HEAD` (or worktree tar for `--dirty`) → tarball.
+1. **Client:** `git archive HEAD` (or worktree tar for `--dirty`) →
+   tarball. Manifest_hash computed locally.
 2. **Client → helper (SSH):** stream tarball; helper runs
    `systemd-run --scope -p CPUQuota=75% podman build -t
-   simple-vps/<app>:<sha> --label app=<name> --label
-   simple_vps_release=<sha> -`. The CPUQuota cap bounds contention with
-   apps already serving traffic on the same host.
-3. **Helper:** allocate a fresh host-loopback port per service (stored
-   in helper state, see Section 16's networking model), then
-   `podman run --name app-<name>-new` with the Section 7 security
-   floor, `--env-file /var/apps/<app>/shared/.env`, `--mount` for
-   `/var/apps/<app>/shared` and any declared `mounts`,
-   `--network=app-<name>` for intra-app container-to-container
-   traffic, and
-   `--publish 127.0.0.1:<allocated-port>:<service-port>` per service.
-4. **Health check:** `curl 127.0.0.1:<allocated-port><healthcheck>`
-   until success or timeout.
-5. **Swap:** rewrite Caddy upstream from the previous
-   `127.0.0.1:<old-port>` to `127.0.0.1:<new-port>`, `caddy reload`.
-6. **Reap old:** stop the previous container, rename `app-<name>-new`
-   to `app-<name>`, release the old allocated port back to the pool.
+   simple-vps/<app>-<env>:<sha> --label app=<app> --label env=<env>
+   --label simple_vps_release=<sha> -`. The CPUQuota cap bounds
+   contention with apps already serving traffic on the same host.
+3. **Helper — start new set:** for each service declared in the
+   manifest, allocate a fresh host-loopback port (Section 16) and
+   start `podman run --name app-<app>-<env>-<service>-new` with:
+   - The Section 7 security floor (per-env user `app-<app>-<env>`,
+     per-env network `app-<app>-<env>`).
+   - `--env-file /var/apps/<app>/<env>/shared/.env` (resolved per
+     Section 9 pre-deploy step).
+   - `--mount` for `/var/apps/<app>/<env>/shared` and any declared
+     `mounts`.
+   - `--publish 127.0.0.1:<allocated-port>:<service-port>` for
+     services that declare `port`. Workers (no `port`) skip this.
+   - `--entrypoint` overridden when the service declares a `command`
+     (Section 13); otherwise the Dockerfile's `CMD` runs.
+4. **Per-service verification (must all pass):**
+   - **Web services** (have `port`): `curl
+     127.0.0.1:<allocated-port><healthcheck>` until 2xx or timeout.
+   - **Workers** (no `port`): "settle" check — wait N seconds
+     (default 10), verify the container is still `running` (not
+     exited, not in restart loop). A worker that crashes immediately
+     fails verification.
+5. **Atomic swap (only when ALL services pass):** rewrite Caddy
+   upstreams for every web service in this app from old port to new
+   port in one pass, then a single `caddy reload`. The swap is
+   single-reload, never per-service.
+6. **Reap old:** stop and remove every previous
+   `app-<app>-<env>-<service>` container, rename each `*-new` to drop
+   the suffix, release the old allocated ports back to the pool.
 7. **Reconcile:** apply manifest routes (Section 13), record new
    content signature (Section 9) in helper state, untag stale images
    per Section 6, `podman image prune -f`.
 
-Health-check failure: stop `app-<name>-new`, release its allocated
-port, leave the previous container and its existing Caddy upstream
-untouched, fail the deploy. No state mutation.
+**Any failure during step 4:** stop and remove every `*-new` container
+started in step 3, release their allocated ports, leave the previous
+service set and Caddy upstreams untouched, fail the deploy. No state
+mutation, no partial deploy.
+
+The atomic model is meaningfully stricter than per-service rolling: a
+deploy that introduces a worker bug fails the whole deploy and prod
+stays on the known-good set — including the unaffected web service.
+The cost is brief downtime if the new set is slow to come up (covered
+by the existing previous-set Caddy upstream remaining live throughout
+step 4).
 
 ### 11. Config-only reconcile (manifest-only diff path)
 
@@ -315,7 +404,7 @@ apps. simple-vps owns deployment, not source-to-artifact transformation.
 Per-app on-disk layout for static apps:
 
 ```
-/var/apps/<name>/
+/var/apps/<app>/<env>/
   shared/                       persistent app state (env file, etc.)
   web -> releases/<id>          symlink: active release
   releases/
@@ -328,9 +417,9 @@ Lifecycle:
 1. **Client:** copy the directory at the manifest's `static` path →
    tarball.
 2. **Client → helper (SSH):** stream tarball.
-3. **Helper:** extract to `/var/apps/<name>/releases/<id>/`, where
-   `<id>` is timestamp + short git SHA (or `dirty-<timestamp>` for an
-   unclean worktree).
+3. **Helper:** extract to `/var/apps/<app>/<env>/releases/<id>/`,
+   where `<id>` is timestamp + short git SHA (or `dirty-<timestamp>`
+   for an unclean worktree).
 4. **Helper:** atomic symlink swap via `rename(2)`:
 
    ```
@@ -345,7 +434,7 @@ Lifecycle:
    swap either see the old release or the new one, never a missing
    path.
 5. **Helper:** reconcile manifest routes (Caddy `root` pointing at
-   `/var/apps/<name>/web` + `file_server`).
+   `/var/apps/<app>/<env>/web` + `file_server`).
 6. `caddy reload`.
 7. Prune older release directories per Section 6 semantics (current +
    previous-successful + keep N most recent).
@@ -353,6 +442,12 @@ Lifecycle:
 No container, no port, no health check. Rollback for static apps:
 `simple-vps rollback <env> [release-id]` swaps the symlink to an older
 release directory. No rebuild, no re-upload.
+
+**Destroy scope.** `simple-vps destroy <env>` and `destroy --purge`
+operate only on `/var/apps/<app>/<env>/` and `(app, env, *)` state
+entries. Destroying staging never touches prod's files or state. The
+parent `/var/apps/<app>/` directory is removed only when the last env
+of that app is destroyed.
 
 The retention pattern (filesystem releases dir + active symlink) is
 different from container apps (tagged images in Podman storage), but the
@@ -367,43 +462,128 @@ The CLI is app-centric (flyctl-shape), not resource-centric (wrangler-shape).
 One primary noun ("app"), few verbs operating on it, one source of truth
 (the manifest), one universal reconcile verb (`deploy`).
 
+The CLI is app-centric (flyctl-shape), not resource-centric
+(wrangler-shape). One primary noun ("app"), few verbs, one source of
+truth (the manifest), one universal reconcile verb (`deploy`).
+
 **Declarative state lives in the manifest:**
 - App shape (Dockerfile or `static = "..."`)
-- Services (port, healthcheck, resources, env, mounts)
+- Services (port, healthcheck, resources, mounts, optional `command`
+  override per service)
 - Routes (host, path, type, service)
-- Secret bindings (`@secret:key` references)
+- Env values per env (non-secret, in `[env.<env>.env]` blocks)
+- Secret references (`@secret:KEY`, resolved server-side against the
+  `(app, env, key)` secret store)
 
 **Imperative state via CLI:**
-- Secret values (`secret put/list/rm`) — sensitive, can't live in a checked-in file
+- Secret values (`secret put/list/rm <env> <key>`) — sensitive,
+  scoped to `(app, env, key)`, never in a checked-in file
 - Lifecycle actions (`deploy`, `restart`, `rollback`, `destroy`)
 - Observability (`status`, `logs`, `ssh`)
+
+**Multi-service from one image.** When an app has more than one
+service, all services build from the same Dockerfile (one image,
+shared layers). Each service gets its own container; per-service
+`command` overrides the Dockerfile's `CMD`:
+
+```toml
+name = "myapp"
+
+[env.production]
+server = "deploy@vps.example.com"
+
+[services.web]
+port = 3000
+healthcheck = "/health"
+# no command → uses Dockerfile CMD (e.g., "bun run src/server.ts")
+
+[services.worker]
+command = "bun run src/worker.ts"
+# no port → worker; container runs the override, no Caddy upstream,
+# no HTTP health check (settle check per Section 10)
+
+[routes.app]
+host = "myapp.com"
+type = "proxy"
+service = "web"
+```
+
+Per-service Dockerfile (different base images per service) is **out
+of scope** for v1 — covered in "Out of scope" below. Same-image with
+command overrides covers the common case (web + worker from one
+codebase, across Bun/Node/Go/Rust/Ruby/PHP/Python stacks).
+
+**Env values and secret references.** Non-secret env values live
+inline in `[env.<env>.env]` blocks; secrets are referenced by
+`@secret:KEY` syntax that resolves server-side:
+
+```toml
+[env.production.env]
+LOG_LEVEL = "info"
+PUBLIC_API_URL = "https://api.myapp.com"
+DATABASE_URL = "@secret:db_url"
+
+[env.staging.env]
+LOG_LEVEL = "debug"
+PUBLIC_API_URL = "https://api.staging.myapp.com"
+DATABASE_URL = "@secret:db_url"   # same reference, different value resolved
+```
+
+Rules for `[env.<env>.env]` values:
+
+- **String values only.** TOML bool/int/array/inline-table values are
+  rejected at `simple-vps check` with a clear error. If you want
+  `PORT = 3000`, write `PORT = "3000"`. No silent coercion.
+- **`@secret:KEY` is whole-value only.** No partial interpolation
+  (e.g., `"https://user:@secret:pw@host"` is not supported in v1).
+  Whole value or a literal string.
+- **Reserved prefix.** Values that begin with `@secret:` are always
+  references. A literal env value starting with that prefix is
+  rejected with: `value starts with reserved prefix '@secret:', use
+  the secret store instead`.
+- **Pre-deploy resolution.** Helper resolves every `@secret:KEY`
+  against `(app, env, key)` before any state mutation (Section 9).
+  Missing reference → fail immediately, no half-apply.
+- **Secrets never in state.** Resolved secret values land **only** in
+  the runtime env file at `/var/apps/<app>/<env>/shared/.env`
+  (mode `0600`, owned by `app-<app>-<env>`). Helper state files
+  carry references only.
+
+**Secret scoping.** Secrets are stored on the server keyed by
+`(app, env, key)`. Both envs of an app reference the same key name
+(`@secret:db_url`); the server resolves to the per-env stored value.
+Users do not encode env into key names like `db_url_staging`.
 
 **Client commands after the pivot:**
 
 | Verb | Purpose |
 |---|---|
 | `init` | scaffold `simple-vps.toml` + `Dockerfile` (container) or `simple-vps.toml` (static) |
-| `check` | validate manifest |
-| `setup <env>` | create app on host (per-env, one-time) |
+| `check` | validate manifest (including identity-length and env-value rules) |
+| `setup <env>` | create app/env on host (per-env, one-time) |
 | `deploy <env>` | content-addressed reconcile (Section 9) |
+| `deploy <env> --dirty` | tar working tree, skip clean-worktree check |
+| `deploy <env> --rebuild` | force build path, refresh upstream bases |
 | `status <env>` | release, services, routes, last deploy timestamp |
 | `logs <env> [service]` | tail journal |
 | `ssh <env>` | SSH into VPS |
 | `restart <env> <service>` | restart a service (no rebuild) |
 | `rollback <env> [release]` | activate prior release |
-| `destroy <env>` | tear down app on host |
-| `secret put/list/rm <env> <key>` | manage secret values |
+| `destroy <env>` | tear down one env of the app (scoped per Section 12) |
+| `secret put/list/rm <env> <key>` | manage secret values scoped to (app, env, key) |
 | `host status/doctor` | host-level checks |
 
 **Removed:**
 - Client-side `route` verb (route info now surfaced under `status`).
-- `env push` (use `secret put` per key; bulk import was a deploy-state hazard).
+- `env push` (use `secret put` per key; bulk import was a
+  deploy-state hazard, and non-secret env now lives in the manifest).
 
 **Helper-side route surface collapses** from four CRUD verbs
 (`proxy/static/redirect/remove`) to one reconcile verb:
 
-- `route apply --from-manifest <app>` — diff manifest routes against state,
-  apply additions/removals atomically. Called by `deploy`.
+- `route apply --from-manifest <app> <env>` — diff manifest routes
+  against state, apply additions/removals atomically. Called by
+  `deploy`.
 - `route list` — stays as a read-only inspection helper.
 
 ### 14. Provisioner changes
@@ -485,14 +665,17 @@ Concretely:
   (Section 10 step 6). The blue/green swap is at the Caddy-upstream
   layer, not at the port-binding layer.
 
-The per-app Podman network `app-<name>` still exists, but its purpose is
-**intra-app container-to-container traffic** (multi-container apps
-talking to each other by container name). It is not the path Caddy uses
-to reach app services.
+The per-`(app, env)` Podman network `app-<app>-<env>` still exists,
+but its purpose is **intra-app container-to-container traffic**
+(multi-service apps where, for example, a worker calls the web service
+by container name). It is not the path Caddy uses to reach app
+services. Prod and staging on the same VPS run on separate Podman
+networks; their containers cannot reach each other by name.
 
-State: the helper records `(app, service) -> host_port` in its state
-file and survives restarts. Port collisions across apps are prevented
-by the allocator; manifests do not specify host ports.
+State: the helper records `(app, env, service) -> host_port` in its
+state file and survives restarts. Port collisions are prevented by the
+allocator across all `(app, env, service)` tuples on the host;
+manifests do not specify host ports.
 
 Trade-offs vs the alternative "host Caddy joins the Podman network and
 resolves container names":
@@ -531,6 +714,16 @@ files directly via `file_server` (Section 12).
 - Privileged-helper trust boundary narrows to typed manifest input plus
   secret values (Section 15). Clients can no longer inject arbitrary
   systemd unit content, container flags, or Caddy directives.
+- Prod and staging (and other envs) on one VPS, fully isolated: per-env
+  user, per-env Podman network, per-env paths, per-env secret store.
+  No "separate VPS for staging" workaround needed.
+- Multi-service apps deploy atomically: a bad worker fails the whole
+  deploy and prod stays on the known-good set, including the unaffected
+  web service. No half-deploys.
+- `--rebuild` provides an explicit refresh-from-upstream path for
+  mutable base tags (`FROM oven/bun:1`), with `--no-cache --pull=always`
+  semantics that actually re-pull bases (default Podman pull policy
+  `missing` would not).
 
 ### What this gives up
 
@@ -561,9 +754,13 @@ files directly via `file_server` (Section 12).
 ### What becomes harder
 
 - "What is currently running?" requires `podman inspect`, not
-  `cat /var/apps/<name>/current/file`. Trade-off accepted: the image is
-  immutable and inspectable; the previous mutable filesystem release was
-  easier to grep but easier to drift.
+  `cat /var/apps/<name>/current/file`. Trade-off accepted: the image
+  is immutable and inspectable; the previous mutable filesystem
+  release was easier to grep but easier to drift.
+- Long identity names. `app-<app>-<env>-<service>` is verbose in
+  `podman ps` output and systemd unit listings. Section 1's regex
+  limits keep them within OS limits; the verbosity is the cost of
+  unambiguous per-`(app, env, service)` identity.
 - Adding a new first-class deploy shape (a WASM module, a Firecracker
   microVM) would be its own ADR. Container + static in this ADR is the
   entire surface.
@@ -594,6 +791,23 @@ files directly via `file_server` (Section 12).
   context. The friction of manual SHA lookups on every base image bump
   outweighs the win for the solo-dev VPS audience this tool targets.
   Documented in Notes; not enforced.
+- **Per-service Dockerfile.** Multi-service apps in v1 share one
+  Dockerfile and one image; services differ via the per-service
+  `command` override (Section 13). A future ADR may add per-service
+  `dockerfile = "..."` if a real use case demands it. Until then,
+  "install all needed system deps in one shared Dockerfile" or "split
+  into separate simple-vps apps" covers the space.
+- **Env value interpolation.** `@secret:KEY` is whole-value only in
+  v1. Partial interpolation (`"https://user:@secret:pw@host"`) is a
+  future ADR if real demand surfaces.
+- **Server-side opaque build generation.** `simple-vps` does not
+  generate Dockerfiles at deploy time. `init` may scaffold a
+  Dockerfile (via vendored detection logic) that the user owns from
+  that point on. Hidden server-side generation would create a second
+  invisible platform contract; users self-hosting need the build
+  recipe inspectable in git, debuggable with standard container
+  tooling. The "init scaffolds, user owns" model is the answer to
+  zero-config UX without sacrificing transparency.
 
 ## Cutover plan
 
@@ -601,60 +815,109 @@ This project is pre-user. There is no compatibility window.
 
 Cutover is complete when:
 
-1. `runtime` is removed from `Manifest.EnvBlock`; the Dockerfile and
-   optional `static` field replace it.
-2. `cmd/client/client.go` no longer references `bun`, `node`, lockfile
-   detection, or package-manager install commands.
-3. Provisioner installs Podman; no longer installs Node or Bun. The Node
-   and Bun rows are removed from the package source matrix in ADR-0001
-   Section 7 (a one-line note in ADR-0001 points to this ADR).
-4. Helper deploy verbs operate on container images and Podman containers;
-   the `releases/` directory is no longer created or managed.
-5. Routes accept `(host, path)` keys end-to-end; the Caddy generator emits
-   per-path `handle` blocks.
-6. The container security floor in Section 7 is the default in code, not a
-   manifest opt-in.
-7. `deploy` is content-addressed: it detects no-op, config-only, and
-   full-build modes from `(git_sha, manifest_hash)` diff against helper
-   state.
-8. Helper state schema (ADR-0002) extends to record per-app last-deployed
-   `(git_sha, manifest_hash)`.
-9. Build process runs with `CPUQuota=75%` to bound contention with serving
-   traffic.
-10. Client `route` command is removed. `status` shows route info inline.
-11. Helper route CRUD verbs (`proxy/static/redirect/remove`) are removed.
-    A single `route apply --from-manifest <app>` reconcile verb replaces
-    them. `route list` stays for read-only inspection.
-12. Fake-VPS coverage exercises: container build, blue/green swap,
-    health-check rollback, static deploy, image prune, path-based routing
-    collision, no-op deploy, config-only deploy.
-13. Static deploys land in `/var/apps/<name>/releases/<id>/` with an
-    atomic `web` symlink swap; rollback swaps the symlink, never
-    rebuilds.
-14. Podman is installed from Ubuntu 24.04 Universe (no third-party repo
-    configured).
-15. Helper rejects uploaded systemd unit files and uploaded
-    `podman run` flag sets. All privileged artifacts are synthesized
+**Manifest schema and validation**
+
+1. `runtime` field is removed; app shape inferred from
+   Dockerfile/`static` presence per Section 1.
+2. Manifest identity regexes tightened: app max 16 chars, env max 8
+   chars, service max 10 chars. `simple-vps check` fails fast on
+   overruns with a clear error.
+3. `[env.<env>.env]` blocks accept string values only; bool/int/
+   array/inline-table rejected at check time.
+4. `@secret:KEY` values are whole-value references only; partial
+   interpolation rejected. Literal values beginning with `@secret:`
+   rejected with the reserved-prefix error.
+5. Path-validation constraint forcing `path = /var/apps/<name>` is
+   removed; path is computed from `(app, env)`.
+
+**Identity, paths, and per-env isolation**
+
+6. Per-`(app, env)` on-disk layout: `/var/apps/<app>/<env>/shared/`
+   for container apps; `/var/apps/<app>/<env>/{shared, web,
+   releases/}` for static apps.
+7. Per-env system user `app-<app>-<env>` owns its env's filesystem
+   tree. Provisioner creates the user on first deploy of that env.
+8. Per-env Podman network `app-<app>-<env>` for intra-`(app, env)`
+   container-to-container traffic.
+9. Container names `app-<app>-<env>-<service>`; systemd units
+   `simple-<app>-<env>-<service>.service`.
+10. `destroy <env>` and `destroy --purge` scoped to
+    `/var/apps/<app>/<env>/` and `(app, env, *)` state entries only.
+    Parent `/var/apps/<app>/` removed only when the last env is
+    destroyed.
+
+**Deploy lifecycle**
+
+11. `deploy` is content-addressed with shape-dependent signature:
+    container apps `(git_sha, manifest_hash)`; static apps
+    `(static_tree_hash, manifest_hash)`. Computed client-side; helper
+    re-verifies after upload.
+12. `--dirty` flag tars working tree, signature becomes
+    `(dirty-<unix-timestamp>, manifest_hash)`.
+13. `--rebuild` flag forces build path and passes
+    `--no-cache --pull=always` to `podman build`.
+14. Pre-deploy step resolves every `@secret:KEY` against `(app, env,
+    key)` store; missing reference fails deploy before any state
+    mutation.
+15. Container deploys are atomic at the app level: start all
+    `*-new` services → verify web (HTTP) and worker (settle) → single
+    Caddy reload swapping all upstreams → reap old set. Any
+    verification failure tears down all `*-new`, leaves prev set
+    untouched.
+16. Static deploys land in `/var/apps/<app>/<env>/releases/<id>/`
+    with `rename(2)` symlink swap (`ln -sfn ... web.next` then
+    `mv -Tf web.next web`).
+17. `podman build` runs with `CPUQuota=75%` to bound contention with
+    serving traffic.
+
+**Helper boundary, state, and networking**
+
+18. Helper rejects uploaded systemd unit files and uploaded `podman
+    run` flag sets. All privileged artifacts are synthesized
     server-side from typed manifest input. The current
-    `app install-unit` verb is removed; `app apply --from-manifest`
-    replaces it.
-16. Podman runs rootful (helper invokes as root); container processes
-    run as `app-<name>` per Section 7's security floor. No rootless
-    Podman per-user setup.
-17. Static deploy symlink swap uses `rename(2)` via `mv -Tf`, not
-    `ln -sfn` alone.
-18. Content signature is shape-dependent: container apps use
-    `(git_sha, manifest_hash)`; static apps use
-    `(static_tree_hash, manifest_hash)`. Helper computes
-    `static_tree_hash` server-side from the uploaded tarball.
-19. Helper state schema (ADR-0002) extends to record
-    `(app, service) -> host_port` allocations from a configurable
-    range (default 33000-33999), and the last-successful-deploy
-    signature per app.
-20. Host-Caddy reaches container services via
+    `app install-unit` verb is removed; `app apply --from-manifest
+    <app> <env>` replaces it.
+19. Helper state schema (ADR-0002) extends to record per-`(app, env)`
+    last-successful-deploy signature and per-`(app, env, service) ->
+    host_port` allocations from a configurable range (default
+    33000-33999).
+20. Secrets are stored on the server keyed by `(app, env, key)`.
+    CLI: `simple-vps secret put <env> <key>` writes to the per-env
+    scope. Resolved secret values land only in the runtime env file
+    at `/var/apps/<app>/<env>/shared/.env` (`0600`, owned by
+    `app-<app>-<env>`); state files carry references only.
+21. Host-Caddy reaches container services via
     `--publish 127.0.0.1:<allocated>:<service-port>`. Caddy does not
-    join any Podman network. The per-app `app-<name>` Podman network
-    exists for intra-app traffic only.
+    join any Podman network.
+22. Route uniqueness key end-to-end is `(server, host, path)`;
+    `--force` only overrides same-`(app, env)` collisions, never
+    cross-`(app, env)`.
+
+**Provisioner, CLI, runtime**
+
+23. Provisioner installs Podman from Ubuntu 24.04 Universe (no
+    third-party repo configured); no longer installs Node, Bun, or
+    package managers.
+24. Podman runs rootful (helper invokes as root); container processes
+    run as the per-env user `app-<app>-<env>` per Section 7. No
+    rootless Podman per-user setup.
+25. `cmd/client/client.go` no longer references `bun`, `node`,
+    lockfile detection, or package-manager install commands.
+26. Client `route` command removed; route info surfaced in
+    `status`.
+27. Helper route CRUD verbs (`proxy/static/redirect/remove`) removed;
+    `route apply --from-manifest <app> <env>` reconcile verb and
+    `route list` (read-only) remain.
+
+**Coverage**
+
+28. Fake-VPS coverage exercises: container build, multi-service
+    atomic swap, worker-settle rollback, health-check rollback,
+    static deploy with snapshot/symlink, image prune, path-based
+    routing collision, no-op deploy, config-only deploy,
+    `--dirty` deploy, `--rebuild` deploy, prod+staging on one VPS
+    (per-env identity), secret pre-deploy resolution failure,
+    per-env destroy scope.
 
 ## Notes
 
