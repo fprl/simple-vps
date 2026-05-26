@@ -1,6 +1,8 @@
 package config
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -43,10 +45,9 @@ type Route struct {
 }
 
 type EnvBlock struct {
-	Server       string             `toml:"server"`
-	KeepReleases *int               `toml:"keep_releases"`
-	Services     map[string]Service `toml:"services"`
-	Routes       map[string]Route   `toml:"routes"`
+	Server   string             `toml:"server"`
+	Services map[string]Service `toml:"services"`
+	Routes   map[string]Route   `toml:"routes"`
 	// Env is the [env.<env>.env] block. Values must be strings (or whole-value
 	// @secret:KEY references); non-string TOML values are rejected at check
 	// time. Captured as any so we can produce precise type errors.
@@ -123,11 +124,37 @@ func ReadManifest(root string) (*Manifest, error) {
 		return nil, fmt.Errorf("simple-vps.toml not found")
 	}
 	var manifest Manifest
-	err = toml.Unmarshal(data, &manifest)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse simple-vps.toml: %w", err)
+	// Strict decoding: any field outside the schema (legacy `runtime`,
+	// `[build]`, `keep_releases`, or a typo) becomes a check-time error
+	// rather than silently passing as a no-op. Pre-user repo, no compat
+	// window — stale config that looks honored but does nothing is
+	// worse than a clear "unknown field" error.
+	dec := toml.NewDecoder(bytes.NewReader(data)).DisallowUnknownFields()
+	if err := dec.Decode(&manifest); err != nil {
+		return nil, fmt.Errorf("failed to parse simple-vps.toml: %s", strictErrorMessage(err))
 	}
 	return &manifest, nil
+}
+
+// strictErrorMessage turns go-toml/v2's terse "strict mode: fields in the
+// document are missing in the target struct" wrapper into something a user
+// can actually act on — the offending field names plus their positions.
+func strictErrorMessage(err error) string {
+	var missing *toml.StrictMissingError
+	if !errors.As(err, &missing) || len(missing.Errors) == 0 {
+		return err.Error()
+	}
+	var msgs []string
+	for _, decErr := range missing.Errors {
+		key := strings.Join([]string(decErr.Key()), ".")
+		row, col := decErr.Position()
+		if key == "" {
+			msgs = append(msgs, fmt.Sprintf("unknown field at line %d:%d", row, col))
+			continue
+		}
+		msgs = append(msgs, fmt.Sprintf("unknown field %q at line %d:%d", key, row, col))
+	}
+	return strings.Join(msgs, "; ")
 }
 
 // detectShape returns the inferred app shape ("container" or "static") plus
@@ -222,10 +249,6 @@ func CheckManifest(root string, envName string) ([]string, []string, error) {
 			errors = append(errors, fmt.Sprintf("[env.%s].server is required", selected))
 		} else if !ValidateSshTarget(envBlock.Server) {
 			errors = append(errors, fmt.Sprintf("[env.%s].server must be an SSH target like deploy@example.com", selected))
-		}
-
-		if envBlock.KeepReleases != nil && *envBlock.KeepReleases < 1 {
-			errors = append(errors, fmt.Sprintf("[env.%s].keep_releases must be a positive integer", selected))
 		}
 
 		validateEnvBlock(envBlock.Env, selected, &errors)

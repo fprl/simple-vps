@@ -19,7 +19,6 @@ type cli struct {
 	Deploy deployCmd        `cmd:"" help:"Build the container image on the host and run the app's services."`
 	SSH    sshCmd           `cmd:"ssh" help:"Open an SSH session to an app environment."`
 	Host   hostCmd          `cmd:"" help:"Install or inspect a Simple VPS host."`
-	Route  routeCmd         `cmd:"" help:"Inspect routes from a laptop or CI runner."`
 	Server helper.ServerCmd `cmd:"" hidden:"" help:"Privileged host API."`
 }
 
@@ -196,27 +195,6 @@ func (c hostInstallCmd) Run() error {
 	opts.CheckMode = c.CheckMode
 	opts.AssumeYes = c.AssumeYes
 	return hostinstall.NewInstaller().RunOptions(opts)
-}
-
-type routeCmd struct {
-	List routeListCmd `cmd:"" default:"1" help:"List configured routes."`
-}
-
-type routeListCmd struct {
-	JSON   bool   `name:"json" help:"Output JSON."`
-	Server string `help:"SSH target like deploy@example.com."`
-}
-
-func (c routeListCmd) Run() error {
-	args := []string{"list"}
-	if c.JSON {
-		args = append(args, "--json")
-	}
-	if c.Server != "" {
-		args = append(args, "--server", c.Server)
-	}
-	client.CmdRoute(args)
-	return nil
 }
 
 func main() {

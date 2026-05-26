@@ -181,14 +181,6 @@ func serverDoctorCommand() string {
 	return serverCommand("doctor")
 }
 
-func serverRouteListCommand(jsonFlag bool) string {
-	args := []string{"route", "list"}
-	if jsonFlag {
-		args = append(args, "--json")
-	}
-	return serverCommand(args...)
-}
-
 func serverAppSetupEnvCommand(appName string, envName string) string {
 	return serverCommand("app", "setup-env", appName, envName)
 }
@@ -416,45 +408,6 @@ func CmdHost(args []string) {
 		out := runSSHChecked(runner, server, serverDoctorCommand(), "failed to run doctor")
 		fmt.Print(out)
 	}
-}
-
-func CmdRoute(args []string) {
-	jsonFlag := false
-
-	if len(args) > 0 && args[0] != "list" {
-		utils.Die("route requires subcommand: list", 1)
-	}
-
-	remArgs := args
-	if len(args) > 0 {
-		remArgs = args[1:]
-	}
-
-	serverFlag, rest, err := parseServerFlag(remArgs)
-	if err != nil {
-		utils.Die(err.Error(), 1)
-	}
-	for _, arg := range rest {
-		if arg == "--json" {
-			jsonFlag = true
-			continue
-		}
-		utils.Die(fmt.Sprintf("unknown argument: %s", arg), 1)
-	}
-
-	server, err := readTargetServer(".", serverFlag)
-	if err != nil {
-		utils.Die(err.Error(), 1)
-	}
-
-	runner, err := NewCommandRunner()
-	if err != nil {
-		utils.Die(err.Error(), 1)
-	}
-	defer runner.Close()
-
-	out := runSSHChecked(runner, server, serverRouteListCommand(jsonFlag), "failed to list routes")
-	fmt.Print(out)
 }
 
 func CmdDeploy(root string, envName string, dirty bool, includeDotenv bool) {

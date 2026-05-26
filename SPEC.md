@@ -50,56 +50,73 @@ design, not feature creep into the current shape. See
 
 ## Public CLI
 
-The user-facing surface. `simple-vps --help` lists exactly these verbs.
+The user-facing surface. `simple-vps --help` lists exactly the verbs
+under **Shipping today**. Anything under **Planned** is the durable
+contract this product is being built toward, but the binary does not
+implement it yet.
 
-### App lifecycle
+### App lifecycle — shipping today
 
 ```bash
-simple-vps init                                       # scaffold simple-vps.toml
+simple-vps init                                       # scaffold simple-vps.toml + Dockerfile
 simple-vps check [env]                                # validate manifest
-simple-vps setup <env>                                # create app on the host
-simple-vps deploy <env> [--dirty] [--rebuild]
-simple-vps rollback <env> [release]
-simple-vps destroy <env> [--yes] [--confirm <name>] [--purge]
-simple-vps restart <env> <service>
-simple-vps status <env> [--json]
-simple-vps logs <env> [service] [--tail] [--json]
-simple-vps ssh <env>
+simple-vps setup <env>                                # create per-env user, paths, Podman network
+simple-vps deploy <env> [--dirty]                     # build image on the host, run services, route via Caddy
+simple-vps ssh <env>                                  # SSH into the host
 ```
 
-### Secrets and env
+### App lifecycle — planned (post-cutover backlog)
+
+These are part of the durable contract above. They were removed in the
+ADR-0005 cutover and will come back wired to the container/Podman flow:
 
 ```bash
-simple-vps secret put <env> <KEY>
-simple-vps secret list <env> [--json]
-simple-vps secret rm <env> <KEY>
+simple-vps deploy <env> --rebuild                     # --no-cache --pull=always (planned)
+simple-vps rollback <env> [release]                   # planned
+simple-vps destroy <env> [--yes] [--confirm <name>] [--purge]  # planned
+simple-vps restart <env> <service>                    # planned
+simple-vps status <env> [--json]                      # planned
+simple-vps logs <env> [service] [--tail] [--json]     # planned
 ```
 
-`secret put` reads stdin only, never argv.
-`secret list` prints names only, never values.
-Writes are atomic via the privileged server API. No auto-restart.
+### Secrets and env — planned
 
-Non-secret env values live in `[env.<env>.env]` blocks in the manifest.
-Secret values are referenced by whole-value `@secret:KEY` references and
-resolved on the host before deploy execution.
-
-### Backup and restore
+The secret-store helper surface is not implemented yet; `simple-vps
+check` already understands `[env.<env>.env]` blocks and rejects
+`@secret:KEY` references at deploy time until resolution lands.
 
 ```bash
-simple-vps backup <env>
-simple-vps backup <env> --to=<destination>
-simple-vps backup list <env> [--json]
-simple-vps backup rm <env> <backup-id>
+simple-vps secret put <env> <KEY>                     # planned
+simple-vps secret list <env> [--json]                 # planned
+simple-vps secret rm <env> <KEY>                      # planned
+```
 
-simple-vps restore <env> --from=<backup-id>
-simple-vps restore <env> --from=<backup-id> --dry-run
+`secret put` will read stdin only, never argv.
+`secret list` will print names only, never values.
+Writes will be atomic via the privileged server API. No auto-restart.
+
+Non-secret env values live in `[env.<env>.env]` blocks in the manifest
+today. Secret values are referenced by whole-value `@secret:KEY`
+references that will resolve on the host before deploy execution once
+the secret store lands.
+
+### Backup and restore — planned
+
+```bash
+simple-vps backup <env>                               # planned
+simple-vps backup <env> --to=<destination>            # planned
+simple-vps backup list <env> [--json]                 # planned
+simple-vps backup rm <env> <backup-id>                # planned
+
+simple-vps restore <env> --from=<backup-id>           # planned
+simple-vps restore <env> --from=<backup-id> --dry-run # planned
 ```
 
 Backup and restore are paired primitives. The bar is: fresh VPS, host
 bootstrap, one `restore`, app running again when source access and secret
 master key requirements are satisfied. See ADR-0007.
 
-### Host operations
+### Host operations — shipping today
 
 ```bash
 simple-vps host status [--server <ssh-target>] [--json]
@@ -123,11 +140,9 @@ See [docs/security-model.md](docs/security-model.md) for the supported modes.
 
 ### Diagnostics
 
-```bash
-simple-vps route list [--json] [--server <ssh-target>]
-```
-
-Read-only view of the route table.
+There is no client-side `route` verb. The route table is inspectable
+on the host via `sudo simple-vps server route list`; the laptop-side
+wrapper is planned to come back alongside `status`.
 
 ## Internal CLI (server-side)
 
@@ -140,23 +155,33 @@ through SSH via `sudo` and are not user-facing product commands.
 documented here because it is the contract between the deploy client,
 installer, and host helper.
 
+Shipping today:
+
 ```bash
 sudo simple-vps server status
 sudo simple-vps server doctor
 
-sudo simple-vps server app apply --from-manifest <app> <env>
-sudo simple-vps server app destroy <app> <env>
-sudo simple-vps server app service <action> <app> <env> <service>
-sudo simple-vps server app read-env <app> <env>
+sudo simple-vps server app setup-env <app> <env>
+sudo simple-vps server app destroy-env <app> <env>
+sudo simple-vps server app apply --tarball <path> --manifest <path> --sha <sha> <app> <env>
 
 sudo simple-vps server route list [--json]
-sudo simple-vps server route apply --from-manifest <app> <env>
 
 sudo simple-vps server cloudflare publish --app <name> <host>
 sudo simple-vps server cloudflare remove <host>
 sudo simple-vps server cloudflare remove --app <name>
 sudo simple-vps server cloudflare setup-tunnel --name <name>
 sudo simple-vps server generate-caddy
+```
+
+Planned (paired with the client-side "planned" verbs above):
+
+```bash
+sudo simple-vps server app service <action> <app> <env> <service>   # planned, for client `restart` / `status`
+sudo simple-vps server app secret put <app> <env> <key>             # planned, for client `secret put`
+sudo simple-vps server app secret list <app> <env>                  # planned, for client `secret list`
+sudo simple-vps server app secret rm <app> <env> <key>              # planned, for client `secret rm`
+sudo simple-vps server route apply --from-manifest <app> <env>      # planned; today, `app apply` writes the Caddy fragment directly
 ```
 
 The sudoers contract is one line for the whole server binary, installed at

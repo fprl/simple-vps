@@ -48,8 +48,13 @@ func CmdStatus() {
 	for _, service := range []string{"tailscaled", "cloudflared", "caddy"} {
 		fmt.Printf("  %s: %s\n", service, systemd.SystemServiceStatus(service))
 	}
+	// Post-cutover host footprint per ADR-0005 §14: simple-vps (the
+	// helper itself, implied), Podman, Caddy, rsync. Tailscale,
+	// cloudflared, and Litestream are optional install-time add-ons
+	// and only get reported when their service is active (above) or
+	// the install-time feature flag was on.
 	fmt.Println("tools:")
-	for _, tool := range []string{"litestream", "node", "bun", "pnpm"} {
+	for _, tool := range []string{"podman", "caddy", "rsync"} {
 		fmt.Printf("  %s: %s\n", tool, toolStatus(tool))
 	}
 }
