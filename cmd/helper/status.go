@@ -1,7 +1,6 @@
 package helper
 
 import (
-	"encoding/json"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -48,99 +47,26 @@ func CmdStatus() {
 	for _, service := range []string{"tailscaled", "cloudflared", "caddy"} {
 		fmt.Printf("  %s: %s\n", service, systemd.SystemServiceStatus(service))
 	}
-	// Post-cutover host footprint per ADR-0005 §14: simple-vps (the
-	// helper itself, implied), Podman, Caddy, rsync. Tailscale,
-	// cloudflared, and Litestream are optional install-time add-ons
-	// and only get reported when their service is active (above) or
-	// the install-time feature flag was on.
+	// Post-cutover host footprint per ADR-0005 §14: the helper itself
+	// (on PATH, implied), Podman, Caddy, rsync.
 	fmt.Println("tools:")
 	for _, tool := range []string{"podman", "caddy", "rsync"} {
 		fmt.Printf("  %s: %s\n", tool, toolStatus(tool))
 	}
 }
 
+// statusStateLines reports the host-install state only. Per-app/per-env
+// counts intentionally do not appear: the legacy apps.json / routes.json
+// registers aren't written by the container deploy flow, so any count
+// derived from them would be a lie. Live (app, env) inventory belongs in
+// a future `status` rewrite sourced from `podman ps` labels.
 func statusStateLines(stateStore store.Store) ([]string, error) {
 	installed, err := stateStore.HostInstalled()
 	if err != nil {
 		return nil, err
 	}
-	var lines []string
 	if installed {
-		lines = append(lines, fmt.Sprintf("state: installed (%s)", stateStore.HostPath()))
-	} else {
-		lines = append(lines, fmt.Sprintf("state: not installed (missing %s)", stateStore.HostPath()))
+		return []string{fmt.Sprintf("state: installed (%s)", stateStore.HostPath())}, nil
 	}
-	apps, err := stateStore.ReadApps()
-	if err != nil {
-		return nil, err
-	}
-	routes, err := stateStore.ReadRoutes()
-	if err != nil {
-		return nil, err
-	}
-	lines = append(lines, fmt.Sprintf("apps: %d", len(apps.Apps)))
-	lines = append(lines, fmt.Sprintf("routes: %d", len(routes.Routes)))
-	return lines, nil
-}
-
-func CmdRoutes(jsonFlag bool) {
-	routes, err := store.Default().ReadRoutes()
-	if err != nil {
-		utils.Die(err.Error(), 1)
-	}
-	if jsonFlag {
-		type routesWrap struct {
-			Routes []store.Route `json:"routes"`
-		}
-		data, err := json.MarshalIndent(routesWrap{Routes: routes.Routes}, "", "  ")
-		if err != nil {
-			utils.Die(err.Error(), 1)
-		}
-		fmt.Println(string(data))
-		return
-	}
-	if len(routes.Routes) == 0 {
-		fmt.Println("No routes configured.")
-		return
-	}
-
-	hostWidth := len("HOST")
-	typeWidth := len("TYPE")
-	targetWidth := len("TARGET")
-
-	for _, r := range routes.Routes {
-		if len(r.Host) > hostWidth {
-			hostWidth = len(r.Host)
-		}
-		if len(r.Type) > typeWidth {
-			typeWidth = len(r.Type)
-		}
-		target := getRouteTarget(r)
-		if len(target) > targetWidth {
-			targetWidth = len(target)
-		}
-	}
-
-	headerFormat := fmt.Sprintf("%%-%ds  %%-%ds  %%-%ds  APP\n", hostWidth, typeWidth, targetWidth)
-	rowFormat := fmt.Sprintf("%%-%ds  %%-%ds  %%-%ds  %%s\n", hostWidth, typeWidth, targetWidth)
-
-	fmt.Printf(headerFormat, "HOST", "TYPE", "TARGET")
-	for _, r := range routes.Routes {
-		fmt.Printf(rowFormat, r.Host, r.Type, getRouteTarget(r), r.App)
-	}
-}
-
-// getRouteTarget renders the target column for `route list`.
-func getRouteTarget(r store.Route) string {
-	switch r.Type {
-	case "proxy":
-		if r.Port != nil {
-			return fmt.Sprintf("127.0.0.1:%d", *r.Port)
-		}
-	case "static":
-		return r.Root
-	case "redirect":
-		return r.To
-	}
-	return ""
+	return []string{fmt.Sprintf("state: not installed (missing %s)", stateStore.HostPath())}, nil
 }

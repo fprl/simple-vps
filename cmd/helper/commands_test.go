@@ -27,7 +27,6 @@ func TestServerCLIParsesPrivilegedCommands(t *testing.T) {
 	tests := [][]string{
 		{"status"},
 		{"doctor"},
-		{"route", "list", "--json"},
 		{"cloudflare", "setup-tunnel", "--name", "simple-vps", "--account-id", "account-test", "--token-file", "/tmp/token"},
 		{"cloudflare", "publish", "--app", "api", "api.example.com"},
 		{"cloudflare", "remove", "--app", "api"},

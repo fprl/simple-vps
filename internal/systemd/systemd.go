@@ -2,18 +2,16 @@
 // no longer renders or installs systemd units. What remains is the small
 // pile of host-side primitives the new container-deploy lifecycle still
 // needs: the shared deploy tmp dir, the validator for uploaded paths
-// under it, basic env-file content validation, and a couple of generic
-// command helpers. A future rename to `internal/hostprim` (or split
-// across more focused packages) is a reasonable follow-up.
+// under it, and a couple of generic command helpers. A future rename
+// to `internal/hostprim` (or split across more focused packages) is a
+// reasonable follow-up.
 package systemd
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
@@ -137,52 +135,6 @@ func ValidateDeployTmpSource(path string) (string, error) {
 		}
 	}
 	return resolved, nil
-}
-
-// ValidateEnvironmentContent accepts the docker-env-file dialect:
-// KEY=value lines, comments and blanks, no quotes, no inline comments,
-// no `export`. Quoted values, shell interpolation, and trailing
-// comments are all rejected so the file means the same thing in every
-// reader (Podman, manual cat, simple-vps secret list).
-func ValidateEnvironmentContent(content string) error {
-	if strings.Contains(content, "\x00") {
-		return errors.New("env file cannot contain NUL bytes")
-	}
-	lines := strings.Split(content, "\n")
-	envKeyRe := regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
-
-	for i, rawLine := range lines {
-		lineIndex := i + 1
-		line := strings.TrimSuffix(rawLine, "\r")
-		stripped := strings.TrimSpace(line)
-		if stripped == "" || strings.HasPrefix(stripped, "#") {
-			continue
-		}
-		if strings.HasPrefix(stripped, "export ") {
-			return fmt.Errorf("line %d: export is not supported", lineIndex)
-		}
-		if !strings.Contains(line, "=") {
-			return fmt.Errorf("line %d: expected KEY=value", lineIndex)
-		}
-		parts := strings.SplitN(line, "=", 2)
-		key := parts[0]
-		value := parts[1]
-
-		if strings.TrimSpace(key) != key {
-			return fmt.Errorf("line %d: whitespace around keys is not supported", lineIndex)
-		}
-		if !envKeyRe.MatchString(key) {
-			return fmt.Errorf("line %d: invalid env key: %s", lineIndex, key)
-		}
-		if strings.HasPrefix(value, "\"") || strings.HasPrefix(value, "'") {
-			return fmt.Errorf("line %d: quoted values are not supported", lineIndex)
-		}
-		// Inline comments: search for non-escaped ` #`
-		if regexp.MustCompile(`\s+#`).MatchString(value) {
-			return fmt.Errorf("line %d: inline comments are not supported", lineIndex)
-		}
-	}
-	return nil
 }
 
 func verifyFileOwner(path string, expectedUid int) error {

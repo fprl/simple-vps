@@ -8,30 +8,11 @@ import (
 	"github.com/fprl/simple-vps/internal/utils"
 )
 
-// Per ADR-0005 cutover item 27, the helper exposes only:
-//
-//   - `route list` — read-only inspection of the routes registered in
-//     /etc/simple-vps/routes.json.
-//
-// The pre-cutover CRUD verbs (`proxy`, `static`, `redirect`, `remove`)
-// are removed; per-app routes are now expressed in the manifest and
-// applied by `server app apply` as a Caddyfile fragment under
-// /etc/caddy/conf.d/. `generate-caddy` stays as the install-time
-// bootstrap that writes the main /etc/caddy/Caddyfile (with the
-// `import conf.d/*.caddy` line) so per-app fragments take effect.
-
-type routeCmd struct {
-	List routeListCmd `cmd:"" help:"List configured routes."`
-}
-
-type routeListCmd struct {
-	JSON bool `name:"json" help:"Output JSON."`
-}
-
-func (c routeListCmd) Run() error {
-	CmdRoutes(c.JSON)
-	return nil
-}
+// Post-cutover, per-app routing lives in /etc/caddy/conf.d/*.caddy
+// fragments written by `server app apply` from manifest routes.
+// `generate-caddy` keeps writing the main /etc/caddy/Caddyfile (with
+// the `import conf.d/*.caddy` line) so per-app fragments take effect.
+// No client- or helper-side route CRUD remains.
 
 type generateCaddyCmd struct {
 	Force bool `help:"Force generation."`

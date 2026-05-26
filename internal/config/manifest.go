@@ -20,7 +20,6 @@ const (
 var (
 	AppRe        = regexp.MustCompile(`^[a-z][a-z0-9-]{1,40}$`)
 	ServiceRe    = regexp.MustCompile(`^[a-z][a-z0-9-]{0,30}$`)
-	HeaderNameRe = regexp.MustCompile("^[A-Za-z0-9!#$%&'*+.^_`|~-]+$")
 	SystemUserRe = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}\$?$`)
 	EnvKeyRe     = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 )
@@ -36,12 +35,11 @@ type Service struct {
 }
 
 type Route struct {
-	Host    string   `toml:"host"`
-	Type    string   `toml:"type"`
-	Service string   `toml:"service"`
-	Root    string   `toml:"root"`
-	To      string   `toml:"to"`
-	Headers []string `toml:"headers"`
+	Host    string `toml:"host"`
+	Type    string `toml:"type"`
+	Service string `toml:"service"`
+	Root    string `toml:"root"`
+	To      string `toml:"to"`
 }
 
 type EnvBlock struct {
@@ -422,9 +420,6 @@ func mergeRoutes(base map[string]Route, override map[string]Route) map[string]Ro
 		}
 		if v.To != "" {
 			existing.To = v.To
-		}
-		if len(v.Headers) > 0 {
-			existing.Headers = append([]string(nil), v.Headers...)
 		}
 		res[k] = existing
 	}

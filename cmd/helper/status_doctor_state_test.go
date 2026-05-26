@@ -25,7 +25,7 @@ func TestStatusStateLinesReportsNotInstalledWithoutRawOpenError(t *testing.T) {
 	}
 }
 
-func TestDoctorStateFindingsReportMissingHostAndInvalidADRFiles(t *testing.T) {
+func TestDoctorStateFindingsReportMissingHostWithoutRawError(t *testing.T) {
 	root := t.TempDir()
 	stateStore := store.Store{Root: root}
 
@@ -36,14 +36,20 @@ func TestDoctorStateFindingsReportMissingHostAndInvalidADRFiles(t *testing.T) {
 	if strings.Contains(findings[0], "open ") {
 		t.Fatalf("doctor leaked raw open error: %s", findings[0])
 	}
+}
 
+func TestDoctorStateFindingsClearsAfterValidHost(t *testing.T) {
+	// apps.json / routes.json are no longer probed by doctor (the
+	// container deploy flow doesn't write them). A host with valid
+	// host.json should produce no doctor findings, even when the
+	// legacy state files are absent.
+	root := t.TempDir()
+	stateStore := store.Store{Root: root}
 	writeValidHost(t, stateStore.HostPath())
-	if err := os.WriteFile(stateStore.RoutesPath(), []byte(`{"version":2,"routes":[]}`), 0644); err != nil {
-		t.Fatal(err)
-	}
-	findings = doctorStateFindings(stateStore)
-	if len(findings) != 1 || !strings.Contains(findings[0], "unsupported routes.json version 2") {
-		t.Fatalf("unexpected ADR state findings: %+v", findings)
+
+	findings := doctorStateFindings(stateStore)
+	if len(findings) != 0 {
+		t.Fatalf("expected no findings for a valid host with absent legacy files, got: %+v", findings)
 	}
 }
 

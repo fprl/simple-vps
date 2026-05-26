@@ -119,8 +119,8 @@ master key requirements are satisfied. See ADR-0007.
 ### Host operations — shipping today
 
 ```bash
-simple-vps host status [--server <ssh-target>] [--json]
-simple-vps host doctor [--server <ssh-target>] [--json]
+simple-vps host status [--server <ssh-target>]
+simple-vps host doctor [--server <ssh-target>]
 simple-vps host install [install options]
 ```
 
@@ -128,21 +128,36 @@ simple-vps host install [install options]
 runs the bounded Go host provisioner from the Go binary. The public
 `install.sh` entrypoint is a tiny bootstrap for the one-line install path.
 
-`host install` supports ingress / admin modes:
+`host install` accepts individual provider flags today:
 
 ```bash
-simple-vps host install --ingress public
-simple-vps host install --ingress cloudflare --cloudflare-tunnel-token=...
-simple-vps host install --ingress private --admin tailscale --tailscale-auth-key=...
+simple-vps host install --cloudflare-tunnel --cloudflare-tunnel-token=...
+simple-vps host install --tailscale --tailscale-auth-key=...
 ```
 
 See [docs/security-model.md](docs/security-model.md) for the supported modes.
 
+### Host operations — planned
+
+```bash
+simple-vps host status --json                         # planned
+simple-vps host doctor --json                         # planned
+simple-vps host install --ingress public|cloudflare|private   # planned (ADR-0002 ingress preset)
+simple-vps host install --admin public-ssh|tailscale          # planned
+```
+
+The ingress preset model (`--ingress`) and the admin-access mode
+(`--admin`) are the durable contract from [docs/security-model.md](docs/security-model.md);
+they map to the individual flags above and ship together with the
+`--json` rollout.
+
 ### Diagnostics
 
-There is no client-side `route` verb. The route table is inspectable
-on the host via `sudo simple-vps server route list`; the laptop-side
-wrapper is planned to come back alongside `status`.
+There is no client-side `route` verb. Route inspection on the host is
+also pending: the helper-side `route list` reader pointed at a
+registry the new deploy flow does not populate and was removed. A
+podman-labels-sourced replacement lands alongside the rest of the
+post-cutover `status` / `logs` rewrite.
 
 ## Internal CLI (server-side)
 
@@ -165,8 +180,6 @@ sudo simple-vps server app setup-env <app> <env>
 sudo simple-vps server app destroy-env <app> <env>
 sudo simple-vps server app apply --tarball <path> --manifest <path> --sha <sha> <app> <env>
 
-sudo simple-vps server route list [--json]
-
 sudo simple-vps server cloudflare publish --app <name> <host>
 sudo simple-vps server cloudflare remove <host>
 sudo simple-vps server cloudflare remove --app <name>
@@ -177,6 +190,7 @@ sudo simple-vps server generate-caddy
 Planned (paired with the client-side "planned" verbs above):
 
 ```bash
+sudo simple-vps server route list [--json]                          # planned; sourced from podman labels / Caddy fragments
 sudo simple-vps server app service <action> <app> <env> <service>   # planned, for client `restart` / `status`
 sudo simple-vps server app secret put <app> <env> <key>             # planned, for client `secret put`
 sudo simple-vps server app secret list <app> <env>                  # planned, for client `secret list`
