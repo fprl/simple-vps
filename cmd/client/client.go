@@ -316,6 +316,23 @@ func serverAppCreateCommand(appName string) string {
 	return serverCommand("app", "create", appName)
 }
 
+func serverAppSetupEnvCommand(appName string, envName string) string {
+	return serverCommand("app", "setup-env", appName, envName)
+}
+
+func serverAppDestroyEnvCommand(appName string, envName string) string {
+	return serverCommand("app", "destroy-env", appName, envName)
+}
+
+func serverAppApplyCommand(appName string, envName string, tarballPath string, manifestPath string, sha string) string {
+	return serverCommand("app", "apply",
+		"--tarball", tarballPath,
+		"--manifest", manifestPath,
+		"--sha", sha,
+		appName, envName,
+	)
+}
+
 func serverAppDestroyCommand(appName string) string {
 	return serverCommand("app", "destroy", appName)
 }
@@ -516,8 +533,8 @@ func CmdSetup(root string, envName string) {
 		runSSHChecked(runner, ctx.Server, fmt.Sprintf("command -v %s", utils.ShellEscape(tool)), errMsg)
 	}
 
-	// 3. create app
-	runSSHChecked(runner, ctx.Server, serverAppCreateCommand(ctx.AppName), "simple-vps server app create failed; rerun the Simple VPS install")
+	// 3. create per-env user, dirs, and Podman network
+	runSSHChecked(runner, ctx.Server, serverAppSetupEnvCommand(ctx.AppName, envName), "simple-vps server app setup-env failed")
 	fmt.Printf("Setup complete for %s (%s)\n", ctx.AppName, envName)
 }
 
@@ -962,7 +979,11 @@ func CmdDeploy(root string, envName string, dirty bool, includeDotenv bool) {
 		utils.Die(err.Error(), 1)
 	}
 
-	shaOut, _, code, _ := runCommand("git", []string{"rev-parse", "HEAD"}, root)
+	if ctx.Shape != config.ShapeContainer {
+		utils.Die(fmt.Sprintf("deploy currently supports container apps only (got shape %q); static apps land in a follow-up", ctx.Shape), 1)
+	}
+
+	shaOut, _, code, _ := runCommand("git", []string{"rev-parse", "--short=12", "HEAD"}, root)
 	if code != 0 {
 		utils.Die("git rev-parse failed", 1)
 	}
@@ -980,7 +1001,7 @@ func CmdDeploy(root string, envName string, dirty bool, includeDotenv bool) {
 		utils.Die("working tree is dirty; commit changes or pass --dirty", 1)
 	}
 	if worktreeDirty {
-		release = fmt.Sprintf("%s-dirty-%s", release, time.Now().UTC().Format("20060102150405"))
+		release = fmt.Sprintf("dirty-%s", time.Now().UTC().Format("20060102150405"))
 	}
 
 	runner, err := NewCommandRunner()
@@ -989,99 +1010,69 @@ func CmdDeploy(root string, envName string, dirty bool, includeDotenv bool) {
 	}
 	defer runner.Close()
 
-	// Assert shared directory on host
-	runSSHChecked(runner, ctx.Server, fmt.Sprintf("test -d %s/shared", ctx.AppRoot), fmt.Sprintf("setup has not run for %s", envName))
-
-	// Prepare artifact locally. With the container/static pivot the artifact
-	// is just the source (container) or the prebuilt static directory; no
-	// host-side build, no lockfile-driven install.
-	artifactDir, err := prepareArtifact(root, worktreeDirty)
+	// 1. Tar source locally (git archive for clean tree, working tree for --dirty).
+	tarDir, err := os.MkdirTemp("", "simple-vps-deploy-")
 	if err != nil {
 		utils.Die(err.Error(), 1)
 	}
-	defer os.RemoveAll(artifactDir)
-	releaseDir := ctx.AppRoot + "/releases/" + release
+	defer os.RemoveAll(tarDir)
+
+	localTar := filepath.Join(tarDir, "source.tar")
+	localManifest := filepath.Join(tarDir, "simple-vps.toml")
+	if err := writeSourceTar(root, localTar, worktreeDirty); err != nil {
+		utils.Die(err.Error(), 1)
+	}
+	if err := copyFile(filepath.Join(root, ManifestFile), localManifest); err != nil {
+		utils.Die(fmt.Sprintf("copy manifest: %v", err), 1)
+	}
 
 	if !includeDotenv {
-		if err := validateArtifactDotenv(artifactDir); err != nil {
+		// Quick dotenv check against the working tree — the same files
+		// would otherwise end up in the tarball.
+		if err := validateArtifactDotenv(root); err != nil {
 			utils.Die(err.Error(), 1)
 		}
 	}
 
-	// Create release dir
-	runSSHChecked(runner, ctx.Server, fmt.Sprintf("install -d -m 2775 %s", utils.ShellEscape(releaseDir)), "failed to create release directory")
-
-	// Upload artifact
-	err = runner.UploadDirectory(artifactDir, releaseDir, ctx.Server)
-	if err != nil {
-		utils.Die(fmt.Sprintf("failed to upload artifact: %v", err), 1)
+	// 2. Upload tarball + manifest to a per-deploy temp dir on the host.
+	remoteDir := fmt.Sprintf("%s/%s-%s-%s", RemoteDeployTmpDir, ctx.AppName, envName, release)
+	runSSHChecked(runner, ctx.Server, fmt.Sprintf("mkdir -p %s && chmod 0700 %s", utils.ShellEscape(remoteDir), utils.ShellEscape(remoteDir)), "failed to create remote deploy dir")
+	if err := runner.Upload(localTar, remoteDir+"/source.tar", ctx.Server); err != nil {
+		utils.Die(fmt.Sprintf("failed to upload source: %v", err), 1)
 	}
-	fixReleasePermissions(runner, ctx, releaseDir)
-
-	// Link shared paths
-	for _, entry := range []string{".env", "db", "storage", "logs"} {
-		runSSHChecked(runner, ctx.Server, fmt.Sprintf("ln -sfn %s/shared/%s %s/%s", ctx.AppRoot, entry, releaseDir, entry), fmt.Sprintf("failed to link shared %s", entry))
+	if err := runner.Upload(localManifest, remoteDir+"/simple-vps.toml", ctx.Server); err != nil {
+		utils.Die(fmt.Sprintf("failed to upload manifest: %v", err), 1)
 	}
 
-	// Generate systemd unit files locally
-	localUnitDir, err := os.MkdirTemp("", "simple-vps-units-")
-	if err != nil {
-		utils.Die(err.Error(), 1)
+	// 3. Helper builds the image, runs services, reloads Caddy.
+	applyCmd := serverAppApplyCommand(ctx.AppName, envName,
+		remoteDir+"/source.tar",
+		remoteDir+"/simple-vps.toml",
+		release,
+	)
+	runSSHChecked(runner, ctx.Server, applyCmd, "deploy failed")
+
+	// 4. Best-effort cleanup of the upload dir.
+	_, _, _, _ = runner.RunSSH(ctx.Server, fmt.Sprintf("rm -rf %s", utils.ShellEscape(remoteDir)))
+
+	fmt.Printf("Deployed %s (%s) at %s\n", ctx.AppName, envName, release)
+}
+
+func writeSourceTar(root string, dest string, dirty bool) error {
+	var cmd *exec.Cmd
+	if dirty {
+		cmd = exec.Command("sh", "-c", fmt.Sprintf(
+			"tar -C %s --exclude .git --exclude node_modules -cf %s .",
+			utils.ShellEscape(root), utils.ShellEscape(dest),
+		))
+	} else {
+		cmd = exec.Command("sh", "-c", fmt.Sprintf(
+			"git -C %s archive --format=tar -o %s HEAD",
+			utils.ShellEscape(root), utils.ShellEscape(dest),
+		))
 	}
-	defer os.RemoveAll(localUnitDir)
-
-	for svcName, svc := range ctx.Services {
-		unitContent := renderUnit(ctx.AppName, envName, release, svcName, svc)
-		unitName := fmt.Sprintf("simple-%s-%s.service", ctx.AppName, svcName)
-		_ = os.WriteFile(filepath.Join(localUnitDir, unitName), []byte(unitContent), 0644)
-	}
-
-	remoteUnitDir := fmt.Sprintf("%s/%s", RemoteDeployTmpDir, release)
-	runSSHChecked(runner, ctx.Server, fmt.Sprintf("mkdir -p %s", remoteUnitDir), "failed to create remote unit directory")
-
-	err = runner.UploadDirectory(localUnitDir, remoteUnitDir, ctx.Server)
-	if err != nil {
-		utils.Die(fmt.Sprintf("failed to upload unit files: %v", err), 1)
-	}
-
-	for svcName := range ctx.Services {
-		unitName := fmt.Sprintf("simple-%s-%s.service", ctx.AppName, svcName)
-		runSSHChecked(runner, ctx.Server, serverAppInstallUnitCommand(ctx.AppName, svcName, fmt.Sprintf("%s/%s", remoteUnitDir, unitName)), fmt.Sprintf("failed to install %s unit", svcName))
-	}
-
-	// reload daemon
-	runSSHChecked(runner, ctx.Server, serverAppDaemonReloadCommand(), "systemd daemon-reload failed")
-
-	// activate release
-	activateRelease(runner, ctx, releaseDir)
-
-	// publish routes
-	publishRoutes(runner, ctx)
-
-	// touch success marker
-	runSSHChecked(runner, ctx.Server, fmt.Sprintf("touch %s/%s", utils.ShellEscape(releaseDir), ReleaseSuccessMarker), "failed to mark release successful")
-
-	// prune old releases
-	keep := 5
-	manifest, err := config.ReadManifest(root)
-	if err == nil && manifest.Env != nil {
-		if envBlock, ok := manifest.Env[envName]; ok && envBlock.KeepReleases != nil {
-			keep = *envBlock.KeepReleases
-		}
-	}
-	pruneCmd := pruneReleasesCommand(ctx.AppRoot, keep)
-	if _, stderr, code, err := runner.RunSSH(ctx.Server, pruneCmd); err != nil || code != 0 {
-		detail := strings.TrimSpace(stderr)
-		if detail == "" && err != nil {
-			detail = err.Error()
-		}
-		if detail == "" {
-			detail = fmt.Sprintf("exit %d", code)
-		}
-		fmt.Fprintf(os.Stderr, "Warning: deploy succeeded; pruning failed: failed to prune releases: %s\n", detail)
-	}
-
-	fmt.Printf("Deployed %s %s to %s\n", ctx.AppName, release[:min(7, len(release))], envName)
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
 }
 
 func activateRelease(runner *CommandRunner, ctx *config.AppContext, releaseDir string) {

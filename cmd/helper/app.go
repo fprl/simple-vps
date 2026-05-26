@@ -11,8 +11,11 @@ import (
 )
 
 type appCmd struct {
-	Create        appCreateCmd        `cmd:"" help:"Create an app user and directories."`
-	Destroy       appDestroyCmd       `cmd:"" help:"Destroy an app user and directories."`
+	SetupEnv      appSetupEnvCmd      `cmd:"setup-env" help:"Create the per-env Linux user, directories, and Podman network."`
+	DestroyEnv    appDestroyEnvCmd    `cmd:"destroy-env" help:"Tear down one env: containers, files, user, network."`
+	Apply         appApplyCmd         `cmd:"" help:"Build the image and run services from a manifest tarball."`
+	Create        appCreateCmd        `cmd:"" help:"Legacy: create an app user and directories (pre-cutover; will be removed)."`
+	Destroy       appDestroyCmd       `cmd:"" help:"Legacy: destroy an app user and directories (pre-cutover; will be removed)."`
 	ReadEnv       appReadEnvCmd       `cmd:"read-env" help:"Read an app environment file."`
 	InstallEnv    appInstallEnvCmd    `cmd:"install-env" help:"Install an app environment file."`
 	InstallUnit   appInstallUnitCmd   `cmd:"install-unit" help:"Install an app systemd unit."`
