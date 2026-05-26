@@ -192,8 +192,12 @@ func CheckManifest(root string, envName string) ([]string, []string, error) {
 		if strings.HasPrefix(manifest.Static, "/") || strings.Contains(manifest.Static, "..") || strings.ContainsAny(manifest.Static, "*?[]{}") {
 			errors = append(errors, "static must be a relative path without '..' or globs")
 		} else {
-			if _, err := os.Stat(filepath.Join(root, manifest.Static)); err != nil {
+			info, err := os.Stat(filepath.Join(root, manifest.Static))
+			switch {
+			case err != nil:
 				errors = append(errors, fmt.Sprintf("static = %q: directory does not exist", manifest.Static))
+			case !info.IsDir():
+				errors = append(errors, fmt.Sprintf("static = %q: must be a directory", manifest.Static))
 			}
 		}
 	}
@@ -201,10 +205,6 @@ func CheckManifest(root string, envName string) ([]string, []string, error) {
 	shape, shapeErr := detectShape(root, manifest.Static)
 	if shapeErr != "" {
 		errors = append(errors, shapeErr)
-	}
-
-	if shape == ShapeStatic && len(manifest.Services) > 0 {
-		errors = append(errors, "static apps cannot declare services")
 	}
 
 	if len(manifest.Env) == 0 {
@@ -256,6 +256,9 @@ func CheckManifest(root string, envName string) ([]string, []string, error) {
 		validateEnvBlock(envBlock.Env, selected, &errors)
 
 		mergedServices := mergeServices(manifest.Services, envBlock.Services)
+		if shape == ShapeStatic && len(mergedServices) > 0 {
+			errors = append(errors, "static apps cannot declare services")
+		}
 		validateServices(mergedServices, shape, selected, &errors)
 
 		mergedRoutes := mergeRoutes(manifest.Routes, envBlock.Routes)
