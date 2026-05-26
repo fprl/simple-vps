@@ -20,7 +20,10 @@ var (
 	ServiceRe    = regexp.MustCompile(`^[a-z][a-z0-9-]{0,30}$`)
 	HeaderNameRe = regexp.MustCompile("^[A-Za-z0-9!#$%&'*+.^_`|~-]+$")
 	SystemUserRe = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}\$?$`)
+	EnvKeyRe     = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 )
+
+const secretPrefix = "@secret:"
 
 // legacyBuild captures the old [build] block so we can reject it explicitly.
 // Per ADR-0005: container apps build via Dockerfile, static apps ship a
@@ -56,6 +59,10 @@ type EnvBlock struct {
 	Build        *legacyBuild       `toml:"build"` // legacy; rejected at check time
 	Services     map[string]Service `toml:"services"`
 	Routes       map[string]Route   `toml:"routes"`
+	// Env is the [env.<env>.env] block. Values must be strings (or whole-value
+	// @secret:KEY references); non-string TOML values are rejected at check
+	// time. Captured as any so we can produce precise type errors.
+	Env map[string]any `toml:"env"`
 }
 
 type Manifest struct {
@@ -77,6 +84,11 @@ type AppContext struct {
 	StaticDir  string
 	Services   map[string]Service
 	Routes     map[string]Route
+	// Env holds resolved non-secret env values for this env.
+	Env map[string]string
+	// SecretRefs maps env-var key -> secret key name. The helper resolves
+	// these against the per-(app, env, key) secret store before deploy.
+	SecretRefs map[string]string
 }
 
 // Validation helpers
@@ -241,6 +253,8 @@ func CheckManifest(root string, envName string) ([]string, []string, error) {
 			errors = append(errors, fmt.Sprintf("[env.%s].keep_releases must be a positive integer", selected))
 		}
 
+		validateEnvBlock(envBlock.Env, selected, &errors)
+
 		mergedServices := mergeServices(manifest.Services, envBlock.Services)
 		validateServices(mergedServices, shape, selected, &errors)
 
@@ -277,6 +291,8 @@ func LoadAppContext(root string, envName string) (*AppContext, error) {
 
 	appRoot := fmt.Sprintf("/var/apps/%s/%s", manifest.Name, envName)
 
+	envVals, secretRefs := splitEnvBlock(envBlock.Env)
+
 	return &AppContext{
 		AppName:    manifest.Name,
 		EnvName:    envName,
@@ -287,7 +303,64 @@ func LoadAppContext(root string, envName string) (*AppContext, error) {
 		StaticDir:  manifest.Static,
 		Services:   mergeServices(manifest.Services, envBlock.Services),
 		Routes:     mergeRoutes(manifest.Routes, envBlock.Routes),
+		Env:        envVals,
+		SecretRefs: secretRefs,
 	}, nil
+}
+
+// splitEnvBlock walks the validated [env.<env>.env] block and produces a
+// (literals, secretRefs) pair. Validation has already rejected non-strings
+// and malformed @secret: prefixes, so this only runs on a well-formed map.
+func splitEnvBlock(env map[string]any) (map[string]string, map[string]string) {
+	literals := make(map[string]string)
+	refs := make(map[string]string)
+	for k, v := range env {
+		s, ok := v.(string)
+		if !ok {
+			continue
+		}
+		if strings.HasPrefix(s, secretPrefix) {
+			key := strings.TrimPrefix(s, secretPrefix)
+			if EnvKeyRe.MatchString(key) {
+				refs[k] = key
+				continue
+			}
+		}
+		literals[k] = s
+	}
+	return literals, refs
+}
+
+// validateEnvBlock enforces the [env.<env>.env] rules from ADR-0005:
+// values must be strings; non-string TOML types are rejected with a clear
+// fix-it hint; @secret:KEY whole-value references must have a valid env-var
+// key after the prefix; any other value starting with @secret: is rejected
+// as a reserved-prefix violation.
+func validateEnvBlock(env map[string]any, envName string, errors *[]string) {
+	for key, raw := range env {
+		label := fmt.Sprintf("[env.%s.env].%s", envName, key)
+		if !EnvKeyRe.MatchString(key) {
+			*errors = append(*errors, fmt.Sprintf("%s key must match ^[A-Za-z_][A-Za-z0-9_]*$", label))
+			continue
+		}
+		switch v := raw.(type) {
+		case string:
+			if strings.HasPrefix(v, secretPrefix) {
+				ref := strings.TrimPrefix(v, secretPrefix)
+				if !EnvKeyRe.MatchString(ref) {
+					*errors = append(*errors, fmt.Sprintf("%s value starts with reserved prefix '@secret:', use the secret store instead", label))
+				}
+			}
+		case bool:
+			*errors = append(*errors, fmt.Sprintf("%s must be a string; if you want %q, write it as a quoted string", label, fmt.Sprintf("%t", v)))
+		case int64:
+			*errors = append(*errors, fmt.Sprintf("%s must be a string; if you want %q, write it as a quoted string", label, fmt.Sprintf("%d", v)))
+		case float64:
+			*errors = append(*errors, fmt.Sprintf("%s must be a string; if you want %q, write it as a quoted string", label, fmt.Sprintf("%v", v)))
+		default:
+			*errors = append(*errors, fmt.Sprintf("%s must be a string; arrays and tables are not supported", label))
+		}
+	}
 }
 
 // Merge helpers
