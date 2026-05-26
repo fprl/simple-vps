@@ -118,48 +118,6 @@ server = "deploy@100.x.y.z"
 	}
 }
 
-func TestCheckManifestRejectsLegacyRuntimeField(t *testing.T) {
-	root := t.TempDir()
-	writeDockerfile(t, root)
-	writeManifest(t, root, `
-name = "api"
-
-[env.production]
-server = "deploy@100.x.y.z"
-runtime = "bun"
-
-[services.web]
-port = 3000
-healthcheck = "/health"
-`)
-
-	errors := checkErrors(t, root, "production")
-	if !slices.Contains(errors, "[env.production].runtime is no longer supported; shape is inferred from Dockerfile or static = \"<dir>\"") {
-		t.Fatalf("expected legacy-runtime error, got %v", errors)
-	}
-}
-
-func TestCheckManifestRejectsLegacyBuildBlock(t *testing.T) {
-	root := t.TempDir()
-	writeStaticDir(t, root, "dist")
-	writeManifest(t, root, `
-name = "site"
-static = "dist"
-
-[build]
-command = "npm run build"
-output = "dist"
-
-[env.production]
-server = "deploy@100.x.y.z"
-`)
-
-	errors := checkErrors(t, root, "production")
-	if !slices.Contains(errors, "[build] block is no longer supported; container apps build via Dockerfile, static apps ship a pre-built directory") {
-		t.Fatalf("expected legacy-build error, got %v", errors)
-	}
-}
-
 func TestCheckManifestRejectsStaticFieldPointingAtMissingDir(t *testing.T) {
 	root := t.TempDir()
 	writeManifest(t, root, `

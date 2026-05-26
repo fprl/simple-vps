@@ -1,7 +1,6 @@
 package helper
 
 import (
-	"reflect"
 	"testing"
 
 	"github.com/alecthomas/kong"
@@ -29,43 +28,22 @@ func TestServerCLIParsesPrivilegedCommands(t *testing.T) {
 		{"status"},
 		{"doctor"},
 		{"route", "list", "--json"},
-		{"route", "proxy", "--port", "3000", "--app", "api", "--service", "web", "--header", "X-Test: yes", "api.example.com"},
-		{"route", "static", "--root", "/var/apps/api/current", "--app", "api", "--header", "Cache-Control: no-store", "static.example.com"},
-		{"route", "redirect", "--to", "https://new.example.com", "--app", "api", "old.example.com"},
-		{"route", "remove", "--app", "api"},
 		{"cloudflare", "setup-tunnel", "--name", "simple-vps", "--account-id", "account-test", "--token-file", "/tmp/token"},
 		{"cloudflare", "publish", "--app", "api", "api.example.com"},
 		{"cloudflare", "remove", "--app", "api"},
 		{"generate-caddy", "--force"},
-		{"app", "create", "api"},
-		{"app", "destroy", "api"},
-		{"app", "read-env", "api"},
-		{"app", "install-env", "api", "/tmp/env"},
-		{"app", "install-unit", "api", "web", "/tmp/unit"},
-		{"app", "uninstall-unit", "api", "web"},
-		{"app", "daemon-reload"},
-		{"app", "service", "restart", "api", "web"},
-		{"app", "run-as", "api", "--cwd", "/var/apps/api/current", "--", "npm", "install"},
+		{"app", "setup-env", "api", "production"},
+		{"app", "destroy-env", "api", "production"},
+		{"app", "apply", "--tarball", "/tmp/simple-vps-deploy/x.tar", "--manifest", "/tmp/simple-vps-deploy/x.toml", "--sha", "deadbeef", "api", "production"},
 	}
 
 	for _, tt := range tests {
-		t.Run(tt[0], func(t *testing.T) {
+		name := tt[0]
+		if len(tt) > 1 {
+			name = name + "_" + tt[1]
+		}
+		t.Run(name, func(t *testing.T) {
 			parseServerCommand(t, tt...)
 		})
-	}
-}
-
-func TestAppRunAsCommandIsPassThrough(t *testing.T) {
-	cli := parseServerCommand(
-		t,
-		"app", "run-as", "api",
-		"--cwd", "/var/apps/api/current",
-		"--",
-		"npm", "install", "--omit=dev",
-	)
-
-	want := []string{"--", "npm", "install", "--omit=dev"}
-	if !reflect.DeepEqual(cli.App.RunAs.Command, want) {
-		t.Fatalf("unexpected run-as command:\nwant: %#v\n got: %#v", want, cli.App.RunAs.Command)
 	}
 }

@@ -25,16 +25,6 @@ var (
 
 const secretPrefix = "@secret:"
 
-// legacyBuild captures the old [build] block so we can reject it explicitly.
-// Per ADR-0005: container apps build via Dockerfile, static apps ship a
-// pre-built directory. simple-vps does not run host-side builds.
-type legacyBuild struct {
-	Command string   `toml:"command"`
-	Output  string   `toml:"output"`
-	Include []string `toml:"include"`
-	Install *bool    `toml:"install"`
-}
-
 type Service struct {
 	Command            string `toml:"command"`
 	Port               *int   `toml:"port"`
@@ -54,9 +44,7 @@ type Route struct {
 
 type EnvBlock struct {
 	Server       string             `toml:"server"`
-	Runtime      string             `toml:"runtime"` // legacy; rejected at check time
 	KeepReleases *int               `toml:"keep_releases"`
-	Build        *legacyBuild       `toml:"build"` // legacy; rejected at check time
 	Services     map[string]Service `toml:"services"`
 	Routes       map[string]Route   `toml:"routes"`
 	// Env is the [env.<env>.env] block. Values must be strings (or whole-value
@@ -68,7 +56,6 @@ type EnvBlock struct {
 type Manifest struct {
 	Name     string              `toml:"name"`
 	Static   string              `toml:"static"`
-	Build    *legacyBuild        `toml:"build"` // legacy; rejected at check time
 	Services map[string]Service  `toml:"services"`
 	Routes   map[string]Route    `toml:"routes"`
 	Env      map[string]EnvBlock `toml:"env"`
@@ -184,10 +171,6 @@ func CheckManifest(root string, envName string) ([]string, []string, error) {
 		errors = append(errors, "name must match ^[a-z][a-z0-9-]{1,40}$")
 	}
 
-	if manifest.Build != nil {
-		errors = append(errors, "[build] block is no longer supported; container apps build via Dockerfile, static apps ship a pre-built directory")
-	}
-
 	if manifest.Static != "" {
 		if strings.HasPrefix(manifest.Static, "/") || strings.Contains(manifest.Static, "..") || strings.ContainsAny(manifest.Static, "*?[]{}") {
 			errors = append(errors, "static must be a relative path without '..' or globs")
@@ -239,14 +222,6 @@ func CheckManifest(root string, envName string) ([]string, []string, error) {
 			errors = append(errors, fmt.Sprintf("[env.%s].server is required", selected))
 		} else if !ValidateSshTarget(envBlock.Server) {
 			errors = append(errors, fmt.Sprintf("[env.%s].server must be an SSH target like deploy@example.com", selected))
-		}
-
-		if envBlock.Runtime != "" {
-			errors = append(errors, fmt.Sprintf("[env.%s].runtime is no longer supported; shape is inferred from Dockerfile or static = \"<dir>\"", selected))
-		}
-
-		if envBlock.Build != nil {
-			errors = append(errors, fmt.Sprintf("[env.%s.build] block is no longer supported; container apps build via Dockerfile", selected))
 		}
 
 		if envBlock.KeepReleases != nil && *envBlock.KeepReleases < 1 {

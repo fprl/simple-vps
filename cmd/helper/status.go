@@ -124,3 +124,18 @@ func CmdRoutes(jsonFlag bool) {
 		fmt.Printf(rowFormat, r.Host, r.Type, getRouteTarget(r), r.App)
 	}
 }
+
+// getRouteTarget renders the target column for `route list`.
+func getRouteTarget(r store.Route) string {
+	switch r.Type {
+	case "proxy":
+		if r.Port != nil {
+			return fmt.Sprintf("127.0.0.1:%d", *r.Port)
+		}
+	case "static":
+		return r.Root
+	case "redirect":
+		return r.To
+	}
+	return ""
+}
