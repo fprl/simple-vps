@@ -323,6 +323,282 @@ healthcheck = "/health"
 	}
 }
 
+// --- [env.<env>.env] string-only blocks (ADR-0005 cutover item 3) ---
+
+func TestCheckManifestAcceptsStringEnvValues(t *testing.T) {
+	root := t.TempDir()
+	writeDockerfile(t, root)
+	writeManifest(t, root, `
+name = "api"
+
+[env.production]
+server = "deploy@100.x.y.z"
+
+[env.production.env]
+LOG_LEVEL = "info"
+PUBLIC_API_URL = "https://api.example.com"
+
+[services.web]
+port = 3000
+healthcheck = "/health"
+`)
+
+	if errors := checkErrors(t, root, "production"); len(errors) != 0 {
+		t.Fatalf("expected no errors, got %v", errors)
+	}
+}
+
+func TestCheckManifestRejectsBoolEnvValue(t *testing.T) {
+	root := t.TempDir()
+	writeDockerfile(t, root)
+	writeManifest(t, root, `
+name = "api"
+
+[env.production]
+server = "deploy@100.x.y.z"
+
+[env.production.env]
+DEBUG = true
+
+[services.web]
+port = 3000
+healthcheck = "/health"
+`)
+
+	errors := checkErrors(t, root, "production")
+	want := "[env.production.env].DEBUG must be a string; if you want \"true\", write it as a quoted string"
+	if !slices.Contains(errors, want) {
+		t.Fatalf("expected %q, got %v", want, errors)
+	}
+}
+
+func TestCheckManifestRejectsIntEnvValue(t *testing.T) {
+	root := t.TempDir()
+	writeDockerfile(t, root)
+	writeManifest(t, root, `
+name = "api"
+
+[env.production]
+server = "deploy@100.x.y.z"
+
+[env.production.env]
+PORT = 3000
+
+[services.web]
+port = 3000
+healthcheck = "/health"
+`)
+
+	errors := checkErrors(t, root, "production")
+	want := "[env.production.env].PORT must be a string; if you want \"3000\", write it as a quoted string"
+	if !slices.Contains(errors, want) {
+		t.Fatalf("expected %q, got %v", want, errors)
+	}
+}
+
+func TestCheckManifestRejectsArrayEnvValue(t *testing.T) {
+	root := t.TempDir()
+	writeDockerfile(t, root)
+	writeManifest(t, root, `
+name = "api"
+
+[env.production]
+server = "deploy@100.x.y.z"
+
+[env.production.env]
+FLAGS = ["one", "two"]
+
+[services.web]
+port = 3000
+healthcheck = "/health"
+`)
+
+	errors := checkErrors(t, root, "production")
+	want := "[env.production.env].FLAGS must be a string; arrays and tables are not supported"
+	if !slices.Contains(errors, want) {
+		t.Fatalf("expected %q, got %v", want, errors)
+	}
+}
+
+func TestCheckManifestRejectsInlineTableEnvValue(t *testing.T) {
+	root := t.TempDir()
+	writeDockerfile(t, root)
+	writeManifest(t, root, `
+name = "api"
+
+[env.production]
+server = "deploy@100.x.y.z"
+
+[env.production.env]
+CONF = { key = "val" }
+
+[services.web]
+port = 3000
+healthcheck = "/health"
+`)
+
+	errors := checkErrors(t, root, "production")
+	want := "[env.production.env].CONF must be a string; arrays and tables are not supported"
+	if !slices.Contains(errors, want) {
+		t.Fatalf("expected %q, got %v", want, errors)
+	}
+}
+
+func TestCheckManifestRejectsInvalidEnvKey(t *testing.T) {
+	root := t.TempDir()
+	writeDockerfile(t, root)
+	writeManifest(t, root, `
+name = "api"
+
+[env.production]
+server = "deploy@100.x.y.z"
+
+[env.production.env]
+"1BAD" = "value"
+
+[services.web]
+port = 3000
+healthcheck = "/health"
+`)
+
+	errors := checkErrors(t, root, "production")
+	want := "[env.production.env].1BAD key must match ^[A-Za-z_][A-Za-z0-9_]*$"
+	if !slices.Contains(errors, want) {
+		t.Fatalf("expected %q, got %v", want, errors)
+	}
+}
+
+// --- @secret:KEY whole-value references (ADR-0005 cutover item 4) ---
+
+func TestCheckManifestAcceptsValidSecretReference(t *testing.T) {
+	root := t.TempDir()
+	writeDockerfile(t, root)
+	writeManifest(t, root, `
+name = "api"
+
+[env.production]
+server = "deploy@100.x.y.z"
+
+[env.production.env]
+DATABASE_URL = "@secret:db_url"
+
+[services.web]
+port = 3000
+healthcheck = "/health"
+`)
+
+	if errors := checkErrors(t, root, "production"); len(errors) != 0 {
+		t.Fatalf("expected no errors, got %v", errors)
+	}
+}
+
+func TestCheckManifestRejectsSecretReferenceWithEmptyKey(t *testing.T) {
+	root := t.TempDir()
+	writeDockerfile(t, root)
+	writeManifest(t, root, `
+name = "api"
+
+[env.production]
+server = "deploy@100.x.y.z"
+
+[env.production.env]
+SOMETHING = "@secret:"
+
+[services.web]
+port = 3000
+healthcheck = "/health"
+`)
+
+	errors := checkErrors(t, root, "production")
+	want := "[env.production.env].SOMETHING value starts with reserved prefix '@secret:', use the secret store instead"
+	if !slices.Contains(errors, want) {
+		t.Fatalf("expected %q, got %v", want, errors)
+	}
+}
+
+func TestCheckManifestRejectsSecretReferenceWithInvalidKey(t *testing.T) {
+	root := t.TempDir()
+	writeDockerfile(t, root)
+	writeManifest(t, root, `
+name = "api"
+
+[env.production]
+server = "deploy@100.x.y.z"
+
+[env.production.env]
+SOMETHING = "@secret: hello world"
+
+[services.web]
+port = 3000
+healthcheck = "/health"
+`)
+
+	errors := checkErrors(t, root, "production")
+	want := "[env.production.env].SOMETHING value starts with reserved prefix '@secret:', use the secret store instead"
+	if !slices.Contains(errors, want) {
+		t.Fatalf("expected %q, got %v", want, errors)
+	}
+}
+
+func TestCheckManifestAllowsLiteralContainingSecretSubstring(t *testing.T) {
+	// Per ADR-0005: partial interpolation is not supported. A literal that
+	// happens to contain '@secret:' in the middle is just a literal — no
+	// interpolation, no error. Only WHOLE-VALUE references starting with
+	// '@secret:' are special.
+	root := t.TempDir()
+	writeDockerfile(t, root)
+	writeManifest(t, root, `
+name = "api"
+
+[env.production]
+server = "deploy@100.x.y.z"
+
+[env.production.env]
+WEIRD = "prefix@secret:foo suffix"
+
+[services.web]
+port = 3000
+healthcheck = "/health"
+`)
+
+	if errors := checkErrors(t, root, "production"); len(errors) != 0 {
+		t.Fatalf("expected no errors, got %v", errors)
+	}
+}
+
+func TestLoadAppContextExposesEnvAndSecretRefs(t *testing.T) {
+	root := t.TempDir()
+	writeDockerfile(t, root)
+	writeManifest(t, root, `
+name = "api"
+
+[env.production]
+server = "deploy@100.x.y.z"
+
+[env.production.env]
+LOG_LEVEL = "info"
+DATABASE_URL = "@secret:db_url"
+
+[services.web]
+port = 3000
+healthcheck = "/health"
+`)
+
+	ctx, err := LoadAppContext(root, "production")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ctx.Env["LOG_LEVEL"]; got != "info" {
+		t.Fatalf("expected LOG_LEVEL=info, got %q", got)
+	}
+	if got := ctx.SecretRefs["DATABASE_URL"]; got != "db_url" {
+		t.Fatalf("expected DATABASE_URL ref to db_url, got %q", got)
+	}
+	if _, present := ctx.Env["DATABASE_URL"]; present {
+		t.Fatalf("DATABASE_URL should not appear in Env when it is a secret ref")
+	}
+}
+
 func TestLoadAppContextReturnsStaticShape(t *testing.T) {
 	root := t.TempDir()
 	writeStaticDir(t, root, "dist")
