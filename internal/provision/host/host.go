@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 )
 
 var (
@@ -237,7 +238,34 @@ func ensureServiceStarted(apply Apply, name string) (bool, error) {
 	if err := runSystemctl(apply, "start", name); err != nil {
 		return false, err
 	}
+	// `systemctl start` on Type=simple units returns as soon as the
+	// fork is in flight. A unit that fails immediately afterwards (bad
+	// config, missing dep) would otherwise be invisible to the
+	// installer — Caddy did exactly this on the first real-box smoke,
+	// see docs/smoke-real-box-results.md finding 2. Poll briefly so a
+	// fast-fail surfaces here.
+	if err := waitServiceActive(apply, name); err != nil {
+		return false, err
+	}
 	return true, nil
+}
+
+func waitServiceActive(apply Apply, name string) error {
+	for attempt := 0; attempt < 10; attempt++ {
+		active, err := serviceIsActive(apply, name)
+		if err != nil {
+			return err
+		}
+		if active {
+			return nil
+		}
+		// Short, fixed-step backoff. Total ceiling ~1s — enough to
+		// catch immediate failures without slowing a healthy install.
+		if attempt < 9 {
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+	return fmt.Errorf("service %s did not become active after start; inspect with `journalctl -u %s`", name, name)
 }
 
 func ensureServiceStopped(apply Apply, name string) (bool, error) {

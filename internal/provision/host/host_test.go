@@ -655,9 +655,13 @@ func TestEnsureUfwRuleRunsWhenRuleMissing(t *testing.T) {
 	if !changed {
 		t.Fatal("expected missing ufw rule to change")
 	}
+	// Real ufw (0.36+) rejects `ufw --force allow ...` with "Invalid
+	// syntax" — --force only applies to prompting commands
+	// (enable/reset/delete). EnsureUfwRule must not prepend it for
+	// allow/deny.
 	wantCommands := []Command{
 		{Program: "ufw", Args: []string{"status", "verbose"}},
-		{Program: "ufw", Args: []string{"--force", "allow", "22/tcp"}},
+		{Program: "ufw", Args: []string{"allow", "22/tcp"}},
 	}
 	if !reflect.DeepEqual(runner.commands, wantCommands) {
 		t.Fatalf("unexpected commands:\nwant: %+v\n got: %+v", wantCommands, runner.commands)
