@@ -406,10 +406,16 @@ func ensureIngressNetwork(apply host.Apply) (bool, error) {
 // install + systemd-from-apt path is gone: simple-vps no longer treats
 // Caddy as a host service. App containers join `ingress` and Caddy
 // reaches them by container DNS.
+//
+// Ordering matters: the Caddyfile is written before `caddy.service`
+// starts. The Caddy container's ExecStart is `caddy run --config
+// /etc/caddy/Caddyfile`; a missing file makes the container exit 1
+// and systemd loops through Restart=on-failure until "start request
+// repeated too quickly" kills the service. We learned that the hard
+// way on real-box smoke; see docs/smoke-real-box-results.md finding 2.
 func addCaddy(ops *[]operation) {
 	for _, dir := range []host.Directory{
 		{Path: "/etc/caddy", Owner: "root", Group: "root", Mode: 0755},
-		{Path: "/etc/caddy/simple-vps", Owner: "root", Group: "root", Mode: 0755},
 		{Path: "/etc/caddy/conf.d", Owner: "root", Group: "root", Mode: 0755},
 		// Caddy's runtime data (certificates, last_config.json, etc.)
 		// lives outside /etc so config edits stay clean to diff.
@@ -418,6 +424,15 @@ func addCaddy(ops *[]operation) {
 		dir := dir
 		*ops = append(*ops, operation{name: "caddy dir " + dir.Path, run: func(apply host.Apply) (bool, error) { return host.EnsureDirectory(apply, dir) }})
 	}
+	*ops = append(*ops, operation{name: "caddyfile", run: func(apply host.Apply) (bool, error) {
+		return host.EnsureFile(apply, host.File{
+			Path:    "/etc/caddy/Caddyfile",
+			Content: []byte(caddyMainFile()),
+			Owner:   "root",
+			Group:   "root",
+			Mode:    0644,
+		})
+	}})
 	*ops = append(*ops, operation{name: "caddy service", run: func(apply host.Apply) (bool, error) {
 		return host.EnsureSystemdUnit(apply, host.SystemdUnit{
 			Name:    "caddy.service",
@@ -425,7 +440,15 @@ func addCaddy(ops *[]operation) {
 			Action:  host.Started,
 		})
 	}})
-	*ops = append(*ops, operation{name: "generate caddy", run: runCommandChangedUnlessOutputContains("simple-vps", []string{"server", "generate-caddy"}, "already up to date")})
+}
+
+// caddyMainFile is the bootstrap /etc/caddy/Caddyfile. It only imports
+// the conf.d/ fragments that `server app apply` writes per-(app, env).
+// On a fresh host the import matches nothing, which Caddy treats as an
+// empty config — the container stays up and accepts reloads as
+// fragments land.
+func caddyMainFile() string {
+	return "# Managed by simple-vps. Per-app routes live in conf.d/*.caddy.\n\nimport conf.d/*.caddy\n"
 }
 
 // caddyUnit returns the systemd unit content that runs Caddy as a

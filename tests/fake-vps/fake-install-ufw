@@ -42,9 +42,11 @@ fi
 
 args=()
 delete=0
+force=0
 for arg in "$@"; do
   case "$arg" in
     --force)
+      force=1
       ;;
     delete)
       delete=1
@@ -58,6 +60,14 @@ for arg in "$@"; do
       ;;
   esac
 done
+
+# Real ufw (0.36+) only accepts --force with prompting commands
+# (enable / reset / delete). Anywhere else it errors with "Invalid
+# syntax". Mirror that so the install smoke catches mis-use.
+if [[ "$force" == "1" && "$delete" == "0" ]]; then
+  echo "ERROR: Invalid syntax" >&2
+  exit 1
+fi
 
 rule="${args[*]}"
 if [[ -z "$rule" ]]; then

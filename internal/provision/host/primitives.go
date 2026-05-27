@@ -583,10 +583,11 @@ func EnsureUfwRule(apply Apply, rule UfwRule) (bool, error) {
 	}
 	args := strings.Fields(rule.Rule)
 	if rule.Delete {
+		// `ufw delete <rule>` prompts; --force skips it.
 		args = append([]string{"--force", "delete"}, args...)
-	} else {
-		args = append([]string{"--force"}, args...)
 	}
+	// `ufw allow <rule>` never prompts and rejects --force as
+	// "Invalid syntax" on real ufw (0.36+). Don't prepend it.
 	if apply.CheckMode {
 		return true, nil
 	}
