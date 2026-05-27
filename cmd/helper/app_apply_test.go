@@ -63,6 +63,62 @@ func TestRenderAppCaddyfileProxyRouteUsesContainerDNS(t *testing.T) {
 	}
 }
 
+func TestRenderAppCaddyfileEmitsTLSInternalForInternalRoute(t *testing.T) {
+	port := 3000
+	ctx := &config.AppContext{
+		Services: map[string]config.Service{
+			"web": {Port: &port},
+		},
+		Routes: map[string]config.Route{
+			"app": {
+				Host:    "smoke.example.com",
+				Type:    "proxy",
+				Service: "web",
+				TLS:     "internal",
+			},
+		},
+	}
+	got, err := renderAppCaddyfile("api", "production", ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, "\ttls internal\n") {
+		t.Fatalf("expected `tls internal` directive, got:\n%s", got)
+	}
+	// reverse_proxy still rendered to the per-(app, env, service) DNS name.
+	if !strings.Contains(got, "reverse_proxy http://app-api-production-web:3000") {
+		t.Fatalf("expected reverse_proxy after tls directive, got:\n%s", got)
+	}
+}
+
+func TestRenderAppCaddyfileOmitsTLSDirectiveForAuto(t *testing.T) {
+	port := 3000
+	for _, tls := range []string{"", "auto"} {
+		t.Run("tls="+tls, func(t *testing.T) {
+			ctx := &config.AppContext{
+				Services: map[string]config.Service{
+					"web": {Port: &port},
+				},
+				Routes: map[string]config.Route{
+					"app": {
+						Host:    "api.example.com",
+						Type:    "proxy",
+						Service: "web",
+						TLS:     tls,
+					},
+				},
+			}
+			got, err := renderAppCaddyfile("api", "production", ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(got, "tls") {
+				t.Fatalf("expected no tls directive for tls=%q, got:\n%s", tls, got)
+			}
+		})
+	}
+}
+
 func TestRenderAppCaddyfileRedirectRoute(t *testing.T) {
 	ctx := &config.AppContext{
 		Routes: map[string]config.Route{

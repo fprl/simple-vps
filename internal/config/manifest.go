@@ -40,6 +40,14 @@ type Route struct {
 	Service string `toml:"service"`
 	Root    string `toml:"root"`
 	To      string `toml:"to"`
+	// TLS controls Caddy's automatic-HTTPS behavior for this route:
+	//   - ""        — same as "auto"
+	//   - "auto"    — emit nothing; Caddy provisions Let's Encrypt
+	//   - "internal" — emit `tls internal`; self-signed cert (private
+	//                  DNS, no public ACME, dev/test boxes)
+	// "off" is intentionally not yet supported. Reject anything else
+	// at check time.
+	TLS string `toml:"tls"`
 }
 
 type EnvBlock struct {
@@ -421,6 +429,9 @@ func mergeRoutes(base map[string]Route, override map[string]Route) map[string]Ro
 		if v.To != "" {
 			existing.To = v.To
 		}
+		if v.TLS != "" {
+			existing.TLS = v.TLS
+		}
 		res[k] = existing
 	}
 	return res
@@ -506,6 +517,16 @@ func validateRoutes(routes map[string]Route, services map[string]Service, env st
 			} else if !strings.HasPrefix(route.To, "http://") && !strings.HasPrefix(route.To, "https://") {
 				*errors = append(*errors, fmt.Sprintf("[routes.%s].to must start with http:// or https://", name))
 			}
+		}
+
+		switch route.TLS {
+		case "", "auto", "internal":
+			// OK
+		default:
+			// `off` has a clean Caddyfile shape (`http://host { ... }`)
+			// but is deferred until a real user asks. Reject loudly so
+			// a typo doesn't quietly downgrade an HTTPS route to HTTP.
+			*errors = append(*errors, fmt.Sprintf(`[routes.%s].tls must be "auto" or "internal"`, name))
 		}
 	}
 }

@@ -344,6 +344,135 @@ server = "deploy@100.x.y.z"
 	}
 }
 
+// --- routes.<name>.tls knob (real-box smoke finding 6) ---
+
+func TestCheckManifestAcceptsTLSAuto(t *testing.T) {
+	root := t.TempDir()
+	writeDockerfile(t, root)
+	writeManifest(t, root, `
+name = "api"
+
+[env.production]
+server = "deploy@100.x.y.z"
+
+[services.web]
+port = 3000
+healthcheck = "/health"
+
+[routes.app]
+host = "api.example.com"
+type = "proxy"
+service = "web"
+tls = "auto"
+`)
+	if errors := checkErrors(t, root, "production"); len(errors) != 0 {
+		t.Fatalf("expected no errors, got %v", errors)
+	}
+}
+
+func TestCheckManifestAcceptsTLSInternal(t *testing.T) {
+	root := t.TempDir()
+	writeDockerfile(t, root)
+	writeManifest(t, root, `
+name = "api"
+
+[env.production]
+server = "deploy@100.x.y.z"
+
+[services.web]
+port = 3000
+healthcheck = "/health"
+
+[routes.app]
+host = "api.example.com"
+type = "proxy"
+service = "web"
+tls = "internal"
+`)
+	if errors := checkErrors(t, root, "production"); len(errors) != 0 {
+		t.Fatalf("expected no errors, got %v", errors)
+	}
+}
+
+func TestCheckManifestAcceptsRouteWithoutTLS(t *testing.T) {
+	// Empty/missing tls is the canonical default; equivalent to "auto".
+	root := t.TempDir()
+	writeDockerfile(t, root)
+	writeManifest(t, root, `
+name = "api"
+
+[env.production]
+server = "deploy@100.x.y.z"
+
+[services.web]
+port = 3000
+healthcheck = "/health"
+
+[routes.app]
+host = "api.example.com"
+type = "proxy"
+service = "web"
+`)
+	if errors := checkErrors(t, root, "production"); len(errors) != 0 {
+		t.Fatalf("expected no errors, got %v", errors)
+	}
+}
+
+func TestCheckManifestRejectsTLSGarbage(t *testing.T) {
+	root := t.TempDir()
+	writeDockerfile(t, root)
+	writeManifest(t, root, `
+name = "api"
+
+[env.production]
+server = "deploy@100.x.y.z"
+
+[services.web]
+port = 3000
+healthcheck = "/health"
+
+[routes.app]
+host = "api.example.com"
+type = "proxy"
+service = "web"
+tls = "garbage"
+`)
+	errors := checkErrors(t, root, "production")
+	want := "[routes.app].tls must be \"auto\" or \"internal\""
+	if !slices.Contains(errors, want) {
+		t.Fatalf("expected %q, got %v", want, errors)
+	}
+}
+
+func TestCheckManifestRejectsTLSOffWithDeferralNotice(t *testing.T) {
+	// `off` has a sensible Caddyfile shape (http:// site) but is
+	// deferred until users ask. Reject explicitly so a typo doesn't
+	// silently roll back to a less-secure posture later.
+	root := t.TempDir()
+	writeDockerfile(t, root)
+	writeManifest(t, root, `
+name = "api"
+
+[env.production]
+server = "deploy@100.x.y.z"
+
+[services.web]
+port = 3000
+healthcheck = "/health"
+
+[routes.app]
+host = "api.example.com"
+type = "proxy"
+service = "web"
+tls = "off"
+`)
+	errors := checkErrors(t, root, "production")
+	want := "[routes.app].tls must be \"auto\" or \"internal\""
+	if !slices.Contains(errors, want) {
+		t.Fatalf("expected %q, got %v", want, errors)
+	}
+}
+
 func TestLoadAppContextReturnsContainerShape(t *testing.T) {
 	root := t.TempDir()
 	writeDockerfile(t, root)

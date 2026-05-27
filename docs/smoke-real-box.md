@@ -102,6 +102,7 @@ healthcheck = "/health"
 host = "smoke.<your-domain>"
 type = "proxy"
 service = "web"
+tls = "internal"  # self-signed cert; drop or set to "auto" once DNS resolves
 EOF
 
 git init -q
@@ -140,23 +141,24 @@ SIMPLE_VPS_KNOWN_HOSTS="$(ssh-keyscan -t ed25519 -H <IP> 2>/dev/null)" \
 ```
 
 Expected last line: `Deployed hello (production) at <sha>`. If the
-deploy errors with `wget: bad address`, you skipped step 2.
+deploy errors with `wget: bad address`, the host installer didn't
+write the UFW podman bridge rules — re-install with a build that
+includes PR #33 (`addPodmanHostBaseline`).
 
-## 4. Bypass Caddy auto-ACME (until DNS is set up)
+The fixture sets `tls = "internal"`, so the Caddy fragment lands as:
 
-See finding 6. If you don't have DNS pointing at the box yet, Caddy
-will 308-redirect HTTP to HTTPS and then fail the TLS handshake
-because Let's Encrypt can't reach the host. Manually inject `tls
-internal` into the per-app fragment to use a self-signed cert:
-
-```sh
-# As root on the VPS:
-fragment=/etc/caddy/conf.d/simple-vps-hello-production.caddy
-sed -i 's|reverse_proxy |tls internal\n\treverse_proxy |' "$fragment"
-podman exec caddy caddy reload --config /etc/caddy/Caddyfile
+```
+"smoke.<your-domain>" {
+    tls internal
+    reverse_proxy http://app-hello-production-web:3000
+}
 ```
 
-## 5. Curl through Caddy — the actual test
+Self-signed cert, no ACME, no DNS dependency. Switch to `tls =
+"auto"` (or drop the line — `auto` is the default) once DNS resolves
+to the host.
+
+## 4. Curl through Caddy — the actual test
 
 ```sh
 curl -k -sS \
@@ -187,7 +189,7 @@ your curl
                       └→ python3 -m http.server serves /health → 200 ok
 ```
 
-## 6. Teardown
+## 5. Teardown
 
 If the VPS is single-use for this smoke, just delete it from the
 provider console. Don't bother running `destroy` — it's not
