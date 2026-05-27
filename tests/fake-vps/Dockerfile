@@ -26,8 +26,11 @@ COPY .fake-vps-bin/simple-vps-linux-amd64 /usr/local/bin/simple-vps
 COPY tests/fake-vps/fake-systemctl /usr/local/bin/systemctl
 COPY tests/fake-vps/fake-caddy /usr/local/bin/caddy
 COPY tests/fake-vps/fake-podman /usr/local/bin/podman
+COPY tests/fake-vps/fake-podman.app.py /usr/local/bin/fake-podman.app.py
+COPY tests/fake-vps/fake-podman.caddy.py /usr/local/bin/fake-podman.caddy.py
 
 RUN chmod 0755 /usr/local/bin/simple-vps /usr/local/bin/systemctl /usr/local/bin/caddy /usr/local/bin/podman \
+  && chmod 0644 /usr/local/bin/fake-podman.app.py /usr/local/bin/fake-podman.caddy.py \
   && mkdir -p /etc/simple-vps/providers \
   && printf '%s\n' '{"apps":{},"version":1}' > /etc/simple-vps/apps.json \
   && printf '%s\n' '{"routes":[],"version":1}' > /etc/simple-vps/routes.json \

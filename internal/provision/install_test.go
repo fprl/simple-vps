@@ -600,6 +600,56 @@ func TestRunInstallCreatesDeployTmpDirWithStickyMode(t *testing.T) {
 	}
 }
 
+func TestRunInstallWritesCaddyContainerSystemdUnit(t *testing.T) {
+	root := t.TempDir()
+	helper := filepath.Join(root, "simple-vps")
+	if err := os.WriteFile(helper, []byte("helper"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	runner := &installFakeRunner{files: map[string]host.FileState{}}
+
+	_, err := RunInstall(context.Background(), runner, InstallOptions{
+		OperatorUser:          "operator",
+		DeployUser:            "deploy",
+		OperatorSSHPublicKeys: []string{"ssh-ed25519 AAAAoperator test"},
+		DeploySSHPublicKeys:   []string{"ssh-ed25519 AAAAdeploy test"},
+		StateRoot:             root,
+		HelperBinaryPath:      helper,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	unit, ok := runner.files["/etc/systemd/system/caddy.service"]
+	if !ok {
+		t.Fatal("expected caddy.service unit to be installed")
+	}
+	content := string(unit.Content)
+	for _, want := range []string{
+		"podman run --rm --name caddy",
+		"--network ingress",
+		"--publish 80:80",
+		"--publish 443:443",
+		"-v /etc/caddy:/etc/caddy:Z",
+		"docker.io/library/caddy:2-alpine",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("caddy.service missing %q\nunit:\n%s", want, content)
+		}
+	}
+	// Post-cutover: Caddy is no longer an apt package. Make sure the
+	// provisioner didn't accidentally re-add either the third-party
+	// Caddy apt repo or `apt install caddy`.
+	if runner.ranCommand("apt-get", "install -y caddy") {
+		t.Fatal("apt install caddy ran; provisioner should manage Caddy via podman")
+	}
+	for _, cmd := range runner.commands {
+		if cmd.Program == "curl" && strings.Contains(strings.Join(cmd.Args, " "), "caddy") {
+			t.Fatalf("Caddy apt-repo key fetch ran; provisioner should manage Caddy via podman: %+v", cmd)
+		}
+	}
+}
+
 func TestRunInstallSkipsIngressNetworkCreationWhenPresent(t *testing.T) {
 	root := t.TempDir()
 	helper := filepath.Join(root, "simple-vps")
