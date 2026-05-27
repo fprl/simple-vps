@@ -188,7 +188,7 @@ func TestWriteHostStateIsStableAcrossRepeatedWrites(t *testing.T) {
 	}
 }
 
-func TestStoreSortsSliceFieldsBeforeWrite(t *testing.T) {
+func TestStoreSortsHostDesiredSliceFieldsBeforeWrite(t *testing.T) {
 	storeA := Store{Root: t.TempDir()}
 	storeB := Store{Root: t.TempDir()}
 
@@ -203,126 +203,6 @@ func TestStoreSortsSliceFieldsBeforeWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertSameFile(t, storeA.HostPath(), storeB.HostPath())
-
-	appsA := AppsFile{Version: CurrentVersion, Apps: map[string]App{"api": {Services: []string{"worker", "web"}}}}
-	appsB := AppsFile{Version: CurrentVersion, Apps: map[string]App{"api": {Services: []string{"web", "worker"}}}}
-	if err := storeA.WriteApps(appsA); err != nil {
-		t.Fatal(err)
-	}
-	if err := storeB.WriteApps(appsB); err != nil {
-		t.Fatal(err)
-	}
-	assertSameFile(t, storeA.AppsPath(), storeB.AppsPath())
-
-	routesA := RoutesFile{Version: CurrentVersion, Routes: []Route{
-		{Host: "z.example.com", Type: "proxy", App: "api", Service: "web", Port: intPtr(3000)},
-		{Host: "a.example.com", Type: "proxy", App: "api", Service: "web", Port: intPtr(3000)},
-	}}
-	routesB := RoutesFile{Version: CurrentVersion, Routes: []Route{
-		{Host: "a.example.com", Type: "proxy", App: "api", Service: "web", Port: intPtr(3000)},
-		{Host: "z.example.com", Type: "proxy", App: "api", Service: "web", Port: intPtr(3000)},
-	}}
-	if err := storeA.WriteRoutes(routesA); err != nil {
-		t.Fatal(err)
-	}
-	if err := storeB.WriteRoutes(routesB); err != nil {
-		t.Fatal(err)
-	}
-	assertSameFile(t, storeA.RoutesPath(), storeB.RoutesPath())
-}
-
-func TestStorePreservesTypedRoutesInADRRoutesFile(t *testing.T) {
-	store := Store{Root: t.TempDir()}
-	port := 3000
-	routes := RoutesFile{Version: CurrentVersion, Routes: []Route{
-		{
-			Host:    "static.example.com",
-			Type:    "static",
-			App:     "site",
-			Root:    "/var/apps/site/current",
-			Headers: map[string]string{"Cache-Control": "public, max-age=60"},
-		},
-		{
-			Host: "api.example.com",
-			Type: "proxy",
-			App:  "api",
-			Port: &port,
-		},
-		{
-			Host: "old.example.com",
-			Type: "redirect",
-			App:  "api",
-			To:   "https://api.example.com{uri}",
-		},
-	}}
-
-	if err := store.WriteRoutes(routes); err != nil {
-		t.Fatal(err)
-	}
-
-	loaded, err := store.ReadRoutes()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(loaded.Routes) != 3 {
-		t.Fatalf("expected three routes, got %d", len(loaded.Routes))
-	}
-	if loaded.Routes[0].Host != "api.example.com" || loaded.Routes[0].Port == nil || *loaded.Routes[0].Port != 3000 {
-		t.Fatalf("proxy route was not preserved: %+v", loaded.Routes[0])
-	}
-	if loaded.Routes[2].Headers["Cache-Control"] != "public, max-age=60" {
-		t.Fatalf("static route headers were not preserved: %+v", loaded.Routes[2])
-	}
-}
-
-func TestStoreUpdatesAppRegistry(t *testing.T) {
-	store := Store{Root: t.TempDir()}
-
-	if err := store.RegisterApp("api", "/var/apps/api"); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.RegisterAppService("api", "worker"); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.RegisterAppService("api", "web"); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.RegisterAppService("api", "web"); err != nil {
-		t.Fatal(err)
-	}
-
-	apps, err := store.ReadApps()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := apps.Apps["api"].Path; got != "/var/apps/api" {
-		t.Fatalf("unexpected app path: %s", got)
-	}
-	if got := strings.Join(apps.Apps["api"].Services, ","); got != "web,worker" {
-		t.Fatalf("unexpected sorted services: %s", got)
-	}
-
-	if err := store.UnregisterAppService("api", "web"); err != nil {
-		t.Fatal(err)
-	}
-	apps, err = store.ReadApps()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := strings.Join(apps.Apps["api"].Services, ","); got != "worker" {
-		t.Fatalf("unexpected services after unregister: %s", got)
-	}
-
-	if err := store.UnregisterApp("api"); err != nil {
-		t.Fatal(err)
-	}
-	apps, err = store.ReadApps()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := apps.Apps["api"]; ok {
-		t.Fatalf("expected app to be removed: %+v", apps.Apps)
-	}
 }
 
 func TestStoreRejectsInvalidHostVersions(t *testing.T) {
@@ -393,26 +273,6 @@ func TestStoreValidatesVersionsAcrossStateFiles(t *testing.T) {
 		required    string
 		unsupported string
 	}{
-		{
-			name:        "apps",
-			path:        store.AppsPath(),
-			read:        func() error { _, err := store.ReadApps(); return err },
-			writeZero:   func() error { return store.WriteApps(AppsFile{}) },
-			zeroRaw:     `{"version":0,"apps":{}}`,
-			futureRaw:   `{"version":2,"apps":{}}`,
-			required:    "apps.json version is required",
-			unsupported: "unsupported apps.json version 2",
-		},
-		{
-			name:        "routes",
-			path:        store.RoutesPath(),
-			read:        func() error { _, err := store.ReadRoutes(); return err },
-			writeZero:   func() error { return store.WriteRoutes(RoutesFile{}) },
-			zeroRaw:     `{"version":0,"routes":[]}`,
-			futureRaw:   `{"version":2,"routes":[]}`,
-			required:    "routes.json version is required",
-			unsupported: "unsupported routes.json version 2",
-		},
 		{
 			name:        "cloudflare",
 			path:        store.CloudflarePath(),
@@ -523,10 +383,6 @@ func validHostDesired() HostDesired {
 		},
 		Packages: map[string]DesiredPackage{},
 	}
-}
-
-func intPtr(value int) *int {
-	return &value
 }
 
 func hostDesiredRaw(t *testing.T, path string) string {

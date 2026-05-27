@@ -13,11 +13,10 @@ var requireRoot = func() error {
 }
 
 type ServerCmd struct {
-	Status        statusCmd        `cmd:"" help:"Show host status."`
-	Doctor        doctorCmd        `cmd:"" help:"Run host diagnostics."`
-	Cloudflare    cloudflareCmd    `cmd:"" help:"Manage Cloudflare Tunnel ingress."`
-	GenerateCaddy generateCaddyCmd `cmd:"generate-caddy" help:"Regenerate managed Caddy files."`
-	App           appCmd           `cmd:"" help:"Manage app users, files, and services."`
+	Status     statusCmd     `cmd:"" help:"Show host status."`
+	Doctor     doctorCmd     `cmd:"" help:"Run host diagnostics."`
+	Cloudflare cloudflareCmd `cmd:"" help:"Manage Cloudflare Tunnel ingress."`
+	App        appCmd        `cmd:"" help:"Manage app users, files, and services."`
 }
 
 func (ServerCmd) BeforeApply() error {
