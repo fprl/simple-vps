@@ -72,39 +72,7 @@ cat /etc/simple-vps/host.json \
   | jq '.meta.last_apply.status'     # → "ok"
 ```
 
-## 2. Allow Podman bridges through UFW
-
-**Required until the follow-up provisioner PR for finding 3 lands.**
-Without this, container DNS times out and `app apply` fails its
-healthcheck.
-
-```sh
-# As root on the VPS:
-cp /etc/ufw/before.rules /etc/ufw/before.rules.bak
-awk 'NR==18{
-  print ""
-  print "# BEGIN simple-vps podman bridges"
-  print "-A ufw-before-input -i podman+ -j ACCEPT"
-  print "-A ufw-before-forward -i podman+ -j ACCEPT"
-  print "-A ufw-before-forward -o podman+ -j ACCEPT"
-  print "# END simple-vps podman bridges"
-} {print}' /etc/ufw/before.rules.bak > /etc/ufw/before.rules
-
-sed -i 's/^DEFAULT_FORWARD_POLICY=.*/DEFAULT_FORWARD_POLICY="ACCEPT"/' \
-  /etc/default/ufw
-
-ufw reload
-```
-
-Verify:
-
-```sh
-podman exec caddy nslookup app-hello-production-web   # → resolves
-                                                       # (or "no such name"
-                                                       #  before app deploys)
-```
-
-## 3. Build the test app
+## 2. Build the test app
 
 ```sh
 mkdir -p /tmp/simple-vps-smoke-app && cd /tmp/simple-vps-smoke-app
@@ -152,7 +120,7 @@ git add . && git commit -q -m "fixture"
 If you swap it for a different base image, check finding 5 — most
 stock distro server images need writable scratch.
 
-## 4. Setup and deploy
+## 3. Setup and deploy
 
 ```sh
 cd /tmp/simple-vps-smoke-app
@@ -174,7 +142,7 @@ SIMPLE_VPS_KNOWN_HOSTS="$(ssh-keyscan -t ed25519 -H <IP> 2>/dev/null)" \
 Expected last line: `Deployed hello (production) at <sha>`. If the
 deploy errors with `wget: bad address`, you skipped step 2.
 
-## 5. Bypass Caddy auto-ACME (until DNS is set up)
+## 4. Bypass Caddy auto-ACME (until DNS is set up)
 
 See finding 6. If you don't have DNS pointing at the box yet, Caddy
 will 308-redirect HTTP to HTTPS and then fail the TLS handshake
@@ -188,7 +156,7 @@ sed -i 's|reverse_proxy |tls internal\n\treverse_proxy |' "$fragment"
 podman exec caddy caddy reload --config /etc/caddy/Caddyfile
 ```
 
-## 6. Curl through Caddy — the actual test
+## 5. Curl through Caddy — the actual test
 
 ```sh
 curl -k -sS \
@@ -219,7 +187,7 @@ your curl
                       └→ python3 -m http.server serves /health → 200 ok
 ```
 
-## 7. Teardown
+## 6. Teardown
 
 If the VPS is single-use for this smoke, just delete it from the
 provider console. Don't bother running `destroy` — it's not
