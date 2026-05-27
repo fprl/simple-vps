@@ -286,14 +286,19 @@ all worth follow-ups, none of them invalidating the architecture.
   a freshly-reverted Hetzner CX22; end-to-end curl works with zero
   manual intervention.
 
+**Landed (continued):**
+
+- **#35** — `[routes.<name>].tls = "auto" | "internal"` manifest knob.
+  `auto` (or empty) keeps Caddy's default Let's Encrypt path;
+  `internal` emits `tls internal` so Caddy uses a self-signed cert.
+  `off` is intentionally rejected at check time — clean Caddyfile
+  shape exists (`http://host { ... }`) but deferred until users
+  ask. Closes finding 6; the smoke runbook's manual `sed` injection
+  is gone.
+
 **Still open as named follow-ups** (manifest/product semantics, not
 provisioner host-baseline):
 
-- **`feat: manifest routes.<name>.tls = auto|internal|off`**
-  (finding 6) — give users a way to opt out of ACME for
-  private/dev hosts. The smoke needed a manual `tls internal`
-  injection because Caddy's default is to auto-provision Let's
-  Encrypt for every hostname, which fails when DNS isn't set up.
 - **`feat: manifest service-level tmpfs mounts`** (finding 5) — let
   users declare writable scratch beyond `/tmp` so images like
   `nginx:alpine` work under `--read-only`.
