@@ -32,8 +32,6 @@ COPY tests/fake-vps/fake-podman.caddy.py /usr/local/bin/fake-podman.caddy.py
 RUN chmod 0755 /usr/local/bin/simple-vps /usr/local/bin/systemctl /usr/local/bin/caddy /usr/local/bin/podman \
   && chmod 0644 /usr/local/bin/fake-podman.app.py /usr/local/bin/fake-podman.caddy.py \
   && mkdir -p /etc/simple-vps/providers \
-  && printf '%s\n' '{"apps":{},"version":1}' > /etc/simple-vps/apps.json \
-  && printf '%s\n' '{"routes":[],"version":1}' > /etc/simple-vps/routes.json \
   && printf '%s\n' '{"routes":{},"version":1}' > /etc/simple-vps/providers/cloudflare.json \
   && printf '%s\n' 'operator ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/operator \
   && printf '%s\n' 'deploy ALL=(root) NOPASSWD: /usr/local/bin/simple-vps' > /etc/sudoers.d/simple-vps \

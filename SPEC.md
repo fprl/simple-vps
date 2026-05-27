@@ -155,7 +155,8 @@ they map to the individual flags above and ship together with the
 
 There is no client-side `route` verb. Route inspection on the host is
 also pending: the helper-side `route list` reader pointed at a
-registry the new deploy flow does not populate and was removed. A
+registry the new deploy flow does not populate and was removed
+together with the legacy `apps.json` / `routes.json` state files. A
 podman-labels-sourced replacement lands alongside the rest of the
 post-cutover `status` / `logs` rewrite.
 
@@ -184,18 +185,16 @@ sudo simple-vps server cloudflare publish --app <name> <host>
 sudo simple-vps server cloudflare remove <host>
 sudo simple-vps server cloudflare remove --app <name>
 sudo simple-vps server cloudflare setup-tunnel --name <name>
-sudo simple-vps server generate-caddy
 ```
 
 Planned (paired with the client-side "planned" verbs above):
 
 ```bash
-sudo simple-vps server route list [--json]                          # planned; sourced from podman labels / Caddy fragments
+sudo simple-vps server app list [--json]                            # planned; sourced from podman labels / Caddy fragments
 sudo simple-vps server app service <action> <app> <env> <service>   # planned, for client `restart` / `status`
 sudo simple-vps server app secret put <app> <env> <key>             # planned, for client `secret put`
 sudo simple-vps server app secret list <app> <env>                  # planned, for client `secret list`
 sudo simple-vps server app secret rm <app> <env> <key>              # planned, for client `secret rm`
-sudo simple-vps server route apply --from-manifest <app> <env>      # planned; today, `app apply` writes the Caddy fragment directly
 ```
 
 The sudoers contract is one line for the whole server binary, installed at
