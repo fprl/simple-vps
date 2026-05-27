@@ -246,6 +246,18 @@ func serverAppLogsCommand(appName, envName, service string, follow bool, tail in
 	return serverCommand(args...)
 }
 
+func serverAppRestartCommand(appName, envName, service string, jsonFlag bool) string {
+	args := []string{"app", "restart"}
+	if jsonFlag {
+		args = append(args, "--json")
+	}
+	args = append(args, appName, envName)
+	if service != "" {
+		args = append(args, service)
+	}
+	return serverCommand(args...)
+}
+
 func serverAppSecretPutCommand(appName, envName, key string) string {
 	return serverCommand("app", "secret", "put", appName, envName, key)
 }
@@ -453,6 +465,24 @@ func CmdStatus(root string, envName string, jsonFlag bool) {
 	out := runSSHChecked(runner, ctx.Server, serverAppStatusCommand(ctx.AppName, envName, jsonFlag), "status failed")
 	// Pass the helper's output through unchanged so `--json` produces
 	// pipeable JSON and the text mode keeps its line breaks.
+	fmt.Print(out)
+}
+
+func CmdRestart(root string, envName string, service string, jsonFlag bool) {
+	ctx, err := config.LoadAppContext(root, envName)
+	if err != nil {
+		utils.Die(err.Error(), 1)
+	}
+	runner, err := NewCommandRunner()
+	if err != nil {
+		utils.Die(err.Error(), 1)
+	}
+	defer runner.Close()
+
+	// Restart shares status's plumbing: helper does the work, prints
+	// the summary, we pipe its output through unchanged so `--json`
+	// is pipeable and the text mode keeps its line breaks.
+	out := runSSHChecked(runner, ctx.Server, serverAppRestartCommand(ctx.AppName, envName, service, jsonFlag), "restart failed")
 	fmt.Print(out)
 }
 
