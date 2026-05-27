@@ -270,21 +270,30 @@ laptop curl
 ADR-0006 Cut 2 is structurally correct. Six real findings surfaced,
 all worth follow-ups, none of them invalidating the architecture.
 
-## Follow-up PRs (in order)
+## Follow-up PRs
 
-1. **`fix(provisioner): allow Podman bridges through UFW`** — bake the
-   `podman+` ACCEPT rules + `DEFAULT_FORWARD_POLICY="ACCEPT"` into a
-   `podman firewall` op. Update fake-install-ufw to model it. **This
-   one is mandatory before any other real-box install can succeed.**
-2. **`fix(provisioner): configure Podman unqualified-search-registries`** —
-   write `/etc/containers/registries.conf.d/00-simple-vps.conf` so
-   `FROM nginx:alpine` works.
-3. **`feat: manifest routes.<name>.tls = auto|internal|off`** — give
-   users a way to opt out of ACME for private/dev hosts.
-4. **`feat: manifest service-level tmpfs mounts`** — let users declare
-   writable scratch beyond `/tmp` without dropping `--read-only`.
+**Landed:**
 
-The four findings already locally fixed (UFW `--force allow`, caddy
-ordering + Caddyfile bootstrap, `ensureServiceStarted` polling,
-fake-install-ufw mirroring real ufw) are on
-`smoke/real-box-2026-05-27`, ready for PR.
+- **#32** — UFW `--force allow`, addCaddy ordering + Caddyfile
+  bootstrap, `ensureServiceStarted` polling, fake-install-ufw
+  mirroring real ufw (findings 1 + 2).
+- **#33** — `addPodmanHostBaseline` op:
+  `/etc/ufw/before.rules` block for `podman+` ACCEPT inserted after
+  the `# End required lines` anchor, `DEFAULT_FORWARD_POLICY="ACCEPT"`
+  in `/etc/default/ufw`, drop-in
+  `/etc/containers/registries.conf.d/00-simple-vps.conf` for
+  unqualified search (findings 3 + 4). Verified by re-installing on
+  a freshly-reverted Hetzner CX22; end-to-end curl works with zero
+  manual intervention.
+
+**Still open as named follow-ups** (manifest/product semantics, not
+provisioner host-baseline):
+
+- **`feat: manifest routes.<name>.tls = auto|internal|off`**
+  (finding 6) — give users a way to opt out of ACME for
+  private/dev hosts. The smoke needed a manual `tls internal`
+  injection because Caddy's default is to auto-provision Let's
+  Encrypt for every hostname, which fails when DNS isn't set up.
+- **`feat: manifest service-level tmpfs mounts`** (finding 5) — let
+  users declare writable scratch beyond `/tmp` so images like
+  `nginx:alpine` work under `--read-only`.
