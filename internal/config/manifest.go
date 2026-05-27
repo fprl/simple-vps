@@ -1,6 +1,8 @@
 package config
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -18,22 +20,11 @@ const (
 var (
 	AppRe        = regexp.MustCompile(`^[a-z][a-z0-9-]{1,40}$`)
 	ServiceRe    = regexp.MustCompile(`^[a-z][a-z0-9-]{0,30}$`)
-	HeaderNameRe = regexp.MustCompile("^[A-Za-z0-9!#$%&'*+.^_`|~-]+$")
 	SystemUserRe = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}\$?$`)
 	EnvKeyRe     = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 )
 
 const secretPrefix = "@secret:"
-
-// legacyBuild captures the old [build] block so we can reject it explicitly.
-// Per ADR-0005: container apps build via Dockerfile, static apps ship a
-// pre-built directory. simple-vps does not run host-side builds.
-type legacyBuild struct {
-	Command string   `toml:"command"`
-	Output  string   `toml:"output"`
-	Include []string `toml:"include"`
-	Install *bool    `toml:"install"`
-}
 
 type Service struct {
 	Command            string `toml:"command"`
@@ -44,21 +35,17 @@ type Service struct {
 }
 
 type Route struct {
-	Host    string   `toml:"host"`
-	Type    string   `toml:"type"`
-	Service string   `toml:"service"`
-	Root    string   `toml:"root"`
-	To      string   `toml:"to"`
-	Headers []string `toml:"headers"`
+	Host    string `toml:"host"`
+	Type    string `toml:"type"`
+	Service string `toml:"service"`
+	Root    string `toml:"root"`
+	To      string `toml:"to"`
 }
 
 type EnvBlock struct {
-	Server       string             `toml:"server"`
-	Runtime      string             `toml:"runtime"` // legacy; rejected at check time
-	KeepReleases *int               `toml:"keep_releases"`
-	Build        *legacyBuild       `toml:"build"` // legacy; rejected at check time
-	Services     map[string]Service `toml:"services"`
-	Routes       map[string]Route   `toml:"routes"`
+	Server   string             `toml:"server"`
+	Services map[string]Service `toml:"services"`
+	Routes   map[string]Route   `toml:"routes"`
 	// Env is the [env.<env>.env] block. Values must be strings (or whole-value
 	// @secret:KEY references); non-string TOML values are rejected at check
 	// time. Captured as any so we can produce precise type errors.
@@ -68,7 +55,6 @@ type EnvBlock struct {
 type Manifest struct {
 	Name     string              `toml:"name"`
 	Static   string              `toml:"static"`
-	Build    *legacyBuild        `toml:"build"` // legacy; rejected at check time
 	Services map[string]Service  `toml:"services"`
 	Routes   map[string]Route    `toml:"routes"`
 	Env      map[string]EnvBlock `toml:"env"`
@@ -136,11 +122,37 @@ func ReadManifest(root string) (*Manifest, error) {
 		return nil, fmt.Errorf("simple-vps.toml not found")
 	}
 	var manifest Manifest
-	err = toml.Unmarshal(data, &manifest)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse simple-vps.toml: %w", err)
+	// Strict decoding: any field outside the schema (legacy `runtime`,
+	// `[build]`, `keep_releases`, or a typo) becomes a check-time error
+	// rather than silently passing as a no-op. Pre-user repo, no compat
+	// window — stale config that looks honored but does nothing is
+	// worse than a clear "unknown field" error.
+	dec := toml.NewDecoder(bytes.NewReader(data)).DisallowUnknownFields()
+	if err := dec.Decode(&manifest); err != nil {
+		return nil, fmt.Errorf("failed to parse simple-vps.toml: %s", strictErrorMessage(err))
 	}
 	return &manifest, nil
+}
+
+// strictErrorMessage turns go-toml/v2's terse "strict mode: fields in the
+// document are missing in the target struct" wrapper into something a user
+// can actually act on — the offending field names plus their positions.
+func strictErrorMessage(err error) string {
+	var missing *toml.StrictMissingError
+	if !errors.As(err, &missing) || len(missing.Errors) == 0 {
+		return err.Error()
+	}
+	var msgs []string
+	for _, decErr := range missing.Errors {
+		key := strings.Join([]string(decErr.Key()), ".")
+		row, col := decErr.Position()
+		if key == "" {
+			msgs = append(msgs, fmt.Sprintf("unknown field at line %d:%d", row, col))
+			continue
+		}
+		msgs = append(msgs, fmt.Sprintf("unknown field %q at line %d:%d", key, row, col))
+	}
+	return strings.Join(msgs, "; ")
 }
 
 // detectShape returns the inferred app shape ("container" or "static") plus
@@ -182,10 +194,6 @@ func CheckManifest(root string, envName string) ([]string, []string, error) {
 		errors = append(errors, "name is required")
 	} else if !AppRe.MatchString(manifest.Name) {
 		errors = append(errors, "name must match ^[a-z][a-z0-9-]{1,40}$")
-	}
-
-	if manifest.Build != nil {
-		errors = append(errors, "[build] block is no longer supported; container apps build via Dockerfile, static apps ship a pre-built directory")
 	}
 
 	if manifest.Static != "" {
@@ -239,18 +247,6 @@ func CheckManifest(root string, envName string) ([]string, []string, error) {
 			errors = append(errors, fmt.Sprintf("[env.%s].server is required", selected))
 		} else if !ValidateSshTarget(envBlock.Server) {
 			errors = append(errors, fmt.Sprintf("[env.%s].server must be an SSH target like deploy@example.com", selected))
-		}
-
-		if envBlock.Runtime != "" {
-			errors = append(errors, fmt.Sprintf("[env.%s].runtime is no longer supported; shape is inferred from Dockerfile or static = \"<dir>\"", selected))
-		}
-
-		if envBlock.Build != nil {
-			errors = append(errors, fmt.Sprintf("[env.%s.build] block is no longer supported; container apps build via Dockerfile", selected))
-		}
-
-		if envBlock.KeepReleases != nil && *envBlock.KeepReleases < 1 {
-			errors = append(errors, fmt.Sprintf("[env.%s].keep_releases must be a positive integer", selected))
 		}
 
 		validateEnvBlock(envBlock.Env, selected, &errors)
@@ -424,9 +420,6 @@ func mergeRoutes(base map[string]Route, override map[string]Route) map[string]Ro
 		}
 		if v.To != "" {
 			existing.To = v.To
-		}
-		if len(v.Headers) > 0 {
-			existing.Headers = append([]string(nil), v.Headers...)
 		}
 		res[k] = existing
 	}

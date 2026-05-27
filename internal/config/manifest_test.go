@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -35,6 +36,97 @@ func checkErrors(t *testing.T, root string, env string) []string {
 		t.Fatal(err)
 	}
 	return errors
+}
+
+// --- Strict decoding: unknown TOML fields are rejected ---
+//
+// Pre-user repo with no compat window. Stale config that looks honored
+// but does nothing (legacy `runtime = "..."`, `[build]`, the deferred
+// `keep_releases`, or a plain typo) is worse than a clear "unknown
+// field" error. ReadManifest uses toml.Decoder.DisallowUnknownFields.
+
+func TestReadManifestRejectsLegacyRuntimeField(t *testing.T) {
+	root := t.TempDir()
+	writeDockerfile(t, root)
+	writeManifest(t, root, `
+name = "api"
+
+[env.production]
+server = "deploy@100.x.y.z"
+runtime = "bun"
+`)
+	_, err := ReadManifest(root)
+	if err == nil {
+		t.Fatal("expected legacy runtime field to be rejected")
+	}
+	if !strings.Contains(err.Error(), "runtime") {
+		t.Fatalf("expected error to mention the offending field, got %v", err)
+	}
+}
+
+func TestReadManifestRejectsLegacyBuildBlock(t *testing.T) {
+	root := t.TempDir()
+	writeStaticDir(t, root, "dist")
+	writeManifest(t, root, `
+name = "site"
+static = "dist"
+
+[build]
+command = "npm run build"
+
+[env.production]
+server = "deploy@100.x.y.z"
+`)
+	_, err := ReadManifest(root)
+	if err == nil {
+		t.Fatal("expected legacy [build] block to be rejected")
+	}
+	if !strings.Contains(err.Error(), "build") {
+		t.Fatalf("expected error to mention the offending field, got %v", err)
+	}
+}
+
+func TestReadManifestRejectsDeferredKeepReleasesField(t *testing.T) {
+	// `keep_releases` is in ADR-0005 §6 but isn't wired up in the new
+	// container/Podman flow yet. Accepting it as a silent no-op is a
+	// foot-gun: users would think they had configured retention.
+	// Strict decoding refuses it until the field comes back with
+	// behavior attached.
+	root := t.TempDir()
+	writeDockerfile(t, root)
+	writeManifest(t, root, `
+name = "api"
+
+[env.production]
+server = "deploy@100.x.y.z"
+keep_releases = 3
+`)
+	_, err := ReadManifest(root)
+	if err == nil {
+		t.Fatal("expected keep_releases to be rejected (not implemented yet)")
+	}
+	if !strings.Contains(err.Error(), "keep_releases") {
+		t.Fatalf("expected error to mention keep_releases, got %v", err)
+	}
+}
+
+func TestReadManifestRejectsArbitraryTypo(t *testing.T) {
+	root := t.TempDir()
+	writeDockerfile(t, root)
+	writeManifest(t, root, `
+name = "api"
+serfer = "deploy@100.x.y.z"
+
+[env.production]
+server = "deploy@100.x.y.z"
+`)
+	_, err := ReadManifest(root)
+	if err == nil {
+		t.Fatal("expected a misspelled top-level field to be rejected")
+	}
+	if !strings.Contains(err.Error(), "serfer") {
+		t.Fatalf("expected error to point at the typo, got %v", err)
+	}
 }
 
 func TestCheckManifestAcceptsContainerAppWithDockerfile(t *testing.T) {
@@ -115,48 +207,6 @@ server = "deploy@100.x.y.z"
 	errors := checkErrors(t, root, "production")
 	if !slices.Contains(errors, "manifest declares both shapes: a Dockerfile is present and static = \"dist\" is set; pick one") {
 		t.Fatalf("expected both-shapes error, got %v", errors)
-	}
-}
-
-func TestCheckManifestRejectsLegacyRuntimeField(t *testing.T) {
-	root := t.TempDir()
-	writeDockerfile(t, root)
-	writeManifest(t, root, `
-name = "api"
-
-[env.production]
-server = "deploy@100.x.y.z"
-runtime = "bun"
-
-[services.web]
-port = 3000
-healthcheck = "/health"
-`)
-
-	errors := checkErrors(t, root, "production")
-	if !slices.Contains(errors, "[env.production].runtime is no longer supported; shape is inferred from Dockerfile or static = \"<dir>\"") {
-		t.Fatalf("expected legacy-runtime error, got %v", errors)
-	}
-}
-
-func TestCheckManifestRejectsLegacyBuildBlock(t *testing.T) {
-	root := t.TempDir()
-	writeStaticDir(t, root, "dist")
-	writeManifest(t, root, `
-name = "site"
-static = "dist"
-
-[build]
-command = "npm run build"
-output = "dist"
-
-[env.production]
-server = "deploy@100.x.y.z"
-`)
-
-	errors := checkErrors(t, root, "production")
-	if !slices.Contains(errors, "[build] block is no longer supported; container apps build via Dockerfile, static apps ship a pre-built directory") {
-		t.Fatalf("expected legacy-build error, got %v", errors)
 	}
 }
 

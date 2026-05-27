@@ -7,22 +7,19 @@ import (
 	"github.com/fprl/simple-vps/cmd/hostinstall"
 )
 
+// Public CLI surface. The post-cutover lifecycle is minimal on
+// purpose; verbs that depended on the legacy systemd-unit /
+// releases/<sha> / per-app env file model are removed and will be
+// reintroduced against the new container/podman flow as that work
+// lands.
 type cli struct {
-	Init     initCmd          `cmd:"" help:"Create a simple-vps.toml manifest."`
-	Check    checkCmd         `cmd:"" help:"Validate an app manifest."`
-	Setup    setupCmd         `cmd:"" help:"Create the app user and directories on a host."`
-	Deploy   deployCmd        `cmd:"" help:"Deploy an app release."`
-	Rollback rollbackCmd      `cmd:"" help:"Rollback an app to a previous release."`
-	Destroy  destroyCmd       `cmd:"" help:"Destroy app services, routes, and optionally app data."`
-	Restart  restartCmd       `cmd:"" help:"Restart one app service."`
-	Status   statusCmd        `cmd:"" help:"Show app status."`
-	Logs     logsCmd          `cmd:"" help:"Show app service logs."`
-	SSH      sshCmd           `cmd:"ssh" help:"Open an SSH session to an app environment."`
-	Secret   secretCmd        `cmd:"" help:"Manage remote app secrets."`
-	Env      envCmd           `cmd:"" help:"Manage remote app environment files."`
-	Host     hostCmd          `cmd:"" help:"Install or inspect a Simple VPS host."`
-	Route    routeCmd         `cmd:"" help:"Inspect routes from a laptop or CI runner."`
-	Server   helper.ServerCmd `cmd:"" hidden:"" help:"Privileged host API."`
+	Init   initCmd          `cmd:"" help:"Create a simple-vps.toml manifest and Dockerfile scaffold."`
+	Check  checkCmd         `cmd:"" help:"Validate an app manifest."`
+	Setup  setupCmd         `cmd:"" help:"Create the per-env Linux user, directories, and Podman network on the host."`
+	Deploy deployCmd        `cmd:"" help:"Build the container image on the host and run the app's services."`
+	SSH    sshCmd           `cmd:"ssh" help:"Open an SSH session to an app environment."`
+	Host   hostCmd          `cmd:"" help:"Install or inspect a Simple VPS host."`
+	Server helper.ServerCmd `cmd:"" hidden:"" help:"Privileged host API."`
 }
 
 type initCmd struct{}
@@ -61,113 +58,12 @@ func (c deployCmd) Run() error {
 	return nil
 }
 
-type rollbackCmd struct {
-	Env     string `arg:"" help:"Environment to roll back."`
-	Release string `arg:"" optional:"" help:"Release id to activate. Defaults to previous release."`
-}
-
-func (c rollbackCmd) Run() error {
-	client.CmdRollback(".", c.Env, c.Release)
-	return nil
-}
-
-type destroyCmd struct {
-	Env     string `arg:"" help:"Environment to destroy."`
-	Yes     bool   `help:"Confirm destruction."`
-	Confirm string `help:"Confirm the app name."`
-	Purge   bool   `help:"Remove app data after stopping services and routes."`
-}
-
-func (c destroyCmd) Run() error {
-	client.CmdDestroy(".", c.Env, c.Yes, c.Confirm, c.Purge)
-	return nil
-}
-
-type restartCmd struct {
-	Env     string `arg:"" help:"Environment containing the service."`
-	Service string `arg:"" help:"Service name to restart."`
-}
-
-func (c restartCmd) Run() error {
-	client.CmdRestart(".", c.Env, c.Service)
-	return nil
-}
-
-type statusCmd struct {
-	Env string `arg:"" help:"Environment to inspect."`
-}
-
-func (c statusCmd) Run() error {
-	client.CmdStatus(".", c.Env)
-	return nil
-}
-
-type logsCmd struct {
-	Env     string `arg:"" help:"Environment containing the service."`
-	Service string `arg:"" optional:"" help:"Optional service name."`
-	Tail    bool   `help:"Follow logs."`
-}
-
-func (c logsCmd) Run() error {
-	client.CmdLogs(".", c.Env, c.Service, c.Tail)
-	return nil
-}
-
 type sshCmd struct {
 	Env string `arg:"" help:"Environment to connect to."`
 }
 
 func (c sshCmd) Run() error {
 	client.CmdSSH(".", c.Env)
-	return nil
-}
-
-type secretCmd struct {
-	Put  secretPutCmd  `cmd:"" help:"Set a secret value from stdin."`
-	List secretListCmd `cmd:"" help:"List secret keys."`
-	Rm   secretRmCmd   `cmd:"rm" help:"Remove a secret key."`
-}
-
-type secretPutCmd struct {
-	Env string `arg:"" help:"Environment to update."`
-	Key string `arg:"" help:"Secret key."`
-}
-
-func (c secretPutCmd) Run() error {
-	client.CmdSecretPut(".", c.Env, c.Key)
-	return nil
-}
-
-type secretListCmd struct {
-	Env string `arg:"" help:"Environment to inspect."`
-}
-
-func (c secretListCmd) Run() error {
-	client.CmdSecretList(".", c.Env)
-	return nil
-}
-
-type secretRmCmd struct {
-	Env string `arg:"" help:"Environment to update."`
-	Key string `arg:"" help:"Secret key."`
-}
-
-func (c secretRmCmd) Run() error {
-	client.CmdSecretRm(".", c.Env, c.Key)
-	return nil
-}
-
-type envCmd struct {
-	Push envPushCmd `cmd:"" help:"Push a dotenv file to the remote app."`
-}
-
-type envPushCmd struct {
-	Env  string `arg:"" help:"Environment to update."`
-	File string `arg:"" help:"Dotenv file to upload."`
-}
-
-func (c envPushCmd) Run() error {
-	client.CmdEnvPush(".", c.Env, c.File)
 	return nil
 }
 
@@ -301,32 +197,11 @@ func (c hostInstallCmd) Run() error {
 	return hostinstall.NewInstaller().RunOptions(opts)
 }
 
-type routeCmd struct {
-	List routeListCmd `cmd:"" default:"1" help:"List configured routes."`
-}
-
-type routeListCmd struct {
-	JSON   bool   `name:"json" help:"Output JSON."`
-	Server string `help:"SSH target like deploy@example.com."`
-}
-
-func (c routeListCmd) Run() error {
-	args := []string{"list"}
-	if c.JSON {
-		args = append(args, "--json")
-	}
-	if c.Server != "" {
-		args = append(args, "--server", c.Server)
-	}
-	client.CmdRoute(args)
-	return nil
-}
-
 func main() {
 	parser := kong.Parse(
 		&cli{},
 		kong.Name("simple-vps"),
-		kong.Description("Deploy JS/TS apps to a VPS and manage the host runtime."),
+		kong.Description("Deploy containerized apps to a single hardened VPS."),
 		kong.UsageOnError(),
 	)
 	parser.FatalIfErrorf(parser.Run())
