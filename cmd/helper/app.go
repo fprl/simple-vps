@@ -12,6 +12,7 @@ type appCmd struct {
 	DestroyEnv appDestroyEnvCmd `cmd:"destroy-env" help:"Tear down one env: containers, files, user, network."`
 	Apply      appApplyCmd      `cmd:"apply" help:"Build the image, start services, and apply the Caddy fragment from an uploaded manifest."`
 	Status     appStatusCmd     `cmd:"status" help:"Show running services for one (app, env) pair."`
+	Restart    appRestartCmd    `cmd:"restart" help:"Bounce running containers for one (app, env) pair via podman restart."`
 	Logs       appLogsCmd       `cmd:"logs" help:"Tail logs for one service via podman logs."`
 	Secret     appSecretCmd     `cmd:"secret" help:"Manage the per-(app, env, key) secret store."`
 }

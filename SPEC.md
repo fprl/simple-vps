@@ -62,8 +62,23 @@ simple-vps init                                       # scaffold simple-vps.toml
 simple-vps check [env]                                # validate manifest
 simple-vps setup <env>                                # create per-env user, paths, Podman network
 simple-vps deploy <env> [--dirty]                     # build image on the host, run services, route via Caddy
+simple-vps status <env> [--json]                      # podman ps-sourced service table
+simple-vps restart <env> [service] [--json]           # bounce running services in place (same image)
+simple-vps logs <env> [service] [--follow] [--tail N] # podman logs against the labelled container
+simple-vps secret put <env> <KEY>                     # stdin-only write to /etc/simple-vps/secrets/<app>/<env>/<key>
+simple-vps secret list <env>                          # keys only, never values
+simple-vps secret rm <env> <KEY>                      # remove one key
 simple-vps ssh <env>                                  # SSH into the host
 ```
+
+`restart` uses `podman restart` — container config is preserved (same
+image, env, mounts, labels). To pick up manifest changes use
+`deploy`. Whole-env restart is rolling, one service at a time, and
+fails fast if a container doesn't come back to `running`.
+
+`secret put` reads stdin only, never argv. `secret list` prints names
+only, never values. Writes are atomic via the privileged server API.
+No auto-restart on secret change — re-deploy or restart explicitly.
 
 ### App lifecycle — planned (post-cutover backlog)
 
@@ -74,26 +89,7 @@ ADR-0005 cutover and will come back wired to the container/Podman flow:
 simple-vps deploy <env> --rebuild                     # --no-cache --pull=always (planned)
 simple-vps rollback <env> [release]                   # planned
 simple-vps destroy <env> [--yes] [--confirm <name>] [--purge]  # planned
-simple-vps restart <env> <service>                    # planned
-simple-vps status <env> [--json]                      # planned
-simple-vps logs <env> [service] [--tail] [--json]     # planned
 ```
-
-### Secrets and env — planned
-
-The secret-store helper surface is not implemented yet; `simple-vps
-check` already understands `[env.<env>.env]` blocks and rejects
-`@secret:KEY` references at deploy time until resolution lands.
-
-```bash
-simple-vps secret put <env> <KEY>                     # planned
-simple-vps secret list <env> [--json]                 # planned
-simple-vps secret rm <env> <KEY>                      # planned
-```
-
-`secret put` will read stdin only, never argv.
-`secret list` will print names only, never values.
-Writes will be atomic via the privileged server API. No auto-restart.
 
 Non-secret env values live in `[env.<env>.env]` blocks in the manifest
 today. Secret values are referenced by whole-value `@secret:KEY`
@@ -180,6 +176,12 @@ sudo simple-vps server doctor
 sudo simple-vps server app setup-env <app> <env>
 sudo simple-vps server app destroy-env <app> <env>
 sudo simple-vps server app apply --tarball <path> --manifest <path> --sha <sha> <app> <env>
+sudo simple-vps server app status [--json] <app> <env>
+sudo simple-vps server app restart [--json] <app> <env> [service]
+sudo simple-vps server app logs [--follow] [--tail=N] <app> <env> [service]
+sudo simple-vps server app secret put <app> <env> <key>
+sudo simple-vps server app secret list <app> <env>
+sudo simple-vps server app secret rm <app> <env> <key>
 
 sudo simple-vps server cloudflare publish --app <name> <host>
 sudo simple-vps server cloudflare remove <host>
@@ -191,10 +193,6 @@ Planned (paired with the client-side "planned" verbs above):
 
 ```bash
 sudo simple-vps server app list [--json]                            # planned; sourced from podman labels / Caddy fragments
-sudo simple-vps server app service <action> <app> <env> <service>   # planned, for client `restart` / `status`
-sudo simple-vps server app secret put <app> <env> <key>             # planned, for client `secret put`
-sudo simple-vps server app secret list <app> <env>                  # planned, for client `secret list`
-sudo simple-vps server app secret rm <app> <env> <key>              # planned, for client `secret rm`
 ```
 
 The sudoers contract is one line for the whole server binary, installed at

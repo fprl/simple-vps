@@ -43,6 +43,7 @@ func TestContainerSmoke(t *testing.T) {
 	t.Run("container app reaches setup + deploy + caddy proxy", env.testContainerAppLifecycle)
 	t.Run("@secret refs resolve through put/list/rm into the runtime env", env.testSecretLifecycle)
 	t.Run("status + logs surface deployed services without SSHing in", env.testStatusAndLogs)
+	t.Run("restart bounces containers in place via podman restart", env.testRestart)
 }
 
 func (e *smokeEnv) testContainerAppLifecycle(t *testing.T) {
@@ -298,6 +299,73 @@ func (e *smokeEnv) testStatusAndLogs(t *testing.T) {
 	}
 	if !strings.Contains(missing.stderr, "nope") {
 		t.Fatalf("error should name the missing service, got: %s", missing.stderr)
+	}
+}
+
+// testRestart covers `simple-vps restart` against the live container
+// flow. Assumes the earlier `testContainerAppLifecycle` subtest has
+// already deployed the `api` container app and left its `web`
+// service running on the fake VPS.
+func (e *smokeEnv) testRestart(t *testing.T) {
+	app := filepath.Join(e.tmp, "container-api")
+
+	// Whole-env restart text output names the env and the bounced
+	// service, with the post-restart state.
+	text := e.simpleVPS(t, app, nil, "restart", "production")
+	assertContains(t, text, "api (production)")
+	assertContains(t, text, "web")
+	assertContains(t, text, "restarted (running)")
+
+	// fake-podman should have logged the actual `podman restart`. This
+	// is the assertion that proves the helper used the in-place
+	// primitive (not an `rm`/`run` cycle that would force a re-build
+	// or lose container state).
+	commandsLog := e.ssh(t, "cat /run/fake-podman/commands.log")
+	assertContains(t, commandsLog, "podman restart app-api-production-web")
+
+	// The end-to-end Caddy route should still work after the bounce —
+	// the container kept its labels, network membership, and listener
+	// port; Caddy didn't need a reload.
+	e.assertRemoteBody(t, "curl -fsS -H 'Host: api.example.com' http://127.0.0.1/health", "ok")
+
+	// JSON output is structured and matches the helper's payload
+	// shape. Parse it back to catch silent contract drift.
+	rawJSON := e.simpleVPS(t, app, nil, "restart", "--json", "production")
+	var payload struct {
+		App       string `json:"app"`
+		Env       string `json:"env"`
+		Restarted []struct {
+			Service   string `json:"service"`
+			Container string `json:"container"`
+			State     string `json:"state"`
+		} `json:"restarted"`
+	}
+	if err := json.Unmarshal([]byte(rawJSON), &payload); err != nil {
+		t.Fatalf("restart --json output not parseable as JSON: %v\nraw:\n%s", err, rawJSON)
+	}
+	if payload.App != "api" || payload.Env != "production" {
+		t.Fatalf("restart --json mis-identifies the app: %+v", payload)
+	}
+	if len(payload.Restarted) != 1 || payload.Restarted[0].Service != "web" {
+		t.Fatalf("expected one restarted service `web`, got: %+v", payload.Restarted)
+	}
+	if payload.Restarted[0].State != "running" {
+		t.Fatalf("expected state=running after restart, got: %+v", payload.Restarted[0])
+	}
+
+	// Service-scoped restart hits just the named service.
+	svcOut := e.simpleVPS(t, app, nil, "restart", "production", "web")
+	assertContains(t, svcOut, "web")
+	assertContains(t, svcOut, "restarted (running)")
+
+	// Unknown service errors with a clear message that names the
+	// missing one.
+	missing := e.runSimpleVPS(t, app, nil, "restart", "production", "nope")
+	if missing.err == nil {
+		t.Fatal("expected restart to fail for unknown service")
+	}
+	if !strings.Contains(missing.stderr+missing.stdout, "nope") {
+		t.Fatalf("error should name the missing service, got:\nstdout: %s\nstderr: %s", missing.stdout, missing.stderr)
 	}
 }
 

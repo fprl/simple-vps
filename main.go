@@ -17,8 +17,9 @@ type cli struct {
 	Check  checkCmd         `cmd:"" help:"Validate an app manifest."`
 	Setup  setupCmd         `cmd:"" help:"Create the per-env Linux user, directories, and Podman network on the host."`
 	Deploy deployCmd        `cmd:"" help:"Build the container image on the host and run the app's services."`
-	Status statusCmd        `cmd:"" help:"Show running services for an environment."`
-	Logs   logsCmd          `cmd:"" help:"Tail logs for one service."`
+	Status  statusCmd        `cmd:"" help:"Show running services for an environment."`
+	Restart restartCmd       `cmd:"" help:"Restart services for an environment (bounces in place; same image)."`
+	Logs    logsCmd          `cmd:"" help:"Tail logs for one service."`
 	Secret secretCmd        `cmd:"" help:"Manage per-(app, env, key) secret values referenced from the manifest."`
 	SSH    sshCmd           `cmd:"ssh" help:"Open an SSH session to an app environment."`
 	Host   hostCmd          `cmd:"" help:"Install or inspect a Simple VPS host."`
@@ -89,6 +90,17 @@ type logsCmd struct {
 
 func (c logsCmd) Run() error {
 	client.CmdLogs(".", c.Env, c.Service, c.Follow, c.Tail)
+	return nil
+}
+
+type restartCmd struct {
+	Env     string `arg:"" help:"Environment to restart."`
+	Service string `arg:"" optional:"" help:"Service to bounce. Omitted = all services."`
+	JSON    bool   `name:"json" help:"Emit structured JSON instead of the text summary."`
+}
+
+func (c restartCmd) Run() error {
+	client.CmdRestart(".", c.Env, c.Service, c.JSON)
 	return nil
 }
 
