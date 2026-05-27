@@ -401,31 +401,62 @@ func ensureIngressNetwork(apply host.Apply) (bool, error) {
 	return true, nil
 }
 
+// addCaddy installs and starts Caddy as a Podman container on the
+// shared `ingress` network, per ADR-0006 Cut 2. The previous apt-based
+// install + systemd-from-apt path is gone: simple-vps no longer treats
+// Caddy as a host service. App containers join `ingress` and Caddy
+// reaches them by container DNS.
 func addCaddy(ops *[]operation) {
-	*ops = append(*ops, operation{name: "caddy repo", run: func(apply host.Apply) (bool, error) {
-		return host.EnsureAptRepo(apply, host.AptRepo{
-			Name:           "caddy",
-			KeyURL:         "https://dl.cloudsmith.io/public/caddy/stable/gpg.key",
-			KeyPath:        "/usr/share/keyrings/caddy-stable-archive-keyring.gpg",
-			KeyFingerprint: caddyAptKeyFingerprint,
-			KeyDearmor:     true,
-			SourcePath:     "/etc/apt/sources.list.d/caddy-stable.list",
-			SourceLine:     "deb [signed-by=/usr/share/keyrings/caddy-stable-archive-keyring.gpg] https://dl.cloudsmith.io/public/caddy/stable/deb/debian any-version main",
-		})
-	}})
-	*ops = append(*ops, operation{name: "caddy package", run: func(apply host.Apply) (bool, error) { return host.EnsurePackage(apply, "caddy") }})
 	for _, dir := range []host.Directory{
+		{Path: "/etc/caddy", Owner: "root", Group: "root", Mode: 0755},
 		{Path: "/etc/caddy/simple-vps", Owner: "root", Group: "root", Mode: 0755},
 		{Path: "/etc/caddy/conf.d", Owner: "root", Group: "root", Mode: 0755},
-		{Path: "/var/www/html", Owner: "caddy", Group: "caddy", Mode: 0755},
+		// Caddy's runtime data (certificates, last_config.json, etc.)
+		// lives outside /etc so config edits stay clean to diff.
+		{Path: "/var/lib/caddy", Owner: "root", Group: "root", Mode: 0755},
 	} {
 		dir := dir
 		*ops = append(*ops, operation{name: "caddy dir " + dir.Path, run: func(apply host.Apply) (bool, error) { return host.EnsureDirectory(apply, dir) }})
 	}
 	*ops = append(*ops, operation{name: "caddy service", run: func(apply host.Apply) (bool, error) {
-		return host.EnsureSystemdUnit(apply, host.SystemdUnit{Name: "caddy.service", Action: host.Started})
+		return host.EnsureSystemdUnit(apply, host.SystemdUnit{
+			Name:    "caddy.service",
+			Content: []byte(caddyUnit()),
+			Action:  host.Started,
+		})
 	}})
 	*ops = append(*ops, operation{name: "generate caddy", run: runCommandChangedUnlessOutputContains("simple-vps", []string{"server", "generate-caddy"}, "already up to date")})
+}
+
+// caddyUnit returns the systemd unit content that runs Caddy as a
+// Podman container on the shared `ingress` network with host ports
+// 80 and 443 published.
+func caddyUnit() string {
+	return strings.Join([]string{
+		"[Unit]",
+		"Description=Caddy (Simple VPS managed, podman)",
+		"Wants=network-online.target",
+		"After=network-online.target",
+		"",
+		"[Service]",
+		"Type=simple",
+		"TimeoutStartSec=0",
+		"ExecStartPre=-/usr/bin/podman stop caddy",
+		"ExecStartPre=-/usr/bin/podman rm caddy",
+		"ExecStart=/usr/bin/podman run --rm --name caddy" +
+			" --network ingress" +
+			" --publish 80:80" +
+			" --publish 443:443" +
+			" -v /etc/caddy:/etc/caddy:Z" +
+			" -v /var/lib/caddy:/data:Z" +
+			" docker.io/library/caddy:2-alpine",
+		"ExecStop=/usr/bin/podman stop caddy",
+		"Restart=on-failure",
+		"",
+		"[Install]",
+		"WantedBy=multi-user.target",
+		"",
+	}, "\n")
 }
 
 func addLitestream(ops *[]operation) {

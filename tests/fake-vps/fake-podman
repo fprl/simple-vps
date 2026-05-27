@@ -5,7 +5,14 @@
 # cmd/helper/app_apply.go to run end-to-end without a real container
 # engine.
 #
-# Scope is deliberately narrow. Add commands as the smoke tests grow.
+# Every container started via `podman run` gets a local HTTP listener
+# on a free port (recorded under containers/<name>.port). For the
+# Caddy image specifically, fake-podman launches a tiny Python proxy
+# that reads /etc/caddy/conf.d/*.caddy fragments and routes requests
+# by Host header to the matching app container's local listener — so
+# the smoke can curl through the real Caddy-shaped ingress path
+# (ADR-0006 Cut 2) instead of having to address app containers
+# directly.
 set -euo pipefail
 
 state_dir=/run/fake-podman
@@ -42,33 +49,30 @@ case "$verb" in
     ;;
 
   ps)
-    # Used by globalUsedHostPorts() — print the
-    # `simple_vps_host_port` label for every recorded container.
-    # `podman ps -a --format '{{ index .Labels "simple_vps_host_port" }}'`
-    # is the only invocation we need to satisfy.
+    # Used by older code paths that scanned labels (port allocator).
+    # Kept as a generic label dump in case future tests want it.
     for f in "$state_dir"/containers/*.labels; do
       [[ -f "$f" ]] || continue
-      grep -E '^simple_vps_host_port=' "$f" 2>/dev/null | cut -d= -f2- || true
+      cat "$f"
     done
     exit 0
     ;;
 
   inspect)
-    # `podman inspect --format '{{ index .Config.Labels "simple_vps_host_port" }}' <name>`
-    # The helper uses this to discover an existing allocation.
+    # `podman inspect --format '...' <name>` — best-effort; returns
+    # empty string when the container is unknown so the helper's
+    # label-discovery path falls through gracefully.
     name="${!#}"
     labels_file="$state_dir/containers/$name.labels"
     if [[ ! -f "$labels_file" ]]; then
       echo "no such container: $name" >&2
       exit 1
     fi
-    grep -E '^simple_vps_host_port=' "$labels_file" 2>/dev/null | cut -d= -f2- || echo ""
+    echo ""
     exit 0
     ;;
 
   build)
-    # Parse for -t <tag> so we can record an image entry; everything
-    # else is accepted as-is.
     tag=""
     while [[ $# -gt 0 ]]; do
       case "$1" in
@@ -88,8 +92,6 @@ case "$verb" in
     ;;
 
   rm)
-    # `podman rm -f <name>` — accept and forget. If the container has
-    # a recorded listener PID, kill it.
     while [[ $# -gt 0 ]]; do
       case "$1" in
         -f|-a|-v)
@@ -102,7 +104,9 @@ case "$verb" in
             kill "$(cat "$listener")" 2>/dev/null || true
             rm -f "$listener"
           fi
-          rm -f "$state_dir/containers/$name.labels"
+          rm -f "$state_dir/containers/$name.labels" \
+                "$state_dir/containers/$name.port" \
+                "$state_dir/containers/$name.image"
           shift
           ;;
       esac
@@ -110,13 +114,31 @@ case "$verb" in
     exit 0
     ;;
 
+  exec)
+    # `podman exec <container> <cmd...>` — the helper uses this to
+    # reload Caddy: `podman exec caddy caddy reload --config ...` and
+    # to validate config. Both can be no-ops here because the fake
+    # Caddy proxy re-reads conf.d/ fragments on every request.
+    container="${1:-}"
+    shift || true
+    if [[ ! -f "$state_dir/containers/$container.labels" ]]; then
+      echo "fake podman: no such container: $container" >&2
+      exit 1
+    fi
+    # If the request is `caddy validate`, exit 0. (Real validation runs
+    # inside the Caddy container against the full Caddyfile; the fake
+    # accepts whatever fragment is written.)
+    exit 0
+    ;;
+
   run)
     # `podman run -d --name <name> ... <flags> <image> [cmd...]`
-    # We need to record labels (for the port allocator) and start a
-    # tiny HTTP listener on the published loopback port so the
-    # helper's healthcheck (GET <healthcheck>) returns 200.
+    # Every named container gets a local HTTP listener on a free port.
+    # If the image looks like Caddy, the listener is the conf.d-aware
+    # reverse proxy instead.
     name=""
     publish_host_port=""
+    image=""
     declare -a labels=()
     while [[ $# -gt 0 ]]; do
       case "$1" in
@@ -129,18 +151,21 @@ case "$verb" in
           shift 2
           ;;
         --publish)
-          # 127.0.0.1:<host>:<container>
-          publish_host_port="$(printf '%s' "$2" | awk -F: '{print $2}')"
+          # Accept both `127.0.0.1:H:C` and `H:C`.
+          publish_host_port="$(printf '%s' "$2" | awk -F: 'NF==3{print $2} NF==2{print $1}')"
           shift 2
           ;;
-        -d|--read-only)
+        -d|--read-only|--rm)
           shift
           ;;
         --user|--cap-drop|--security-opt|--pids-limit|--restart|--network|-v|--tmpfs|--env-file)
           shift 2
           ;;
         *)
-          # First non-flag is the image; ignore the rest.
+          # First non-flag is the image; subsequent are command args.
+          if [[ -z "$image" ]]; then
+            image="$1"
+          fi
           shift
           ;;
       esac
@@ -149,45 +174,58 @@ case "$verb" in
       echo "fake podman: run requires --name" >&2
       exit 1
     fi
+
     labels_file="$state_dir/containers/$name.labels"
     : > "$labels_file"
     for label in "${labels[@]:-}"; do
       [[ -n "$label" ]] && printf '%s\n' "$label" >> "$labels_file"
     done
+    printf '%s\n' "$image" > "$state_dir/containers/$name.image"
 
-    if [[ -n "$publish_host_port" ]]; then
-      python3 -u - "$publish_host_port" >/dev/null 2>"$state_dir/listeners/$name.log" <<'PY' &
-from http.server import BaseHTTPRequestHandler, HTTPServer
-import sys
+    # Caddy gets the conf.d-aware proxy; everything else gets the
+    # "always 200 ok" stub. Caddy listens on the --publish host port;
+    # app containers listen on a free OS-assigned port so Caddy can
+    # discover them via the .port state file.
+    if [[ "$image" == *caddy* ]]; then
+      bind_port="${publish_host_port:-80}"
+      python3 -u "$(dirname "$0")/fake-podman.caddy.py" "$bind_port" "$state_dir" \
+        >/dev/null 2>"$state_dir/listeners/$name.log" &
+      pid=$!
+      echo "$pid" > "$state_dir/listeners/$name.pid"
+      printf '%s\n' "$bind_port" > "$state_dir/containers/$name.port"
+    else
+      port_file="$state_dir/containers/$name.port"
+      python3 -u "$(dirname "$0")/fake-podman.app.py" "$port_file" \
+        >/dev/null 2>"$state_dir/listeners/$name.log" &
+      pid=$!
+      echo "$pid" > "$state_dir/listeners/$name.pid"
+    fi
 
-class H(BaseHTTPRequestHandler):
-    def log_message(self, *a):
-        return
-    def do_GET(self):
-        self.send_response(200)
-        self.send_header("Content-Type", "text/plain")
-        self.end_headers()
-        self.wfile.write(b"ok")
-    def do_HEAD(self):
-        self.do_GET()
-
-HTTPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()
-PY
-      echo $! > "$state_dir/listeners/$name.pid"
-      # Wait briefly so the listener is accepting before the helper
-      # starts its healthcheck loop.
-      for _ in 1 2 3 4 5 6 7 8 9 10; do
-        if python3 -c "import socket,sys; s=socket.socket(); s.settimeout(0.2); sys.exit(0 if s.connect_ex(('127.0.0.1', int(sys.argv[1])))==0 else 1)" "$publish_host_port" 2>/dev/null; then
+    # Wait briefly for the listener to bind.
+    for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+      if [[ -f "$state_dir/containers/$name.port" ]]; then
+        p="$(cat "$state_dir/containers/$name.port" 2>/dev/null)"
+        if [[ -n "$p" ]] && python3 -c "import socket,sys; s=socket.socket(); s.settimeout(0.2); sys.exit(0 if s.connect_ex(('127.0.0.1', int(sys.argv[1])))==0 else 1)" "$p" 2>/dev/null; then
           break
         fi
-        sleep 0.1
-      done
-    fi
+      fi
+      sleep 0.1
+    done
     exit 0
     ;;
 
   logs)
-    # `podman logs --tail N <name>` — return empty stdout on success.
+    exit 0
+    ;;
+
+  stop)
+    # `podman stop <name>` — kill the listener, leave state files.
+    name="${1:-}"
+    listener="$state_dir/listeners/$name.pid"
+    if [[ -f "$listener" ]]; then
+      kill "$(cat "$listener")" 2>/dev/null || true
+      rm -f "$listener"
+    fi
     exit 0
     ;;
 

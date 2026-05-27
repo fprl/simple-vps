@@ -231,6 +231,21 @@ func (e *smokeEnv) ssh(t *testing.T, command string) string {
 	return result.stdout
 }
 
+// dockerExec runs a shell command inside the fake VPS container as
+// root via `docker exec`. The smoke's normal SSH session lands as the
+// `deploy` user, which only has passwordless sudo for
+// /usr/local/bin/simple-vps; fixture setup that has to call `podman`
+// directly (creating the ingress network, starting the Caddy
+// container, seeding /etc/caddy/Caddyfile) goes through this instead.
+func (e *smokeEnv) dockerExec(t *testing.T, command string) string {
+	t.Helper()
+	result := e.run(t, e.repoRoot, nil, "docker", "exec", e.container, "bash", "-c", command)
+	if result.err != nil {
+		t.Fatalf("docker exec %q failed: %v\nstdout:\n%s\nstderr:\n%s", command, result.err, result.stdout, result.stderr)
+	}
+	return result.stdout
+}
+
 func (e *smokeEnv) assertRemoteBody(t *testing.T, command string, expected string) {
 	t.Helper()
 	got := strings.TrimSuffix(e.ssh(t, command), "\n")

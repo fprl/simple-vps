@@ -2,12 +2,10 @@ package helper
 
 import (
 	"fmt"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -123,13 +121,7 @@ func (c appApplyCmd) Run() error {
 		utils.Die(err.Error(), 1)
 	}
 
-	// 4. Allocate host ports for each port-having service.
-	servicePorts, err := allocateServicePorts(c.App, c.Env, app.Services)
-	if err != nil {
-		utils.Die(err.Error(), 1)
-	}
-
-	// 5. Build the image.
+	// 4. Build the image.
 	imageTag := identity.ImageTag(c.App, c.Env, c.SHA)
 	if _, err := utils.RunChecked("podman",
 		[]string{"build",
@@ -144,42 +136,43 @@ func (c appApplyCmd) Run() error {
 		utils.Die(fmt.Sprintf("podman build: %v", err), 1)
 	}
 
-	// 6. Start each service.
+	// 5. Start each service. Containers join the per-(app, env) network
+	// for intra-app DNS and the shared `ingress` network so Caddy can
+	// reach them by container name (ADR-0006 Cut 2). No host-loopback
+	// `--publish`: the host-port allocator that lived here is gone.
 	for _, svcName := range sortedKeys(app.Services) {
 		svc := app.Services[svcName]
-		hostPort := servicePorts[svcName]
-		if err := startService(c.App, c.Env, svcName, svc, imageTag, userID, groupID, hostPort); err != nil {
+		if err := startService(c.App, c.Env, svcName, svc, imageTag, userID, groupID); err != nil {
 			utils.Die(err.Error(), 1)
 		}
 	}
 
-	// 7. Write the per-app Caddyfile fragment using the allocated host
-	// ports, then reload the live Caddy. The fragment lives under the
-	// imported `conf.d/` directory; we never `caddy reload --config
-	// <fragment>` directly because that would *replace* the active
-	// config with just this app. We also validate the FULL Caddyfile
-	// (with the new fragment in place) before reload, so a bad fragment
-	// is caught before it breaks the live ingress.
+	// 6. Write the per-app Caddyfile fragment (`reverse_proxy
+	// http://<container>:<service-port>`), validate the full Caddyfile
+	// inside the Caddy container, then reload Caddy in place. The
+	// fragment lives under `/etc/caddy/conf.d/` which the main Caddyfile
+	// imports; we never `caddy reload --config <fragment>` because that
+	// would *replace* the active config with just this app.
 	//
-	// Snapshot the previous fragment first: if validate fails we must
-	// restore it, not delete it. A previously-healthy app would
-	// otherwise lose its route on the next reload from anywhere.
+	// Snapshot the previous fragment first: if validate rejects the new
+	// one we restore the old. A previously-healthy app would otherwise
+	// lose its route on the next reload from anywhere.
 	caddyPath := caddyfilePath(c.App, c.Env)
 	prevFragment, prevExisted, err := snapshotCaddyFragment(caddyPath)
 	if err != nil {
 		utils.Die(fmt.Sprintf("snapshot existing fragment: %v", err), 1)
 	}
-	if err := writeAppCaddyfile(c.App, c.Env, app, servicePorts); err != nil {
+	if err := writeAppCaddyfile(c.App, c.Env, app); err != nil {
 		utils.Die(err.Error(), 1)
 	}
-	if _, err := utils.RunChecked("caddy", []string{"validate", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"}, ""); err != nil {
+	if _, err := utils.RunChecked("podman", []string{"exec", "caddy", "caddy", "validate", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"}, ""); err != nil {
 		if restoreErr := restoreCaddyFragment(caddyPath, prevFragment, prevExisted); restoreErr != nil {
 			utils.Die(fmt.Sprintf("caddy validate rejected the fragment AND restore failed (manual fix required at %s): %v (restore: %v)", caddyPath, err, restoreErr), 1)
 		}
 		utils.Die(fmt.Sprintf("caddy validate rejected the fragment, restored previous: %v", err), 1)
 	}
-	if _, err := utils.RunChecked("systemctl", []string{"reload", "caddy"}, ""); err != nil {
-		utils.Die(fmt.Sprintf("systemctl reload caddy: %v", err), 1)
+	if _, err := utils.RunChecked("podman", []string{"exec", "caddy", "caddy", "reload", "--config", "/etc/caddy/Caddyfile"}, ""); err != nil {
+		utils.Die(fmt.Sprintf("caddy reload: %v", err), 1)
 	}
 
 	fmt.Printf("Deployed %s (%s) at %s\n", c.App, c.Env, c.SHA)
@@ -204,96 +197,6 @@ func hostUserIDs(name string) (string, string, error) {
 		return "", "", fmt.Errorf("empty id output for %s", name)
 	}
 	return uid, gid, nil
-}
-
-const hostPortLabel = "simple_vps_host_port"
-
-// hostPortRangeLow/High bound the per-(app, env, service) host port
-// allocations. Documented in ADR-0005 §16 as `33000-33999`; the helper
-// owns this allocator until Caddy-in-container makes it unnecessary.
-const (
-	hostPortRangeLow  = 33000
-	hostPortRangeHigh = 34000
-)
-
-// allocateServicePorts assigns each port-having service a host port,
-// reusing the existing allocation when a previous container of the same
-// name already advertises one via the `simple_vps_host_port` label.
-// Workers (no port) get 0 (sentinel "no port").
-func allocateServicePorts(app, env string, services map[string]config.Service) (map[string]int, error) {
-	out := make(map[string]int, len(services))
-	used, err := globalUsedHostPorts()
-	if err != nil {
-		return nil, err
-	}
-	for _, name := range sortedKeys(services) {
-		svc := services[name]
-		if svc.Port == nil {
-			continue
-		}
-		container := identity.ContainerName(app, env, name)
-		if existing, ok := hostPortForContainer(container); ok {
-			out[name] = existing
-			used[existing] = true
-			continue
-		}
-		port, err := pickHostPort(used, hostPortRangeLow, hostPortRangeHigh)
-		if err != nil {
-			return nil, fmt.Errorf("allocate host port for %s: %v", name, err)
-		}
-		out[name] = port
-		used[port] = true
-	}
-	return out, nil
-}
-
-// pickHostPort returns the lowest free port in [low, high). Pure
-// function for testability.
-func pickHostPort(used map[int]bool, low, high int) (int, error) {
-	for p := low; p < high; p++ {
-		if !used[p] {
-			return p, nil
-		}
-	}
-	return 0, fmt.Errorf("no free host port in [%d, %d)", low, high)
-}
-
-// hostPortForContainer reads the `simple_vps_host_port` label off an
-// existing container, if any. Returns (0, false) when the container is
-// absent or unlabelled.
-func hostPortForContainer(name string) (int, bool) {
-	out, err := utils.RunChecked("podman",
-		[]string{"inspect", "--format", "{{ index .Config.Labels \"" + hostPortLabel + "\" }}", name},
-		"",
-	)
-	if err != nil {
-		return 0, false
-	}
-	port, err := strconv.Atoi(strings.TrimSpace(string(out)))
-	if err != nil || port <= 0 {
-		return 0, false
-	}
-	return port, true
-}
-
-// globalUsedHostPorts returns every host port currently advertised by
-// any simple-vps-managed container via the `simple_vps_host_port`
-// label, so the allocator never collides across apps or envs.
-func globalUsedHostPorts() (map[int]bool, error) {
-	out, err := utils.RunChecked("podman",
-		[]string{"ps", "-a", "--format", "{{ index .Labels \"" + hostPortLabel + "\" }}"},
-		"",
-	)
-	if err != nil {
-		return nil, fmt.Errorf("podman ps: %v", err)
-	}
-	used := make(map[int]bool)
-	for _, line := range splitNonEmptyLines(string(out)) {
-		if port, err := strconv.Atoi(strings.TrimSpace(line)); err == nil && port > 0 {
-			used[port] = true
-		}
-	}
-	return used, nil
 }
 
 func renderEnvFile(vals map[string]string) string {
@@ -323,7 +226,7 @@ func writeEnvFile(app, env string, vals map[string]string) error {
 	return nil
 }
 
-func startService(app, env, svcName string, svc config.Service, imageTag, userID, groupID string, hostPort int) error {
+func startService(app, env, svcName string, svc config.Service, imageTag, userID, groupID string) error {
 	containerName := identity.ContainerName(app, env, svcName)
 	envFile := identity.EnvFile(app, env)
 	shared := identity.SharedDir(app, env)
@@ -337,7 +240,8 @@ func startService(app, env, svcName string, svc config.Service, imageTag, userID
 	// rootfs with a small writable tmpfs at /tmp. Manifest-driven
 	// `--memory` and `--cpus` limits, and `--cap-add=NET_BIND_SERVICE`
 	// for services binding <1024, require schema additions and land in
-	// a follow-up PR.
+	// a follow-up PR. No `--publish`: Caddy reaches the service over
+	// the shared `ingress` network by container DNS (ADR-0006 Cut 2).
 	args := []string{
 		"run", "-d",
 		"--name", containerName,
@@ -358,18 +262,6 @@ func startService(app, env, svcName string, svc config.Service, imageTag, userID
 	if _, err := os.Stat(envFile); err == nil {
 		args = append(args, "--env-file", envFile)
 	}
-	if svc.Port != nil && hostPort > 0 {
-		// Host-loopback publish via the allocated port so Caddy on the
-		// host can reverse-proxy without joining Podman's network plane
-		// (ADR-0005 §16). The allocation is recorded on the container
-		// itself via the `simple_vps_host_port` label so the next deploy
-		// can reuse the same port. The `ingress` network drops out of
-		// the routing path until Caddy-in-container lands.
-		args = append(args,
-			"--publish", fmt.Sprintf("127.0.0.1:%d:%d", hostPort, *svc.Port),
-			"--label", hostPortLabel+"="+strconv.Itoa(hostPort),
-		)
-	}
 	args = append(args, imageTag)
 	if svc.Command != "" {
 		// Override the image CMD via /bin/sh -c so users can write the
@@ -381,8 +273,8 @@ func startService(app, env, svcName string, svc config.Service, imageTag, userID
 		return fmt.Errorf("podman run %s: %v", containerName, err)
 	}
 
-	if svc.Port != nil && hostPort > 0 && svc.Healthcheck != "" {
-		if err := waitHealthy(hostPort, svc.Healthcheck, healthcheckTimeout(svc)); err != nil {
+	if svc.Port != nil && svc.Healthcheck != "" {
+		if err := waitHealthy(containerName, *svc.Port, svc.Healthcheck, healthcheckTimeout(svc)); err != nil {
 			// Surface logs on failure so the user can see why.
 			out, _ := exec.Command("podman", "logs", "--tail", "50", containerName).CombinedOutput()
 			os.Stderr.Write(out)
@@ -399,22 +291,26 @@ func healthcheckTimeout(svc config.Service) time.Duration {
 	return 30 * time.Second
 }
 
-func waitHealthy(port int, path string, timeout time.Duration) error {
-	url := fmt.Sprintf("http://127.0.0.1:%d%s", port, path)
+// waitHealthy probes the app container's healthcheck via Caddy on the
+// shared `ingress` network. The helper itself runs on the host and is
+// not a member of `ingress`, so it can't talk to the app container's
+// DNS name directly. The Caddy container is on `ingress` by design and
+// ships busybox `wget` — exec the probe inside it.
+func waitHealthy(containerName string, port int, path string, timeout time.Duration) error {
+	url := fmt.Sprintf("http://%s:%d%s", containerName, port, path)
 	deadline := time.Now().Add(timeout)
-	client := &http.Client{Timeout: 2 * time.Second}
 	var lastErr error
 	for time.Now().Before(deadline) {
-		resp, err := client.Get(url)
+		cmd := exec.Command("podman", "exec", "caddy", "wget", "-q", "-O", "-", "--timeout=2", url)
+		out, err := cmd.CombinedOutput()
 		if err == nil {
-			resp.Body.Close()
-			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-				return nil
-			}
-			lastErr = fmt.Errorf("status %d", resp.StatusCode)
-		} else {
-			lastErr = err
+			return nil
 		}
+		detail := strings.TrimSpace(string(out))
+		if detail == "" {
+			detail = err.Error()
+		}
+		lastErr = fmt.Errorf("%s: %s", url, detail)
 		time.Sleep(500 * time.Millisecond)
 	}
 	if lastErr == nil {
@@ -427,7 +323,7 @@ func caddyfilePath(app, env string) string {
 	return fmt.Sprintf("/etc/caddy/conf.d/simple-vps-%s-%s.caddy", app, env)
 }
 
-func renderAppCaddyfile(ctx *config.AppContext, servicePorts map[string]int) (string, error) {
+func renderAppCaddyfile(app, env string, ctx *config.AppContext) (string, error) {
 	var blocks []string
 	for _, name := range sortedKeys(ctx.Routes) {
 		route := ctx.Routes[name]
@@ -438,11 +334,12 @@ func renderAppCaddyfile(ctx *config.AppContext, servicePorts map[string]int) (st
 			if !ok || svc.Port == nil {
 				return "", fmt.Errorf("route %q references service %q with no port", name, route.Service)
 			}
-			hostPort := servicePorts[route.Service]
-			if hostPort <= 0 {
-				return "", fmt.Errorf("route %q: no host port allocated for service %q", name, route.Service)
-			}
-			body = fmt.Sprintf("\treverse_proxy 127.0.0.1:%d\n", hostPort)
+			// Container DNS over the shared `ingress` network
+			// (ADR-0006 Cut 2): Caddy reaches each service by the
+			// per-(app, env, service) container name. No host-loopback
+			// hop, no port allocator.
+			upstream := identity.ContainerName(app, env, route.Service)
+			body = fmt.Sprintf("\treverse_proxy http://%s:%d\n", upstream, *svc.Port)
 		case "redirect":
 			// Quote the destination so a hostile value can't inject extra
 			// Caddyfile directives. Manifest validation only enforces an
@@ -472,8 +369,8 @@ func renderAppCaddyfile(ctx *config.AppContext, servicePorts map[string]int) (st
 	return "# generated by simple-vps server app apply — do not edit\n" + strings.Join(blocks, "\n"), nil
 }
 
-func writeAppCaddyfile(app, env string, ctx *config.AppContext, servicePorts map[string]int) error {
-	content, err := renderAppCaddyfile(ctx, servicePorts)
+func writeAppCaddyfile(app, env string, ctx *config.AppContext) error {
+	content, err := renderAppCaddyfile(app, env, ctx)
 	if err != nil {
 		return err
 	}

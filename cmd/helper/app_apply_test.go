@@ -31,7 +31,10 @@ func TestRenderEnvFileEmptyMapProducesEmptyString(t *testing.T) {
 	}
 }
 
-func TestRenderAppCaddyfileProxyRoute(t *testing.T) {
+func TestRenderAppCaddyfileProxyRouteUsesContainerDNS(t *testing.T) {
+	// Per ADR-0006 Cut 2: Caddy reaches each service over the shared
+	// `ingress` Podman network by container name, not by host-loopback
+	// port. The fragment must encode that exact name.
 	port := 3000
 	ctx := &config.AppContext{
 		Services: map[string]config.Service{
@@ -45,21 +48,18 @@ func TestRenderAppCaddyfileProxyRoute(t *testing.T) {
 			},
 		},
 	}
-	got, err := renderAppCaddyfile(ctx, map[string]int{"web": 33000})
+	got, err := renderAppCaddyfile("api", "production", ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(got, `"api.example.com" {`) {
 		t.Fatalf("expected quoted host block, got:\n%s", got)
 	}
-	// The reverse_proxy must point at the ALLOCATED host port, not the
-	// in-container service port. Two apps both declaring `port = 3000`
-	// would otherwise collide on the host loopback bind.
-	if !strings.Contains(got, "reverse_proxy 127.0.0.1:33000") {
-		t.Fatalf("expected reverse_proxy at allocated host port, got:\n%s", got)
+	if !strings.Contains(got, "reverse_proxy http://app-api-production-web:3000") {
+		t.Fatalf("expected container-DNS reverse_proxy, got:\n%s", got)
 	}
-	if strings.Contains(got, "reverse_proxy 127.0.0.1:3000") {
-		t.Fatalf("rendered Caddyfile points at the in-container port instead of the allocated host port:\n%s", got)
+	if strings.Contains(got, "127.0.0.1") {
+		t.Fatalf("rendered Caddyfile still uses host loopback:\n%s", got)
 	}
 }
 
@@ -73,7 +73,7 @@ func TestRenderAppCaddyfileRedirectRoute(t *testing.T) {
 			},
 		},
 	}
-	got, err := renderAppCaddyfile(ctx, nil)
+	got, err := renderAppCaddyfile("api", "production", ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +96,7 @@ func TestRenderAppCaddyfileSkipsStaticRoutes(t *testing.T) {
 			},
 		},
 	}
-	got, err := renderAppCaddyfile(ctx, nil)
+	got, err := renderAppCaddyfile("site", "production", ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,30 +118,8 @@ func TestRenderAppCaddyfileRejectsProxyWithoutServicePort(t *testing.T) {
 			},
 		},
 	}
-	if _, err := renderAppCaddyfile(ctx, nil); err == nil {
+	if _, err := renderAppCaddyfile("api", "production", ctx); err == nil {
 		t.Fatal("expected error for proxy route pointing at portless service")
-	}
-}
-
-func TestRenderAppCaddyfileRejectsProxyWithoutAllocatedPort(t *testing.T) {
-	// Defense in depth: even if a port-having service slips into the
-	// route table, render must refuse when the allocator hasn't given
-	// it a host port.
-	port := 3000
-	ctx := &config.AppContext{
-		Services: map[string]config.Service{
-			"web": {Port: &port},
-		},
-		Routes: map[string]config.Route{
-			"r": {
-				Host:    "x.example.com",
-				Type:    "proxy",
-				Service: "web",
-			},
-		},
-	}
-	if _, err := renderAppCaddyfile(ctx, map[string]int{}); err == nil {
-		t.Fatal("expected error when allocator returned no host port")
 	}
 }
 
@@ -154,39 +132,8 @@ func TestRenderAppCaddyfileRejectsUnknownRouteType(t *testing.T) {
 			},
 		},
 	}
-	if _, err := renderAppCaddyfile(ctx, nil); err == nil {
+	if _, err := renderAppCaddyfile("api", "production", ctx); err == nil {
 		t.Fatal("expected error for unknown route type")
-	}
-}
-
-func TestPickHostPortReturnsLowestFreePort(t *testing.T) {
-	used := map[int]bool{33000: true, 33001: true, 33003: true}
-	got, err := pickHostPort(used, 33000, 34000)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got != 33002 {
-		t.Fatalf("expected 33002, got %d", got)
-	}
-}
-
-func TestPickHostPortReturnsFirstWhenAllFree(t *testing.T) {
-	got, err := pickHostPort(map[int]bool{}, 33000, 34000)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got != 33000 {
-		t.Fatalf("expected 33000, got %d", got)
-	}
-}
-
-func TestPickHostPortErrorsWhenRangeExhausted(t *testing.T) {
-	used := map[int]bool{}
-	for p := 33000; p < 33003; p++ {
-		used[p] = true
-	}
-	if _, err := pickHostPort(used, 33000, 33003); err == nil {
-		t.Fatal("expected error when range is exhausted")
 	}
 }
 
@@ -204,7 +151,7 @@ func TestRenderAppCaddyfileQuotesHostAndRedirectTarget(t *testing.T) {
 			},
 		},
 	}
-	got, err := renderAppCaddyfile(ctx, nil)
+	got, err := renderAppCaddyfile("api", "production", ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -226,7 +173,7 @@ func TestRenderAppCaddyfileRejectsRedirectTargetWithNewline(t *testing.T) {
 			},
 		},
 	}
-	if _, err := renderAppCaddyfile(ctx, nil); err == nil {
+	if _, err := renderAppCaddyfile("api", "production", ctx); err == nil {
 		t.Fatal("expected error for redirect target containing a newline")
 	}
 }
@@ -234,7 +181,7 @@ func TestRenderAppCaddyfileRejectsRedirectTargetWithNewline(t *testing.T) {
 func TestSnapshotAndRestoreCaddyFragmentRoundTrips(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "frag.caddy")
-	original := []byte("api.example.com {\n\treverse_proxy 127.0.0.1:33000\n}\n")
+	original := []byte("\"api.example.com\" {\n\treverse_proxy http://app-api-production-web:3000\n}\n")
 	if err := os.WriteFile(path, original, 0644); err != nil {
 		t.Fatal(err)
 	}

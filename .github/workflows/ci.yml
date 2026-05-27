@@ -15,7 +15,12 @@ jobs:
         run: make shell-test
       - name: Shellcheck
         run: |
-          shellcheck install.sh tests/fake-vps/fake-*
+          # `tests/fake-vps/fake-*` includes non-shell helpers
+          # (fake-podman.app.py, fake-podman.caddy.py) — exclude
+          # anything with an extension so shellcheck only sees the
+          # shell scripts.
+          shell_scripts=$(find tests/fake-vps -maxdepth 1 -type f -name 'fake-*' ! -name '*.*')
+          shellcheck install.sh $shell_scripts
 
   go:
     runs-on: ubuntu-latest
