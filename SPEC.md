@@ -241,16 +241,17 @@ finds, downloads, or builds a Go binary, then execs `simple-vps host install`.
 ```text
 # on a fresh box, ssh'd as root:
 curl -fsSL https://simple-vps.dev/install.sh | bash \
-    --ingress public \
     --deploy-ssh-public-key-file ~/.ssh/simple-vps-deploy.pub
 
 # or from a laptop, against a fresh box:
 ./install.sh --mode remote --host <ip> --bootstrap-user root \
     --ssh-key ~/.ssh/id_ed25519 \
-    --ingress public \
     --operator-ssh-public-key-file ~/.ssh/id_ed25519.pub \
     --deploy-ssh-public-key-file ~/.ssh/simple-vps-deploy.pub
 ```
+
+The default install opens host ports 80 / 443 publicly (the ADR-0002
+"public" ingress preset, today reached by omitting any tunnel flag).
 
 `install.sh` supports both remote-from-laptop and local-on-box modes.
 The Go command underneath accepts the same flags:
@@ -259,12 +260,18 @@ The Go command underneath accepts the same flags:
 simple-vps host install --mode remote --host <ip> --bootstrap-user root
 ```
 
-Cloudflare Tunnel and Tailscale admin access are supported install modes,
-not required product identity:
+Cloudflare Tunnel and Tailscale are opt-in, switched on by their own
+negatable flags. The `--ingress` and `--admin` preset model from
+[docs/security-model.md](docs/security-model.md) is the durable
+contract and the planned shape; today you reach the same outcomes
+through the individual flags:
 
 ```bash
-simple-vps host install --ingress cloudflare --cloudflare-tunnel-token=...
-simple-vps host install --admin tailscale --tailscale-auth-key=...
+# Cloudflare Tunnel terminates ingress instead of the public 80/443:
+simple-vps host install --cloudflare-tunnel --cloudflare-tunnel-token=...
+
+# Tailscale admin access (operator user reachable over the tailnet):
+simple-vps host install --tailscale --tailscale-auth-key=...
 ```
 
 After install, the primary checks are:
