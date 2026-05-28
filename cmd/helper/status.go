@@ -1,6 +1,7 @@
 package helper
 
 import (
+	"encoding/json"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -10,10 +11,12 @@ import (
 	"github.com/fprl/simple-vps/internal/utils"
 )
 
-type statusCmd struct{}
+type statusCmd struct {
+	JSON bool `name:"json" help:"Emit structured JSON instead of the text summary."`
+}
 
-func (statusCmd) Run() error {
-	CmdStatus()
+func (c statusCmd) Run() error {
+	CmdStatus(c.JSON)
 	return nil
 }
 
@@ -34,25 +37,88 @@ func toolStatus(tool string) string {
 	return "installed"
 }
 
-func CmdStatus() {
-	lines, err := statusStateLines(store.Default())
+func CmdStatus(jsonFlag bool) {
+	report, err := hostStatusReportFor(store.Default(), host.SystemServiceStatus, toolStatus)
 	if err != nil {
 		utils.Die(err.Error(), 1)
 	}
-	fmt.Println("Simple VPS")
-	for _, line := range lines {
-		fmt.Println(line)
+	if jsonFlag {
+		buf, err := json.MarshalIndent(report, "", "  ")
+		if err != nil {
+			utils.Die(err.Error(), 1)
+		}
+		fmt.Println(string(buf))
+		return
 	}
-	fmt.Println("services:")
+	fmt.Print(renderHostStatusText(report))
+}
+
+type hostStatusReport struct {
+	State    hostStateStatus   `json:"state"`
+	Services map[string]string `json:"services"`
+	Tools    map[string]string `json:"tools"`
+}
+
+type hostStateStatus struct {
+	Status    string `json:"status"`
+	Installed bool   `json:"installed"`
+	Path      string `json:"path"`
+}
+
+func hostStatusReportFor(stateStore store.Store, serviceStatus func(string) string, toolStatus func(string) string) (hostStatusReport, error) {
+	installed, err := stateStore.HostInstalled()
+	if err != nil {
+		return hostStatusReport{}, err
+	}
+
+	stateStatus := "not_installed"
+	if installed {
+		stateStatus = "installed"
+	}
+
+	report := hostStatusReport{
+		State: hostStateStatus{
+			Status:    stateStatus,
+			Installed: installed,
+			Path:      stateStore.HostPath(),
+		},
+		Services: map[string]string{},
+		Tools:    map[string]string{},
+	}
 	for _, service := range []string{"tailscaled", "cloudflared", "caddy"} {
-		fmt.Printf("  %s: %s\n", service, host.SystemServiceStatus(service))
+		report.Services[service] = serviceStatus(service)
 	}
 	// Post-cutover host footprint per ADR-0005 §14: the helper itself
 	// (on PATH, implied), Podman, Caddy, rsync.
-	fmt.Println("tools:")
 	for _, tool := range []string{"podman", "caddy", "rsync"} {
-		fmt.Printf("  %s: %s\n", tool, toolStatus(tool))
+		report.Tools[tool] = toolStatus(tool)
 	}
+	return report, nil
+}
+
+func renderHostStatusText(report hostStatusReport) string {
+	var b strings.Builder
+	b.WriteString("Simple VPS\n")
+	for _, line := range hostStatusStateLines(report.State) {
+		b.WriteString(line)
+		b.WriteByte('\n')
+	}
+	b.WriteString("services:\n")
+	for _, service := range []string{"tailscaled", "cloudflared", "caddy"} {
+		fmt.Fprintf(&b, "  %s: %s\n", service, report.Services[service])
+	}
+	b.WriteString("tools:\n")
+	for _, tool := range []string{"podman", "caddy", "rsync"} {
+		fmt.Fprintf(&b, "  %s: %s\n", tool, report.Tools[tool])
+	}
+	return b.String()
+}
+
+func hostStatusStateLines(state hostStateStatus) []string {
+	if state.Installed {
+		return []string{fmt.Sprintf("state: installed (%s)", state.Path)}
+	}
+	return []string{fmt.Sprintf("state: not installed (missing %s)", state.Path)}
 }
 
 // statusStateLines reports the host-install state only. Per-app/per-env
@@ -65,8 +131,13 @@ func statusStateLines(stateStore store.Store) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	status := "not_installed"
 	if installed {
-		return []string{fmt.Sprintf("state: installed (%s)", stateStore.HostPath())}, nil
+		status = "installed"
 	}
-	return []string{fmt.Sprintf("state: not installed (missing %s)", stateStore.HostPath())}, nil
+	return hostStatusStateLines(hostStateStatus{
+		Status:    status,
+		Installed: installed,
+		Path:      stateStore.HostPath(),
+	}), nil
 }

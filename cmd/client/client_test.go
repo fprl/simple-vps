@@ -74,6 +74,22 @@ func TestParseServerFlagRejectsSshOptions(t *testing.T) {
 	}
 }
 
+func TestParseHostFlagsAllowsJsonAroundSubcommand(t *testing.T) {
+	flags, err := parseHostFlags([]string{"--json", "doctor", "--server", "deploy@example.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !flags.json {
+		t.Fatal("expected json flag")
+	}
+	if flags.server != "deploy@example.com" {
+		t.Fatalf("unexpected server: %s", flags.server)
+	}
+	if got := strings.Join(flags.rest, " "); got != "doctor" {
+		t.Fatalf("unexpected rest: %q", got)
+	}
+}
+
 func TestValidateArtifactDotenvRejectsSecretsButAllowsExamples(t *testing.T) {
 	root := t.TempDir()
 	for _, name := range []string{".env.example", ".env.sample", ".env.defaults"} {
@@ -121,6 +137,57 @@ func TestServerAppDestroyEnvCommand(t *testing.T) {
 	want = "sudo simple-vps server app destroy-env --purge api production"
 	if got != want {
 		t.Fatalf("unexpected purge command:\nwant: %s\n got: %s", want, got)
+	}
+}
+
+func TestServerHostReadCommandsSupportJSON(t *testing.T) {
+	tests := []struct {
+		name string
+		got  string
+		want string
+	}{
+		{
+			name: "status text",
+			got:  serverStatusCommand(false),
+			want: "sudo simple-vps server status",
+		},
+		{
+			name: "status json",
+			got:  serverStatusCommand(true),
+			want: "sudo simple-vps server status --json",
+		},
+		{
+			name: "doctor text",
+			got:  serverDoctorCommand(false),
+			want: "sudo simple-vps server doctor",
+		},
+		{
+			name: "doctor json",
+			got:  serverDoctorCommand(true),
+			want: "sudo simple-vps server doctor --json",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.got != tt.want {
+				t.Fatalf("unexpected command:\nwant: %s\n got: %s", tt.want, tt.got)
+			}
+		})
+	}
+}
+
+func TestServerAppSecretListCommandSupportsJSON(t *testing.T) {
+	got := serverAppSecretListCommand("api", "production", false)
+	want := "sudo simple-vps server app secret list api production"
+	if got != want {
+		t.Fatalf("unexpected command:\nwant: %s\n got: %s", want, got)
+	}
+
+	got = serverAppSecretListCommand("api", "production", true)
+	want = "sudo simple-vps server app secret list --json api production"
+	if got != want {
+		t.Fatalf("unexpected json command:\nwant: %s\n got: %s", want, got)
 	}
 }
 

@@ -134,11 +134,12 @@ func (c secretPutCmd) Run() error {
 }
 
 type secretListCmd struct {
-	Env string `arg:"" help:"Environment to list."`
+	Env  string `arg:"" help:"Environment to list."`
+	JSON bool   `name:"json" help:"Emit structured JSON instead of plain key lines."`
 }
 
 func (c secretListCmd) Run() error {
-	client.CmdSecretList(".", c.Env)
+	client.CmdSecretList(".", c.Env, c.JSON)
 	return nil
 }
 
@@ -160,10 +161,14 @@ type hostCmd struct {
 
 type hostStatusCmd struct {
 	Server string `help:"SSH target like deploy@example.com."`
+	JSON   bool   `name:"json" help:"Emit structured JSON instead of the text summary."`
 }
 
 func (c hostStatusCmd) Run() error {
 	args := []string{"status"}
+	if c.JSON {
+		args = append(args, "--json")
+	}
 	if c.Server != "" {
 		args = append(args, "--server", c.Server)
 	}
@@ -173,10 +178,14 @@ func (c hostStatusCmd) Run() error {
 
 type hostDoctorCmd struct {
 	Server string `help:"SSH target like deploy@example.com."`
+	JSON   bool   `name:"json" help:"Emit structured JSON instead of the text summary."`
 }
 
 func (c hostDoctorCmd) Run() error {
 	args := []string{"doctor"}
+	if c.JSON {
+		args = append(args, "--json")
+	}
 	if c.Server != "" {
 		args = append(args, "--server", c.Server)
 	}

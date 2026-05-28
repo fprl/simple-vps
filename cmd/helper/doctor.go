@@ -2,6 +2,7 @@ package helper
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -17,10 +18,12 @@ var (
 	HelperSudoRe = regexp.MustCompile(`^([a-z_][a-z0-9_-]{0,31}\$?)\s+ALL=\(root\)\s+NOPASSWD:\s*/usr/local/bin/simple-vps$`)
 )
 
-type doctorCmd struct{}
+type doctorCmd struct {
+	JSON bool `name:"json" help:"Emit structured JSON instead of the text summary."`
+}
 
-func (doctorCmd) Run() error {
-	CmdDoctor()
+func (c doctorCmd) Run() error {
+	CmdDoctor(c.JSON)
 	return nil
 }
 
@@ -138,28 +141,69 @@ func doctorIdentityFindings() []string {
 	return findings
 }
 
-func CmdDoctor() {
+func CmdDoctor(jsonFlag bool) {
 	stateFindings := doctorStateFindings(store.Default())
 	identityFindings := doctorIdentityFindings()
-	fmt.Println("Simple VPS doctor")
-	if len(stateFindings) > 0 {
-		fmt.Println("state: degraded")
-		for _, f := range stateFindings {
-			fmt.Printf("  - %s\n", f)
+	report := doctorReportFor(stateFindings, identityFindings)
+
+	if jsonFlag {
+		buf, err := json.MarshalIndent(report, "", "  ")
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
 		}
+		fmt.Println(string(buf))
 	} else {
-		fmt.Println("state: healthy")
+		fmt.Print(renderDoctorText(report))
 	}
-	if len(identityFindings) > 0 {
-		fmt.Println("identity: degraded")
-		for _, f := range identityFindings {
-			fmt.Printf("  - %s\n", f)
-		}
-	} else {
-		fmt.Println("identity: healthy")
-	}
-	if len(stateFindings) > 0 || len(identityFindings) > 0 {
+	if !report.Healthy {
 		os.Exit(1)
+	}
+}
+
+type doctorReport struct {
+	State    doctorSection `json:"state"`
+	Identity doctorSection `json:"identity"`
+	Healthy  bool          `json:"healthy"`
+}
+
+type doctorSection struct {
+	Status   string   `json:"status"`
+	Findings []string `json:"findings"`
+}
+
+func doctorReportFor(stateFindings []string, identityFindings []string) doctorReport {
+	report := doctorReport{
+		State:    doctorSectionFor(stateFindings),
+		Identity: doctorSectionFor(identityFindings),
+	}
+	report.Healthy = report.State.Status == "healthy" && report.Identity.Status == "healthy"
+	return report
+}
+
+func doctorSectionFor(findings []string) doctorSection {
+	status := "healthy"
+	if len(findings) > 0 {
+		status = "degraded"
+	}
+	if findings == nil {
+		findings = []string{}
+	}
+	return doctorSection{Status: status, Findings: findings}
+}
+
+func renderDoctorText(report doctorReport) string {
+	var b strings.Builder
+	b.WriteString("Simple VPS doctor\n")
+	writeDoctorSectionText(&b, "state", report.State)
+	writeDoctorSectionText(&b, "identity", report.Identity)
+	return b.String()
+}
+
+func writeDoctorSectionText(b *strings.Builder, name string, section doctorSection) {
+	fmt.Fprintf(b, "%s: %s\n", name, section.Status)
+	for _, f := range section.Findings {
+		fmt.Fprintf(b, "  - %s\n", f)
 	}
 }
 

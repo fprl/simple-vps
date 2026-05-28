@@ -161,6 +161,24 @@ func (e *smokeEnv) assertHostDoctorNotInstalled(t *testing.T) {
 	output := result.stdout + result.stderr
 	assertContains(t, output, "failed to run doctor")
 	assertContains(t, output, "host is not installed")
+
+	jsonResult := e.runSimpleVPS(t, e.repoRoot, nil, "host", "doctor", "--json", "--server", "fake-vps")
+	if jsonResult.err == nil {
+		t.Fatalf("host doctor --json passed before install\nstdout:\n%s\nstderr:\n%s", jsonResult.stdout, jsonResult.stderr)
+	}
+	var payload struct {
+		State struct {
+			Status   string   `json:"status"`
+			Findings []string `json:"findings"`
+		} `json:"state"`
+		Healthy bool `json:"healthy"`
+	}
+	if err := json.Unmarshal([]byte(jsonResult.stdout), &payload); err != nil {
+		t.Fatalf("host doctor --json output not parseable as JSON: %v\nstdout:\n%s\nstderr:\n%s", err, jsonResult.stdout, jsonResult.stderr)
+	}
+	if payload.Healthy || payload.State.Status != "degraded" || len(payload.State.Findings) == 0 {
+		t.Fatalf("unexpected degraded doctor payload: %+v", payload)
+	}
 }
 
 func (e *smokeEnv) assertHostDoctorHealthy(t *testing.T) {
@@ -169,6 +187,45 @@ func (e *smokeEnv) assertHostDoctorHealthy(t *testing.T) {
 	assertContains(t, output, "Simple VPS doctor")
 	assertContains(t, output, "state: healthy")
 	assertContains(t, output, "identity: healthy")
+
+	rawDoctorJSON := e.simpleVPS(t, e.repoRoot, nil, "host", "doctor", "--json", "--server", "fake-vps")
+	var doctorPayload struct {
+		State struct {
+			Status   string   `json:"status"`
+			Findings []string `json:"findings"`
+		} `json:"state"`
+		Identity struct {
+			Status   string   `json:"status"`
+			Findings []string `json:"findings"`
+		} `json:"identity"`
+		Healthy bool `json:"healthy"`
+	}
+	if err := json.Unmarshal([]byte(rawDoctorJSON), &doctorPayload); err != nil {
+		t.Fatalf("host doctor --json output not parseable as JSON: %v\nraw:\n%s", err, rawDoctorJSON)
+	}
+	if !doctorPayload.Healthy || doctorPayload.State.Status != "healthy" || doctorPayload.Identity.Status != "healthy" {
+		t.Fatalf("unexpected healthy doctor payload: %+v", doctorPayload)
+	}
+
+	rawStatusJSON := e.simpleVPS(t, e.repoRoot, nil, "host", "status", "--json", "--server", "fake-vps")
+	var statusPayload struct {
+		State struct {
+			Status    string `json:"status"`
+			Installed bool   `json:"installed"`
+			Path      string `json:"path"`
+		} `json:"state"`
+		Services map[string]string `json:"services"`
+		Tools    map[string]string `json:"tools"`
+	}
+	if err := json.Unmarshal([]byte(rawStatusJSON), &statusPayload); err != nil {
+		t.Fatalf("host status --json output not parseable as JSON: %v\nraw:\n%s", err, rawStatusJSON)
+	}
+	if !statusPayload.State.Installed || statusPayload.State.Status != "installed" || statusPayload.State.Path != "/etc/simple-vps/host.json" {
+		t.Fatalf("unexpected host status payload: %+v", statusPayload)
+	}
+	if statusPayload.Services["caddy"] == "" || statusPayload.Tools["podman"] == "" {
+		t.Fatalf("host status --json missing service/tool data: %+v", statusPayload)
+	}
 }
 
 // changedOperationsFromHostState reads /etc/simple-vps/host.json from
