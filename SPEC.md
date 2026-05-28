@@ -232,6 +232,11 @@ Services are long-running containers from the app image. Service commands
 accept string form and array form; array form is recommended for commands
 with arguments because it avoids shell quoting.
 
+Service-level hardening knobs map to the closed §7 Podman flag set:
+`memory = "512m"`, `cpus = 0.5`, `net_bind_service = true`, and
+`[services.<name>.tmpfs]` entries for additional writable scratch under a
+read-only rootfs.
+
 Migrations are a deploy concern, not a separate verb. v1 users can run
 migrations from the image's startup wrapper (`migrate && serve`). A future
 ADR may add a `predeploy` hook.

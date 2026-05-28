@@ -389,6 +389,79 @@ healthcheck = "/health"
 	}
 }
 
+func TestCheckManifestAcceptsServiceResourceCapsAndNetBindService(t *testing.T) {
+	root := t.TempDir()
+	writeDockerfile(t, root)
+	writeManifest(t, root, `
+name = "api"
+
+[env.production]
+server = "deploy@100.x.y.z"
+
+[services.web]
+port = 3000
+healthcheck = "/health"
+memory = "512m"
+cpus = 0.5
+net_bind_service = true
+`)
+	if errors := checkErrors(t, root, "production"); len(errors) != 0 {
+		t.Fatalf("expected no errors, got %v", errors)
+	}
+
+	ctx, err := LoadAppContext(root, "production")
+	if err != nil {
+		t.Fatal(err)
+	}
+	web := ctx.Services["web"]
+	if web.Memory == nil || *web.Memory != "512m" {
+		t.Fatalf("expected memory to load as 512m, got %#v", web.Memory)
+	}
+	if web.CPUs == nil || *web.CPUs != 0.5 {
+		t.Fatalf("expected cpus to load as 0.5, got %#v", web.CPUs)
+	}
+	if web.NetBindService == nil || !*web.NetBindService {
+		t.Fatalf("expected net_bind_service to load true, got %#v", web.NetBindService)
+	}
+}
+
+func TestLoadAppContextEnvServiceOverridesResourceCapsAndNetBindService(t *testing.T) {
+	root := t.TempDir()
+	writeDockerfile(t, root)
+	writeManifest(t, root, `
+name = "api"
+
+[env.production]
+server = "deploy@100.x.y.z"
+
+[services.web]
+port = 3000
+healthcheck = "/health"
+memory = "512m"
+cpus = 0.5
+net_bind_service = true
+
+[env.production.services.web]
+memory = "1g"
+cpus = 2
+net_bind_service = false
+`)
+	ctx, err := LoadAppContext(root, "production")
+	if err != nil {
+		t.Fatal(err)
+	}
+	web := ctx.Services["web"]
+	if web.Memory == nil || *web.Memory != "1g" {
+		t.Fatalf("expected env memory override, got %#v", web.Memory)
+	}
+	if web.CPUs == nil || *web.CPUs != 2 {
+		t.Fatalf("expected env cpus override, got %#v", web.CPUs)
+	}
+	if web.NetBindService == nil || *web.NetBindService {
+		t.Fatalf("expected env net_bind_service override to false, got %#v", web.NetBindService)
+	}
+}
+
 func TestCheckManifestRejectsRelativeTmpfsPath(t *testing.T) {
 	root := t.TempDir()
 	writeDockerfile(t, root)
@@ -510,6 +583,56 @@ healthcheck = "/health"
 `, bad))
 			errors := checkErrors(t, root, "production")
 			want := fmt.Sprintf(`[services.web.tmpfs]."/var/cache" size %q must match ^[1-9][0-9]*(k|m|g)$`, bad)
+			if !slices.Contains(errors, want) {
+				t.Fatalf("expected %q, got %v", want, errors)
+			}
+		})
+	}
+}
+
+func TestCheckManifestRejectsBadMemoryLimit(t *testing.T) {
+	for _, bad := range []string{"", "512", "512M", "512MiB", "1.5g", "0m", "g", "abc", "512m ", " 512m"} {
+		t.Run("memory="+bad, func(t *testing.T) {
+			root := t.TempDir()
+			writeDockerfile(t, root)
+			writeManifest(t, root, fmt.Sprintf(`
+name = "api"
+
+[env.production]
+server = "deploy@100.x.y.z"
+
+[services.web]
+port = 3000
+healthcheck = "/health"
+memory = %q
+`, bad))
+			errors := checkErrors(t, root, "production")
+			want := fmt.Sprintf(`[services.web].memory %q must match ^[1-9][0-9]*(k|m|g)$`, bad)
+			if !slices.Contains(errors, want) {
+				t.Fatalf("expected %q, got %v", want, errors)
+			}
+		})
+	}
+}
+
+func TestCheckManifestRejectsBadCPUQuota(t *testing.T) {
+	for _, bad := range []string{"0", "-0.5"} {
+		t.Run("cpus="+bad, func(t *testing.T) {
+			root := t.TempDir()
+			writeDockerfile(t, root)
+			writeManifest(t, root, fmt.Sprintf(`
+name = "api"
+
+[env.production]
+server = "deploy@100.x.y.z"
+
+[services.web]
+port = 3000
+healthcheck = "/health"
+cpus = %s
+`, bad))
+			errors := checkErrors(t, root, "production")
+			want := `[services.web].cpus must be positive`
 			if !slices.Contains(errors, want) {
 				t.Fatalf("expected %q, got %v", want, errors)
 			}
