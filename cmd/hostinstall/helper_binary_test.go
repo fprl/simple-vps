@@ -35,15 +35,15 @@ func TestPrepareRemoteHelperUsesConfiguredHelperDir(t *testing.T) {
 
 func TestPrepareRemoteHelperDownloadsReleaseAsset(t *testing.T) {
 	prev := version.Version
-	version.Version = "v9.9.9-test"
+	version.Version = "v9.9.9"
 	t.Cleanup(func() { version.Version = prev })
 
 	helper := []byte("downloaded-helper")
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/v9.9.9-test/simple-vps-linux-arm64":
+		case "/v9.9.9/simple-vps-linux-arm64":
 			_, _ = w.Write(helper)
-		case "/v9.9.9-test/SHA256SUMS":
+		case "/v9.9.9/SHA256SUMS":
 			_, _ = w.Write([]byte(sha256SumLine("simple-vps-linux-arm64", helper)))
 		default:
 			t.Fatalf("unexpected release asset path: %s", r.URL.Path)
@@ -77,7 +77,7 @@ func TestPrepareRemoteHelperDownloadsReleaseAsset(t *testing.T) {
 
 func TestPrepareRemoteHelperReleaseBuildPrefersDownloadOverRepoRoot(t *testing.T) {
 	prev := version.Version
-	version.Version = "v9.9.9-test"
+	version.Version = "v9.9.9"
 	t.Cleanup(func() { version.Version = prev })
 
 	sourceDir := t.TempDir()
@@ -101,9 +101,9 @@ func TestPrepareRemoteHelperReleaseBuildPrefersDownloadOverRepoRoot(t *testing.T
 	helper := []byte("downloaded-helper")
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/v9.9.9-test/simple-vps-linux-amd64":
+		case "/v9.9.9/simple-vps-linux-amd64":
 			_, _ = w.Write(helper)
-		case "/v9.9.9-test/SHA256SUMS":
+		case "/v9.9.9/SHA256SUMS":
 			_, _ = w.Write([]byte(sha256SumLine("simple-vps-linux-amd64", helper)))
 		default:
 			t.Fatalf("unexpected release asset path: %s", r.URL.Path)
@@ -130,7 +130,7 @@ func TestPrepareRemoteHelperReleaseBuildPrefersDownloadOverRepoRoot(t *testing.T
 
 func TestPrepareRemoteHelperUsesReleaseToken(t *testing.T) {
 	prev := version.Version
-	version.Version = "v9.9.9-test"
+	version.Version = "v9.9.9"
 	t.Cleanup(func() { version.Version = prev })
 
 	helper := []byte("downloaded-helper")
@@ -139,9 +139,9 @@ func TestPrepareRemoteHelperUsesReleaseToken(t *testing.T) {
 			t.Fatalf("unexpected authorization header: %q", got)
 		}
 		switch r.URL.Path {
-		case "/v9.9.9-test/simple-vps-linux-amd64":
+		case "/v9.9.9/simple-vps-linux-amd64":
 			_, _ = w.Write(helper)
-		case "/v9.9.9-test/SHA256SUMS":
+		case "/v9.9.9/SHA256SUMS":
 			_, _ = w.Write([]byte(sha256SumLine("simple-vps-linux-amd64", helper)))
 		default:
 			t.Fatalf("unexpected release asset path: %s", r.URL.Path)
@@ -164,7 +164,7 @@ func TestPrepareRemoteHelperUsesReleaseToken(t *testing.T) {
 
 func TestPrepareRemoteHelperFallsBackToGitHubAssetAPI(t *testing.T) {
 	prev := version.Version
-	version.Version = "v9.9.9-test"
+	version.Version = "v9.9.9"
 	t.Cleanup(func() { version.Version = prev })
 
 	var serverURL string
@@ -175,9 +175,9 @@ func TestPrepareRemoteHelperFallsBackToGitHubAssetAPI(t *testing.T) {
 		}
 
 		switch r.URL.Path {
-		case "/v9.9.9-test/simple-vps-linux-amd64", "/v9.9.9-test/SHA256SUMS":
+		case "/v9.9.9/simple-vps-linux-amd64", "/v9.9.9/SHA256SUMS":
 			http.NotFound(w, r)
-		case "/releases/tags/v9.9.9-test":
+		case "/releases/tags/v9.9.9":
 			w.Header().Set("Content-Type", "application/json")
 			fmt.Fprintf(w, `{"assets":[{"name":"simple-vps-linux-amd64","url":%q},{"name":"SHA256SUMS","url":%q}]}`, serverURL+"/assets/1", serverURL+"/assets/2")
 		case "/assets/1":
@@ -220,14 +220,14 @@ func TestPrepareRemoteHelperFallsBackToGitHubAssetAPI(t *testing.T) {
 
 func TestPrepareRemoteHelperRejectsChecksumMismatch(t *testing.T) {
 	prev := version.Version
-	version.Version = "v9.9.9-test"
+	version.Version = "v9.9.9"
 	t.Cleanup(func() { version.Version = prev })
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/v9.9.9-test/simple-vps-linux-amd64":
+		case "/v9.9.9/simple-vps-linux-amd64":
 			_, _ = w.Write([]byte("downloaded-helper"))
-		case "/v9.9.9-test/SHA256SUMS":
+		case "/v9.9.9/SHA256SUMS":
 			_, _ = w.Write([]byte("0000000000000000000000000000000000000000000000000000000000000000  simple-vps-linux-amd64\n"))
 		default:
 			t.Fatalf("unexpected release asset path: %s", r.URL.Path)
@@ -254,7 +254,7 @@ func TestReleaseVersionDetection(t *testing.T) {
 			t.Fatalf("%q should be treated as a release version", value)
 		}
 	}
-	for _, value := range []string{"dev", "v0.4.0-dirty", "aeadd20"} {
+	for _, value := range []string{"dev", "v0.4.0-dirty", "v0.4.2-7-gc0c1510", "aeadd20"} {
 		if isReleaseVersion(value) {
 			t.Fatalf("%q should not be treated as a release version", value)
 		}

@@ -64,7 +64,7 @@ curl -fsSL https://raw.githubusercontent.com/fprl/simple-vps/main/install.sh \
 chmod 0755 install.sh
 ```
 
-The installer downloads the `v0.4.2` release asset that matches your platform
+The installer downloads the `v0.4.3` release asset that matches your platform
 and verifies it against `SHA256SUMS`. From macOS, remote install also downloads
 and verifies the matching Linux helper binary for the target VPS.
 
@@ -135,7 +135,7 @@ Build all release binaries:
 
 ```bash
 make clean
-make build-release VERSION=v0.4.2
+make build-release VERSION=v0.4.3
 ```
 
 Artifacts land in `dist/`:

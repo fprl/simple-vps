@@ -37,12 +37,12 @@ coverage from day one of this ADR's implementation.
 
 ```bash
 simple-vps backup <env>                          # snapshot now to default destination
-simple-vps backup <env> --to=<destination>       # snapshot to a specific destination
+simple-vps backup --to=<destination> <env>       # snapshot to a specific destination
 simple-vps backup list <env>                     # list available backups
 simple-vps backup rm <env> <backup-id>           # delete a specific backup
 
-simple-vps restore <env> --from=<backup-id>             # restore from backup
-simple-vps restore <env> --from=<backup-id> --dry-run   # show what would change
+simple-vps restore --from=<backup-id> <env>             # restore from backup
+simple-vps restore --from=<backup-id> --dry-run <env>   # show what would change
 ```
 
 ### 2. The bar: fresh VPS, one command
@@ -57,7 +57,7 @@ Concretely, the workflow from a fresh Ubuntu box:
 ./install.sh --mode remote --host <new-ip> ...
 
 # 2. Restore the app
-simple-vps restore production --from=s3://my-backups/myapp/2026-05-25-1432
+simple-vps restore --from=file:///etc/simple-vps/backups/myapp/production/2026-05-25-1432.tar production
 ```
 
 After step 2, the app is running. No "now configure Caddy," no
@@ -66,9 +66,10 @@ restore re-creates the app's on-disk state, re-imports its secret
 values from the backup, brings up its containers, and reconciles
 its routes.
 
-If step 2 does not get to "app serving" in one command on a fresh
-box, the primitive is not shipped. This is the test, exercised in
-fake-VPS coverage.
+The shipped first implementation uses local filesystem backups and can restore
+to running state when the saved image still exists on the host. Remote backup
+destinations and portable encrypted secret bundles are the next hardening
+layer, not part of the first shipped primitive.
 
 ### 3. Backup payload
 
@@ -81,49 +82,27 @@ to running state:
   so route definitions, service shape, and env values are
   preserved.
 - **Secret values:** the resolved secret values for `(app, env)`
-  from the secret store, encrypted at rest in the backup. Without
-  these, restore on a fresh VPS would land with secret *references*
-  pointing at an empty store.
-- **Image reference:** the container image tag (e.g.,
-  `simple-vps/myapp-prod:abc1234`) and source git SHA. Restore
-  tries to rebuild the image from the source git SHA, inheriting
-  the git access configured during `install.sh` setup; users
-  restoring private repositories must ensure the restore VPS has
-  equivalent git credentials. If the source repository is not
-  accessible from the restore VPS, the restore brings the app to
-  "configured but not running" and prints a clear next step.
-  See Notes.
+  from the secret store. The first shipped format stores them in the local tar
+  backup; encrypted portable bundles remain future scope.
+- **Image release:** the release ID that was running when the backup was made.
+  Restore starts the saved local image tag for that release. If the image no
+  longer exists on the host, restore cannot bring the app to running state yet.
 
 Backups do **not** include:
 
 - The host itself (host hardening is `install.sh`'s job).
 - Other `(app, env)` pairs on the same VPS (each is backed up
   independently).
-- Container image layers (rebuilt from source on restore; see
-  Notes for the registry path).
+- Container image layers.
 
-### 4. Pluggable destinations
+### 4. Destinations
 
-A destination is a URL-shaped reference to where backups land:
+The shipped destination driver is local filesystem only:
 
 - `file:///var/backups/simple-vps/` — local directory on the VPS.
-- `s3://<bucket>/<prefix>` — S3-compatible object storage
-  (Backblaze B2, Cloudflare R2, MinIO, AWS S3).
-- `restic://<repo>` — pre-existing restic repository, for users
-  who already manage backups with restic.
 
-The default destination per env is configured in the manifest:
-
-```toml
-[env.production.backups]
-destination = "s3://my-bucket/myapp-prod"
-keep = 30                       # retention count, optional
-```
-
-Secret values for the destination (S3 keys, restic password) are
-stored in the secret store under reserved key names
-(`@secret:backup_s3_key`, `@secret:backup_restic_password`) and
-resolved by the helper at backup or restore time.
+Plain host paths are accepted too. S3-compatible object storage, restic, and
+manifest-level backup destination config remain planned.
 
 ### 5. Scheduling is out of scope (here)
 
@@ -146,48 +125,27 @@ The on-the-wire format is intentionally generic so simple-vps's
 restore does not depend on the destination driver:
 
 ```
-<backup-id>.tar.zst        # zstd-compressed tar of the payload
-<backup-id>.metadata.json  # plaintext: app, env, timestamp, source git SHA, image ref, schema version
-<backup-id>.secrets.enc    # encrypted blob: resolved secret values
+<backup-id>.tar        # metadata.json, simple-vps.toml, secrets.json, shared/
 ```
 
-The encryption key for `.secrets.enc` is derived from a
-per-`(app, env)` master in the secret store. Restoring requires
-the master key — which means restore from a backup requires either
-the master key from the original VPS (recommended: capture it on
-first backup with instructions to store offline) or accepting that
-the restored app starts without its secrets and the user
-re-populates them.
-
-**First-backup must require explicit user acknowledgment that the
-master key has been stored offline, not print-and-continue.**
-Losing this step silently turns a backup into a partial backup;
-the UX commitment in this ADR is that the user cannot complete
-their first `simple-vps backup <env>` without confirming the key
-is captured. Implementation may use an interactive prompt for
-TTY invocations and require `--key-acknowledged` for scripted
-ones.
-
-This is the "without a registry, restore brings the app to
-configured-but-not-running" mirror for secrets: a deliberate
-asymmetry that keeps the primitive usable without forcing a key-
-management product on the user.
+`secrets.json` is plaintext inside the local backup archive. That is acceptable
+for the local-only first implementation because the backup sits under
+`/etc/simple-vps/backups` with root-only archive permissions. Portable
+encrypted secret bundles are still required before remote destinations ship.
 
 ### 7. Idempotent restore
 
 Restore is idempotent against partial existing state on the
-target VPS. Re-running `simple-vps restore <env> --from=<backup>`
+target VPS. Re-running `simple-vps restore --from=<backup> <env>`
 after a partial failure (network blip, missing image,
 permissions) picks up where it left off without leaving the env
 in a worse state than before.
 
 Concretely:
 
-- If `/var/apps/<app>/<env>/shared/` exists and matches the
-  backup, restore skips re-extraction.
-- If the env's secrets are already present, restore does not
-  overwrite them with the backup's values unless `--overwrite`
-  is passed.
+- Restore replaces `/var/apps/<app>/<env>/shared/` with the backup's
+  `shared/` tree.
+- Restore writes the backed-up secret values into the env secret store.
 - If the container is already running on the expected image,
   restore reconciles routes and exits.
 
@@ -211,11 +169,10 @@ same machinery.
 - Cross-app, cross-env, or whole-host backups are not a thing.
   Each `(app, env)` is independent. "Back up the whole VPS" is
   N backup invocations.
-- Container images are not part of the backup payload. Restore on
-  a fresh VPS without source-repo access leaves the app
-  "configured but not running" until the user redeploys.
-- Secret restore depends on the user keeping the per-`(app, env)`
-  master key. Lose the key, restore the data without the secrets.
+- Container images are not part of the backup payload. The first shipped
+  restore path needs the saved local image to exist on the host.
+- Local backup archives contain plaintext secrets and must be protected like
+  root-only host state until encrypted portable bundles ship.
 
 ### What becomes harder
 
@@ -227,44 +184,26 @@ same machinery.
 
 - **Host backups.** simple-vps backs up apps; the host is
   `install.sh`'s responsibility to recreate from scratch.
-- **Container image archival.** Images are rebuilt from the
-  manifest + source on restore. A registry is the right answer for
-  keeping built images around — out of scope here, out of scope in
-  ADR-0005.
-- **Backup encryption with BYOK / user-managed keys.** Backups are
-  encrypted with a per-`(app, env)` master derived in the secret
-  store. Bring-your-own-key for compliance scenarios is a future
-  ADR if real demand surfaces.
+- **Container image archival.** A registry is the right answer for keeping
+  built images around — out of scope here, out of scope in ADR-0005.
+- **Backup encryption with BYOK / user-managed keys.** Portable encrypted
+  bundles are future work.
 - **`simple-vps backup verify <id>`** (dry-run restore to a scratch
   directory). Clear v2 feature; not in this ADR's implementation.
 - **Host-side scheduling.** See Decision 5.
 
 ## Cutover
 
-Implementation cutover is deferred to a follow-up ADR after
-ADR-0005 and ADR-0006 have shipped. The verbs, the bar, the
-payload, the format, and the UX commitments in this ADR are the
-contract that future implementation work must honor; the
-follow-up ADR specifies per-driver work (S3, restic, local
-file), the encryption primitive, and the fake-VPS coverage
-matrix.
+The first implementation ships the local driver, public verbs, fake-VPS smoke
+coverage, and real-box smoke coverage. Remote destinations, portable encrypted
+secret bundles, and image archival remain future work.
 
 ## Notes
 
-- The "restore brings up the app to running" bar assumes either
-  (a) the user has a registry configured for built images, or (b)
-  the source is in git and re-buildable on the restored VPS. Most
-  simple-vps users fall into case (b). When neither is available,
-  the restore command brings the app to "configured but not
-  running" and prints a clear next step.
-- The backup format (`tar.zst` + `metadata.json` + `secrets.enc`)
-  is intentionally generic, not tied to restic or any specific
-  tool. This keeps the restore path independent of what the user
-  chose for the destination side.
-- Implementation is deferred behind ADR-0005 + ADR-0006 cutover.
-  Verbs and the bar are committed; the wire format details,
-  destination drivers, and encryption primitive land later as
-  implementation PRs that test against the bar.
+- The "restore brings up the app to running" bar currently assumes the saved
+  local image still exists on the host.
+- The local backup format is intentionally simple and should be migrated before
+  remote destinations ship.
 - The reserved secret key names (`backup_s3_key`,
   `backup_restic_password`, etc.) are added to ADR-0006's
   closed-set policy as values simple-vps will never let user

@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -21,6 +22,8 @@ const (
 	defaultReleaseBaseURL = "https://github.com/fprl/simple-vps/releases/download"
 	defaultReleaseAPIURL  = "https://api.github.com/repos/fprl/simple-vps"
 )
+
+var releaseVersionPattern = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?$`)
 
 func (i *Installer) prepareRemoteHelperBinary(arch string) (string, func(), error) {
 	name := "simple-vps-linux-" + arch
@@ -256,5 +259,5 @@ func releaseDownloadToken(env map[string]string) string {
 }
 
 func isReleaseVersion(value string) bool {
-	return strings.HasPrefix(value, "v") && !strings.Contains(value, "dirty")
+	return releaseVersionPattern.MatchString(value)
 }

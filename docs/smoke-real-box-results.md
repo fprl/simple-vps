@@ -1,5 +1,95 @@
 # Real-box smoke results
 
+## 2026-05-28 — main backup/restore real-box smoke
+
+- **Host:** `178.105.101.122`
+- **OS:** Ubuntu 24.04.4 LTS (`6.8.0-117-generic`)
+- **Build tested:** local `main` build after `c0c1510`, plus the release-version
+  detection fix from this pass.
+- **Version string:** `v0.4.2-7-gc0c1510-dirty`
+- **Fixture:** `/tmp/simple-vps-smoke-app-20260528T135420Z`
+- **Operator/deploy keys:** `/tmp/simple-vps-smoke-keys-20260528T135420Z`
+- **DNS:** `smoke.spotslice.com` still did not resolve from this shell. No
+  Cloudflare MCP DNS tool, `wrangler`, `cloudflared`, `hcloud` CLI, or local
+  Hetzner API config was available. The smoke used `tls = "internal"` and
+  `curl --resolve`.
+- **Rebuild status:** not rebuilt in this pass; the host was reachable over
+  root SSH with `~/.ssh/hetzner`.
+
+### Process and result
+
+1. Built a fresh local binary with `make clean && make build`.
+2. First remote install attempt failed because the local `git describe` version
+   `v0.4.2-7-gc0c1510` was incorrectly treated as a release tag, so the
+   installer tried to download nonexistent
+   `releases/download/v0.4.2-7-gc0c1510/simple-vps-linux-amd64`.
+3. Fixed release-version detection to only treat exact release tags such as
+   `vX.Y.Z` and `vX.Y.Z-rcN` as downloadable release builds.
+4. Rebuilt and reran remote install. It built local Linux helper binaries,
+   copied the matching helper to the VPS, and completed provisioning:
+
+   ```text
+   ==> Building Simple VPS Go helper binaries
+   --> Running Go provisioner on target
+   ==> Apply 20260528T135620Z changed 3 operations
+   ==> Provisioning complete
+   ```
+
+5. Verified host state:
+   - `systemctl is-active caddy` -> `active`
+   - `podman ps` -> `caddy Up`
+   - `podman network ls` -> `ingress`, `podman`
+   - `/etc/simple-vps/host.json` -> `.meta.last_apply.status == "ok"`
+6. Created the nginx smoke fixture with `tls = "internal"` and tmpfs mounts for
+   `/var/cache/nginx` and `/var/run`.
+7. Ran:
+   - `check production` -> valid
+   - `setup production` -> complete
+   - `secret put production smoke_key`
+   - `secret list --json production` -> `["smoke_key"]`
+   - `deploy production` -> `Deployed hello (production) at 52a9ef7cc022`
+8. Seeded shared app state with
+   `/var/apps/hello/production/shared/data.txt = durable-state`.
+9. Ran `backup production`:
+
+   ```text
+   Created backup /etc/simple-vps/backups/hello/production/20260528T135727Z-52a9ef7cc022.tar
+   ```
+
+10. Verified `backup --json list production` returned the backup ID
+    `20260528T135727Z-52a9ef7cc022`.
+11. Ran public teardown:
+    `destroy production --confirm hello --purge`
+    -> `containers: 1 removed`, `route: removed`, `secrets: purged`.
+12. Verified the shared data file was gone after destroy.
+13. Ran `restore --from 20260528T135727Z-52a9ef7cc022 production`:
+
+    ```text
+    Restored hello (production) from 20260528T135727Z-52a9ef7cc022 at release 52a9ef7cc022
+    ```
+
+14. Verified restored state:
+    - `shared/data.txt` -> `durable-state`
+    - `status --json production` -> one running `web` container on image
+      `localhost/simple-vps/hello-production:52a9ef7cc022`
+    - `.env` -> `0600 app-hello-production app-hello-production`
+    - `data.txt` -> `644 app-hello-production app-hello-production`
+15. Verified HTTPS through Caddy from the VPS using SNI/Host
+    `smoke.spotslice.com` and the public IP:
+
+    ```text
+    /health -> ok, HTTP 200
+    /       -> smoke-ok-nginx, HTTP 200
+    ```
+
+16. Ran public teardown again and verified:
+    - `status --json production` -> empty `services`
+    - `/etc/simple-vps/secrets/hello/production` -> absent
+    - only the Caddy container remained running.
+
+**Outcome:** pass. The local backup/restore primitive works on the real VPS
+with real Podman and Caddy when the saved local image is still present.
+
 ## 2026-05-28 — v0.4.2 release smoke
 
 - **Host:** `178.105.101.122`

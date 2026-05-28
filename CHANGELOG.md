@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.4.3 - 2026-05-28
 
 ### Added
 
@@ -23,6 +23,12 @@
   instead of the unprovisioned `simple-vps.dev/install.sh` placeholder.
 - Host install defaults now use public ingress and public SSH admin access;
   Cloudflare Tunnel and Tailscale are enabled through the new presets.
+
+### Fixed
+
+- Local builds from `git describe` output such as `v0.4.2-7-g<sha>` no
+  longer try to download nonexistent GitHub release helper assets during
+  remote host install.
 
 ## v0.4.2 - 2026-05-28
 
