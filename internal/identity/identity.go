@@ -103,3 +103,10 @@ func SharedDir(app, env string) string {
 func EnvFile(app, env string) string {
 	return SharedDir(app, env) + "/.env"
 }
+
+// ManifestFile is the last manifest successfully applied for one
+// (app, env). Rollback uses it to recover the service and route shape
+// while selecting an older immutable image tag.
+func ManifestFile(app, env string) string {
+	return AppEnvRoot(app, env) + "/simple-vps.toml"
+}

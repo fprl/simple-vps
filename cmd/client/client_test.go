@@ -174,6 +174,20 @@ func TestServerAppListCommandSupportsJSON(t *testing.T) {
 	}
 }
 
+func TestServerAppRollbackCommandSupportsReleaseAndJSON(t *testing.T) {
+	got := serverAppRollbackCommand("api", "production", "", false)
+	want := "sudo simple-vps server app rollback api production"
+	if got != want {
+		t.Fatalf("unexpected command:\nwant: %s\n got: %s", want, got)
+	}
+
+	got = serverAppRollbackCommand("api", "production", "abc1234", true)
+	want = "sudo simple-vps server app rollback --json api production abc1234"
+	if got != want {
+		t.Fatalf("unexpected json command:\nwant: %s\n got: %s", want, got)
+	}
+}
+
 func TestServerAppDestroyEnvCommand(t *testing.T) {
 	got := serverAppDestroyEnvCommand("api", "production", false)
 	want := "sudo simple-vps server app destroy-env api production"

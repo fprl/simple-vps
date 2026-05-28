@@ -16,20 +16,21 @@ import (
 // reintroduced against the new container/podman flow as that work
 // lands.
 type cli struct {
-	Init    initCmd          `cmd:"" help:"Create a simple-vps.toml manifest and Dockerfile scaffold."`
-	Check   checkCmd         `cmd:"" help:"Validate an app manifest."`
-	Setup   setupCmd         `cmd:"" help:"Create the per-env Linux user, directories, and Podman network on the host."`
-	Deploy  deployCmd        `cmd:"" help:"Build the container image on the host and run the app's services."`
-	Status  statusCmd        `cmd:"" help:"Show running services for an environment."`
-	Restart restartCmd       `cmd:"" help:"Restart services for an environment (bounces in place; same image)."`
-	Destroy destroyCmd       `cmd:"" help:"Destroy an app environment on the host."`
-	Logs    logsCmd          `cmd:"" help:"Tail logs for one service."`
-	App     appCmd           `cmd:"" help:"Inspect apps on a host."`
-	Secret  secretCmd        `cmd:"" help:"Manage per-(app, env, key) secret values referenced from the manifest."`
-	SSH     sshCmd           `cmd:"ssh" help:"Open an SSH session to an app environment."`
-	Host    hostCmd          `cmd:"" help:"Install or inspect a Simple VPS host."`
-	Version versionCmd       `cmd:"" help:"Print the Simple VPS version."`
-	Server  helper.ServerCmd `cmd:"" hidden:"" help:"Privileged host API."`
+	Init     initCmd          `cmd:"" help:"Create a simple-vps.toml manifest and Dockerfile scaffold."`
+	Check    checkCmd         `cmd:"" help:"Validate an app manifest."`
+	Setup    setupCmd         `cmd:"" help:"Create the per-env Linux user, directories, and Podman network on the host."`
+	Deploy   deployCmd        `cmd:"" help:"Build the container image on the host and run the app's services."`
+	Status   statusCmd        `cmd:"" help:"Show running services for an environment."`
+	Restart  restartCmd       `cmd:"" help:"Restart services for an environment (bounces in place; same image)."`
+	Rollback rollbackCmd      `cmd:"" help:"Run an older local image release for an environment."`
+	Destroy  destroyCmd       `cmd:"" help:"Destroy an app environment on the host."`
+	Logs     logsCmd          `cmd:"" help:"Tail logs for one service."`
+	App      appCmd           `cmd:"" help:"Inspect apps on a host."`
+	Secret   secretCmd        `cmd:"" help:"Manage per-(app, env, key) secret values referenced from the manifest."`
+	SSH      sshCmd           `cmd:"ssh" help:"Open an SSH session to an app environment."`
+	Host     hostCmd          `cmd:"" help:"Install or inspect a Simple VPS host."`
+	Version  versionCmd       `cmd:"" help:"Print the Simple VPS version."`
+	Server   helper.ServerCmd `cmd:"" hidden:"" help:"Privileged host API."`
 }
 
 type versionCmd struct{}
@@ -129,6 +130,17 @@ type restartCmd struct {
 
 func (c restartCmd) Run() error {
 	client.CmdRestart(".", c.Env, c.Service, c.JSON)
+	return nil
+}
+
+type rollbackCmd struct {
+	Env     string `arg:"" help:"Environment to roll back."`
+	Release string `arg:"" optional:"" help:"Release to run. Omitted = previous local image."`
+	JSON    bool   `name:"json" help:"Emit structured JSON instead of the text summary."`
+}
+
+func (c rollbackCmd) Run() error {
+	client.CmdRollback(".", c.Env, c.Release, c.JSON)
 	return nil
 }
 

@@ -144,10 +144,15 @@ PY
 
   build)
     tag=""
+    declare -a labels=()
     while [[ $# -gt 0 ]]; do
       case "$1" in
         -t)
           tag="${2:-}"
+          shift 2
+          ;;
+        --label)
+          labels+=("$2")
           shift 2
           ;;
         *)
@@ -156,8 +161,57 @@ PY
       esac
     done
     if [[ -n "$tag" ]]; then
-      : > "$state_dir/images/$(printf '%s' "$tag" | tr '/:' '__')"
+      safe="$(printf '%s' "$tag" | tr '/:' '__')"
+      : > "$state_dir/images/$safe"
+      : > "$state_dir/images/$safe.labels"
+      for label in "${labels[@]:-}"; do
+        [[ -n "$label" ]] && printf '%s\n' "$label" >> "$state_dir/images/$safe.labels"
+      done
     fi
+    exit 0
+    ;;
+
+  images)
+    fmt=""
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --format)
+          fmt="$2"; shift 2 ;;
+        *)
+          shift ;;
+      esac
+    done
+    if [[ "$fmt" != "json" ]]; then
+      echo "fake podman: unsupported images format: $fmt" >&2
+      exit 1
+    fi
+    python3 - "$state_dir" <<'PY'
+import json, os, glob
+
+state_dir = os.sys.argv[1]
+out = []
+for image_path in sorted(glob.glob(os.path.join(state_dir, "images", "*")), key=os.path.getmtime, reverse=True):
+    if image_path.endswith(".labels"):
+        continue
+    safe = os.path.basename(image_path)
+    labels = {}
+    labels_path = image_path + ".labels"
+    if os.path.exists(labels_path):
+        with open(labels_path) as f:
+            for line in f:
+                line = line.rstrip("\n")
+                if "=" in line:
+                    k, v = line.split("=", 1)
+                    labels[k] = v
+    repo = ""
+    tag = labels.get("simple_vps_release", "")
+    app = labels.get("app", "")
+    env = labels.get("env", "")
+    if app and env:
+        repo = f"simple-vps/{app}-{env}"
+    out.append({"Repository": repo, "Tag": tag, "Labels": labels})
+print(json.dumps(out))
+PY
     exit 0
     ;;
 

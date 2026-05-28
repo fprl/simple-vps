@@ -65,6 +65,7 @@ simple-vps deploy <env> [--dirty] [--rebuild]         # build image on the host,
 simple-vps status <env> [--json]                      # podman ps-sourced service table
 simple-vps app list [--server <ssh-target>] [--json]  # podman labels-sourced app/env list
 simple-vps restart <env> [service] [--json]           # bounce running services in place (same image)
+simple-vps rollback <env> [release] [--json]          # run an older local image release
 simple-vps destroy <env> --confirm <app> [--purge]    # tear down one environment; --yes for automation
 simple-vps logs <env> [service] [--follow] [--tail N] # podman logs against the labelled container
 simple-vps secret put <env> <KEY>                     # stdin-only write to /etc/simple-vps/secrets/<app>/<env>/<key>
@@ -94,15 +95,6 @@ All mutating helper operations for the same `(app, env)` are serialized
 by a host-side file lock. `setup`, `deploy`, `restart`, `destroy`, and
 secret writes/removals cannot interleave against the same environment.
 Different environments can proceed independently.
-
-### App lifecycle — planned (post-cutover backlog)
-
-These are part of the durable contract above. They were removed in the
-ADR-0005 cutover and will come back wired to the container/Podman flow:
-
-```bash
-simple-vps rollback <env> [release]                   # planned
-```
 
 Non-secret env values live in `[env.<env>.env]` blocks in the manifest
 today. Secret values are referenced by whole-value `@secret:KEY`
@@ -182,6 +174,7 @@ sudo simple-vps server app apply --tarball <path> --manifest <path> --sha <sha> 
 sudo simple-vps server app list [--json]
 sudo simple-vps server app status [--json] <app> <env>
 sudo simple-vps server app restart [--json] <app> <env> [service]
+sudo simple-vps server app rollback [--json] <app> <env> [release]
 sudo simple-vps server app logs [--follow] [--tail=N] <app> <env> [service]
 sudo simple-vps server app secret put <app> <env> <key>
 sudo simple-vps server app secret list [--json] <app> <env>

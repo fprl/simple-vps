@@ -570,7 +570,7 @@ Users do not encode env into key names like `db_url_staging`.
 | `logs <env> [service]` | `podman logs` for the labelled container |
 | `ssh <env>` | SSH into VPS |
 | `restart <env> <service>` | restart a service (no rebuild) |
-| `rollback <env> [release]` | planned |
+| `rollback <env> [release]` | run an older local image release |
 | `destroy <env>` | tear down one env of the app (scoped per Section 12) |
 | `secret put/list/rm <env> <key>` | manage secret values scoped to (app, env, key) |
 | `host status/doctor` | host-level checks |

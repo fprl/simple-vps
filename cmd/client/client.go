@@ -277,6 +277,18 @@ func serverAppRestartCommand(appName, envName, service string, jsonFlag bool) st
 	return serverCommand(args...)
 }
 
+func serverAppRollbackCommand(appName, envName, release string, jsonFlag bool) string {
+	args := []string{"app", "rollback"}
+	if jsonFlag {
+		args = append(args, "--json")
+	}
+	args = append(args, appName, envName)
+	if release != "" {
+		args = append(args, release)
+	}
+	return serverCommand(args...)
+}
+
 func serverAppDestroyEnvCommand(appName, envName string, purge bool) string {
 	args := []string{"app", "destroy-env"}
 	if purge {
@@ -595,6 +607,21 @@ func CmdRestart(root string, envName string, service string, jsonFlag bool) {
 	// the summary, we pipe its output through unchanged so `--json`
 	// is pipeable and the text mode keeps its line breaks.
 	out := runSSHChecked(runner, ctx.Server, serverAppRestartCommand(ctx.AppName, envName, service, jsonFlag), "restart failed")
+	fmt.Print(out)
+}
+
+func CmdRollback(root string, envName string, release string, jsonFlag bool) {
+	ctx, err := config.LoadAppContext(root, envName)
+	if err != nil {
+		utils.Die(err.Error(), 1)
+	}
+	runner, err := NewCommandRunner()
+	if err != nil {
+		utils.Die(err.Error(), 1)
+	}
+	defer runner.Close()
+
+	out := runSSHChecked(runner, ctx.Server, serverAppRollbackCommand(ctx.AppName, envName, release, jsonFlag), "rollback failed")
 	fmt.Print(out)
 }
 

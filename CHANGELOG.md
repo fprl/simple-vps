@@ -11,6 +11,8 @@
   `--no-cache --pull=always` to host-side `podman build`.
 - `simple-vps host install --ingress public|cloudflare|private` and
   `--admin public-ssh|tailscale` presets.
+- `simple-vps rollback <env> [release] [--json]` and the matching
+  `server app rollback` helper command for local image-based rollback.
 
 ### Changed
 
@@ -92,5 +94,4 @@ that serves the public CLI, host installer, and privileged server API.
 
 ### Known Gaps
 
-- Rollback is planned but not shipped.
 - Backup/restore is planned but not shipped.

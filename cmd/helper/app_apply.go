@@ -106,6 +106,9 @@ func (c appApplyCmd) runLocked() {
 	if len(app.Services) == 0 {
 		utils.Die("manifest must declare at least one [services.<name>] block", 1)
 	}
+	if err := persistAppliedManifest(c.App, c.Env, manifestPath); err != nil {
+		utils.Die(err.Error(), 1)
+	}
 	// 2. Resolve env. Literal values from the manifest first; then
 	// pull each @secret:KEY reference from the per-(app, env, key)
 	// store and merge into the same map. A missing secret fails the
@@ -174,6 +177,21 @@ func (c appApplyCmd) runLocked() {
 	}
 
 	fmt.Printf("Deployed %s (%s) at %s\n", c.App, c.Env, c.SHA)
+}
+
+func persistAppliedManifest(app, env, manifestPath string) error {
+	dst := identity.ManifestFile(app, env)
+	if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
+		return fmt.Errorf("mkdir applied manifest dir: %v", err)
+	}
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return fmt.Errorf("read applied manifest: %v", err)
+	}
+	if err := os.WriteFile(dst, data, 0644); err != nil {
+		return fmt.Errorf("write applied manifest: %v", err)
+	}
+	return nil
 }
 
 func podmanBuildArgs(app, env, imageTag, release, dockerfile, ctxDir string, rebuild bool) []string {

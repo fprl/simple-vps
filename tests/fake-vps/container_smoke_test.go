@@ -42,6 +42,7 @@ func TestContainerSmoke(t *testing.T) {
 	env.waitForSSH(t)
 
 	t.Run("container app reaches setup + deploy + caddy proxy", env.testContainerAppLifecycle)
+	t.Run("rollback runs an older local image release", env.testRollback)
 	t.Run("concurrent deploys of the same app env serialize", env.testConcurrentDeploys)
 	t.Run("@secret refs resolve through put/list/rm into the runtime env", env.testSecretLifecycle)
 	t.Run("status + logs surface deployed services without SSHing in", env.testStatusAndLogs)
@@ -143,6 +144,52 @@ EOF`)
 	e.simpleVPS(t, app, nil, "deploy", "production", "--rebuild")
 	commandsLog = e.ssh(t, "cat /run/fake-podman/commands.log")
 	assertContains(t, commandsLog, "podman build --no-cache --pull=always")
+}
+
+func (e *smokeEnv) testRollback(t *testing.T) {
+	app := filepath.Join(e.tmp, "container-api")
+	oldRelease := strings.TrimSpace(e.mustRun(t, app, nil, "git", "rev-parse", "--short=12", "HEAD"))
+
+	mustWrite(t, filepath.Join(app, "README.md"), "second release\n")
+	e.commitFixture(t, app)
+	newRelease := strings.TrimSpace(e.mustRun(t, app, nil, "git", "rev-parse", "--short=12", "HEAD"))
+	if newRelease == oldRelease {
+		t.Fatal("expected fixture commit to produce a new release")
+	}
+	e.simpleVPS(t, app, nil, "deploy", "production")
+
+	rawJSON := e.simpleVPS(t, app, nil, "rollback", "--json", "production")
+	var payload struct {
+		App      string   `json:"app"`
+		Env      string   `json:"env"`
+		Previous string   `json:"previous"`
+		Release  string   `json:"release"`
+		Services []string `json:"services"`
+	}
+	if err := json.Unmarshal([]byte(rawJSON), &payload); err != nil {
+		t.Fatalf("rollback --json output not parseable as JSON: %v\nraw:\n%s", err, rawJSON)
+	}
+	if payload.App != "api" || payload.Env != "production" || payload.Previous != newRelease || payload.Release != oldRelease {
+		t.Fatalf("unexpected rollback payload: %+v", payload)
+	}
+	if len(payload.Services) != 1 || payload.Services[0] != "web" {
+		t.Fatalf("expected rollback to restart web service, got %+v", payload.Services)
+	}
+
+	statusJSON := e.simpleVPS(t, app, nil, "status", "--json", "production")
+	var status struct {
+		Services []struct {
+			Service string `json:"service"`
+			Release string `json:"release"`
+		} `json:"services"`
+	}
+	if err := json.Unmarshal([]byte(statusJSON), &status); err != nil {
+		t.Fatalf("status after rollback not parseable as JSON: %v\nraw:\n%s", err, statusJSON)
+	}
+	if len(status.Services) != 1 || status.Services[0].Service != "web" || status.Services[0].Release != oldRelease {
+		t.Fatalf("status did not report rolled-back release %s: %+v", oldRelease, status.Services)
+	}
+	e.assertRemoteBody(t, "curl -fsS -H 'Host: api.example.com' http://127.0.0.1/health", "ok")
 }
 
 func (e *smokeEnv) testConcurrentDeploys(t *testing.T) {
