@@ -48,11 +48,13 @@ func (c appSecretPutCmd) Run() error {
 	if n := len(value); n > 0 && value[n-1] == '\n' {
 		value = value[:n-1]
 	}
-	if err := secrets.Put(c.App, c.Env, c.Key, value); err != nil {
-		utils.Die(err.Error(), 1)
-	}
-	// Never echo the value. Confirm the write by naming the key only.
-	fmt.Printf("Stored secret %s for %s (%s)\n", c.Key, c.App, c.Env)
+	withAppEnvLock(c.App, c.Env, func() {
+		if err := secrets.Put(c.App, c.Env, c.Key, value); err != nil {
+			utils.Die(err.Error(), 1)
+		}
+		// Never echo the value. Confirm the write by naming the key only.
+		fmt.Printf("Stored secret %s for %s (%s)\n", c.Key, c.App, c.Env)
+	})
 	return nil
 }
 
@@ -112,14 +114,16 @@ func (c appSecretRmCmd) Run() error {
 	if err := secrets.ValidateKey(c.Key); err != nil {
 		utils.Die(err.Error(), 1)
 	}
-	err := secrets.Rm(c.App, c.Env, c.Key)
-	switch {
-	case errors.Is(err, secrets.ErrNotFound):
-		fmt.Printf("Secret %s was not set for %s (%s).\n", c.Key, c.App, c.Env)
-		return nil
-	case err != nil:
-		utils.Die(err.Error(), 1)
-	}
-	fmt.Printf("Removed secret %s for %s (%s)\n", c.Key, c.App, c.Env)
+	withAppEnvLock(c.App, c.Env, func() {
+		err := secrets.Rm(c.App, c.Env, c.Key)
+		switch {
+		case errors.Is(err, secrets.ErrNotFound):
+			fmt.Printf("Secret %s was not set for %s (%s).\n", c.Key, c.App, c.Env)
+			return
+		case err != nil:
+			utils.Die(err.Error(), 1)
+		}
+		fmt.Printf("Removed secret %s for %s (%s)\n", c.Key, c.App, c.Env)
+	})
 	return nil
 }

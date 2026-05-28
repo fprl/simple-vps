@@ -89,6 +89,11 @@ and whole-value `@secret:KEY` references resolve on the host during
 deploy. No auto-restart on secret change — re-deploy or restart
 explicitly.
 
+All mutating helper operations for the same `(app, env)` are serialized
+by a host-side file lock. `setup`, `deploy`, `restart`, `destroy`, and
+secret writes/removals cannot interleave against the same environment.
+Different environments can proceed independently.
+
 ### App lifecycle — planned (post-cutover backlog)
 
 These are part of the durable contract above. They were removed in the

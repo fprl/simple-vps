@@ -38,7 +38,13 @@ func (c appSetupEnvCmd) Run() error {
 	if err := validateAppEnv(c.App, c.Env); err != nil {
 		utils.Die(err.Error(), 1)
 	}
+	withAppEnvLock(c.App, c.Env, func() {
+		c.runLocked()
+	})
+	return nil
+}
 
+func (c appSetupEnvCmd) runLocked() {
 	user := identity.SystemUser(c.App, c.Env)
 	network := identity.Network(c.App, c.Env)
 	envRoot := identity.AppEnvRoot(c.App, c.Env)
@@ -105,7 +111,6 @@ func (c appSetupEnvCmd) Run() error {
 	}
 
 	fmt.Printf("App %s (%s) is ready at %s\n", c.App, c.Env, envRoot)
-	return nil
 }
 
 // appDestroyEnvCmd removes one env's containers, files, user, and
@@ -120,7 +125,13 @@ func (c appDestroyEnvCmd) Run() error {
 	if err := validateAppEnv(c.App, c.Env); err != nil {
 		utils.Die(err.Error(), 1)
 	}
+	withAppEnvLock(c.App, c.Env, func() {
+		c.runLocked()
+	})
+	return nil
+}
 
+func (c appDestroyEnvCmd) runLocked() {
 	app, env := c.App, c.Env
 	user := identity.SystemUser(app, env)
 	network := identity.Network(app, env)
@@ -188,7 +199,6 @@ func (c appDestroyEnvCmd) Run() error {
 		CaddyFragment: caddyRemoved,
 		SecretsPurged: secretsPurged,
 	}))
-	return nil
 }
 
 type destroySummary struct {
