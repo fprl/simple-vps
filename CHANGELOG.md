@@ -8,6 +8,11 @@
   `server app list` helper command. App discovery now comes from Podman
   labels instead of the deleted legacy app/route registries.
 
+### Changed
+
+- Spec installation examples now use the shipped raw-GitHub installer URL
+  instead of the unprovisioned `simple-vps.dev/install.sh` placeholder.
+
 ## v0.4.2 - 2026-05-28
 
 ### Fixed

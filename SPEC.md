@@ -246,7 +246,7 @@ finds, downloads, or builds a Go binary, then execs `simple-vps host install`.
 
 ```text
 # on a fresh box, ssh'd as root:
-curl -fsSL https://simple-vps.dev/install.sh | bash \
+curl -fsSL https://raw.githubusercontent.com/fprl/simple-vps/main/install.sh | bash \
     --deploy-ssh-public-key-file ~/.ssh/simple-vps-deploy.pub
 
 # or from a laptop, against a fresh box:
