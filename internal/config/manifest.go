@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -32,6 +33,16 @@ type Service struct {
 	Healthcheck        string `toml:"healthcheck"`
 	HealthcheckStatus  *int   `toml:"healthcheck_status"`
 	HealthcheckTimeout *int   `toml:"healthcheck_timeout"`
+	// Memory and CPUs are per-service Podman resource limits from the
+	// §7 security floor. Memory uses the same compact size grammar as
+	// tmpfs (`512m`, `1g`). CPUs is a positive numeric quota (`0.5`,
+	// `1`, `2.25`) and renders directly to Podman's --cpus flag.
+	Memory *string  `toml:"memory"`
+	CPUs   *float64 `toml:"cpus"`
+	// NetBindService is the only manifest-expressible Linux capability.
+	// It maps to --cap-add=NET_BIND_SERVICE for images that need to bind
+	// privileged ports inside the container after --cap-drop=ALL.
+	NetBindService *bool `toml:"net_bind_service"`
 	// Tmpfs declares additional writable tmpfs mounts for stock
 	// images that need scratch beyond the always-on `/tmp:64m` from
 	// the §7 security floor (e.g., nginx wants `/var/cache/nginx`
@@ -405,6 +416,15 @@ func mergeServices(base map[string]Service, override map[string]Service) map[str
 		if v.HealthcheckTimeout != nil {
 			existing.HealthcheckTimeout = v.HealthcheckTimeout
 		}
+		if v.Memory != nil {
+			existing.Memory = v.Memory
+		}
+		if v.CPUs != nil {
+			existing.CPUs = v.CPUs
+		}
+		if v.NetBindService != nil {
+			existing.NetBindService = v.NetBindService
+		}
 		if len(v.Tmpfs) > 0 {
 			// Env-level tmpfs fully replaces the base map rather than
 			// per-key merging — keeps the semantics simple ("the env
@@ -495,23 +515,34 @@ func validateServices(services map[string]Service, shape string, env string, err
 				*errors = append(*errors, fmt.Sprintf("[services.%s].healthcheck_status must be an HTTP status code", name))
 			}
 		}
+		validateServiceResourceCaps(name, svc, errors)
 		validateServiceTmpfs(name, svc.Tmpfs, errors)
 	}
 }
 
-// tmpfsSizeRe matches Podman's `--tmpfs path:size=...` value grammar
-// we accept: a positive integer followed by a unit (k/m/g). Strict
-// lowercase keeps the manifest unambiguous; mixed-case or extra units
-// (Ki, MiB, etc.) are rejected even if Podman happens to accept them.
-var tmpfsSizeRe = regexp.MustCompile(`^[1-9][0-9]*(k|m|g)$`)
+// byteSizeRe matches the compact Podman size grammar we accept for
+// service memory and tmpfs limits: a positive integer followed by a
+// unit (k/m/g). Strict lowercase keeps the manifest unambiguous;
+// mixed-case or extra units (Ki, MiB, etc.) are rejected even if
+// Podman happens to accept them.
+var byteSizeRe = regexp.MustCompile(`^[1-9][0-9]*(k|m|g)$`)
+
+func validateServiceResourceCaps(serviceName string, svc Service, errors *[]string) {
+	if svc.Memory != nil && !byteSizeRe.MatchString(*svc.Memory) {
+		*errors = append(*errors, fmt.Sprintf("[services.%s].memory %q must match ^[1-9][0-9]*(k|m|g)$", serviceName, *svc.Memory))
+	}
+	if svc.CPUs != nil && (*svc.CPUs <= 0 || math.IsNaN(*svc.CPUs) || math.IsInf(*svc.CPUs, 0)) {
+		*errors = append(*errors, fmt.Sprintf("[services.%s].cpus must be positive", serviceName))
+	}
+}
 
 // tmpfsReservedPaths refuses mounts that would either break the
 // container or shadow critical config the entrypoint relies on:
 //   - /                          rootfs over rootfs = broken container
 //   - /etc, /proc, /sys, /dev    hides /etc/passwd, /proc, /sys, /dev
 //   - /tmp                       reserved for the §7 security floor's
-//                                always-on `--tmpfs /tmp:size=64m`;
-//                                manifest can't override or duplicate
+//     always-on `--tmpfs /tmp:size=64m`;
+//     manifest can't override or duplicate
 var tmpfsReservedPaths = map[string]bool{
 	"/":     true,
 	"/etc":  true,
@@ -543,7 +574,7 @@ func validateServiceTmpfs(serviceName string, tmpfs map[string]string, errors *[
 			*errors = append(*errors, fmt.Sprintf("[services.%s.tmpfs].%q is reserved and cannot be a tmpfs mount", serviceName, path))
 			continue
 		}
-		if !tmpfsSizeRe.MatchString(size) {
+		if !byteSizeRe.MatchString(size) {
 			*errors = append(*errors, fmt.Sprintf("[services.%s.tmpfs].%q size %q must match ^[1-9][0-9]*(k|m|g)$", serviceName, path, size))
 			continue
 		}

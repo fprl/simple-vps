@@ -228,7 +228,7 @@ PY
         -d|--read-only|--rm)
           shift
           ;;
-        --user|--cap-drop|--security-opt|--pids-limit|--restart|--network|-v|--tmpfs|--env-file)
+        --user|--cap-drop|--cap-add|--security-opt|--memory|--cpus|--pids-limit|--restart|--network|-v|--tmpfs|--env-file)
           shift 2
           ;;
         *)

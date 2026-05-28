@@ -148,6 +148,28 @@ func TestBuildPodmanRunArgsAppendsManifestTmpfsAfterDefault(t *testing.T) {
 	}
 }
 
+func TestBuildPodmanRunArgsEmitsManifestResourceCapsAndNetBindCapability(t *testing.T) {
+	memory := "512m"
+	cpus := 0.5
+	netBind := true
+	svc := config.Service{
+		Memory:         &memory,
+		CPUs:           &cpus,
+		NetBindService: &netBind,
+	}
+	args := buildPodmanRunArgs("api", "production", "web", svc, "img:tag", "999", "988", false)
+	joined := strings.Join(args, " ")
+	for _, want := range []string{
+		"--memory 512m",
+		"--cpus 0.5",
+		"--cap-add NET_BIND_SERVICE",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("missing %q in args:\n%s", want, joined)
+		}
+	}
+}
+
 func TestBuildPodmanRunArgsImageComesAfterFlagsAndBeforeCommand(t *testing.T) {
 	svc := config.Service{
 		Command: "/usr/bin/myserver --foo",

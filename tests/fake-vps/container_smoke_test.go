@@ -18,7 +18,7 @@ import (
 //     /var/apps/<app>/<env>/, and the per-(app, env) Podman network.
 //   - `simple-vps deploy production` tars the working tree, uploads the
 //     manifest, calls `server app apply`, which runs `podman build` +
-//     `podman run` (initial §7 hardening subset) without any host-port
+//     `podman run` (§7 hardening subset) without any host-port
 //     publish — the app container joins both the per-(app, env) network
 //     and the shared `ingress` network. The helper writes a per-app
 //     Caddyfile fragment that reverse-proxies via container DNS, then
@@ -88,7 +88,10 @@ EOF`)
 	assertContains(t, commandsLog, "--read-only")
 	assertContains(t, commandsLog, "--tmpfs /tmp:size=64m,mode=1777")
 	assertContains(t, commandsLog, "--cap-drop ALL")
+	assertContains(t, commandsLog, "--cap-add NET_BIND_SERVICE")
 	assertContains(t, commandsLog, "--security-opt no-new-privileges")
+	assertContains(t, commandsLog, "--memory 512m")
+	assertContains(t, commandsLog, "--cpus 0.5")
 	assertContains(t, commandsLog, "--network app-api-production")
 	assertContains(t, commandsLog, "--network ingress")
 
@@ -434,6 +437,9 @@ server = "fake-vps"
 [services.web]
 port = 3000
 healthcheck = "/health"
+memory = "512m"
+cpus = 0.5
+net_bind_service = true
 
 [routes.app]
 host = "api.example.com"

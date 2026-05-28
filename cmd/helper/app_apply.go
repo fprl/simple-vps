@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -275,8 +276,8 @@ func writeEnvFile(app, env string, vals map[string]string) error {
 // the read-only rootfs with additional writable scratch in a
 // deterministic, sorted order. No --publish: Caddy reaches the
 // service over the shared `ingress` network by container DNS
-// (ADR-0006 Cut 2). Manifest-driven --memory / --cpus /
-// --cap-add=NET_BIND_SERVICE land in their own follow-up PR.
+// (ADR-0006 Cut 2). Manifest-declared memory, CPU, and
+// NET_BIND_SERVICE settings render to the closed set of §7 flags.
 func buildPodmanRunArgs(app, env, svcName string, svc config.Service, imageTag, userID, groupID string, envFileExists bool) []string {
 	containerName := identity.ContainerName(app, env, svcName)
 	shared := identity.SharedDir(app, env)
@@ -289,6 +290,11 @@ func buildPodmanRunArgs(app, env, svcName string, svc config.Service, imageTag, 
 		"--restart", "unless-stopped",
 		"--user", userID + ":" + groupID,
 		"--cap-drop", "ALL",
+	}
+	if svc.NetBindService != nil && *svc.NetBindService {
+		args = append(args, "--cap-add", "NET_BIND_SERVICE")
+	}
+	args = append(args,
 		"--security-opt", "no-new-privileges",
 		"--pids-limit", "512",
 		"--read-only",
@@ -300,17 +306,23 @@ func buildPodmanRunArgs(app, env, svcName string, svc config.Service, imageTag, 
 		"--tmpfs", "/tmp:size=64m,mode=1777",
 		"--network", appNet,
 		"--network", "ingress",
-		"-v", shared + ":" + shared + ":Z",
-		"--label", "app=" + app,
-		"--label", "env=" + env,
-		"--label", "service=" + svcName,
-	}
+		"-v", shared+":"+shared+":Z",
+		"--label", "app="+app,
+		"--label", "env="+env,
+		"--label", "service="+svcName,
+	)
 	// Mirror the `simple_vps_release` label from the image onto the
 	// container so `podman ps --format json` surfaces it without an
 	// extra `podman image inspect` hop. The image tag is canonical
 	// `simple-vps/<app>-<env>:<sha>`; pull the SHA off the end.
 	if i := strings.LastIndex(imageTag, ":"); i > 0 && i < len(imageTag)-1 {
 		args = append(args, "--label", "simple_vps_release="+imageTag[i+1:])
+	}
+	if svc.Memory != nil {
+		args = append(args, "--memory", *svc.Memory)
+	}
+	if svc.CPUs != nil {
+		args = append(args, "--cpus", strconv.FormatFloat(*svc.CPUs, 'f', -1, 64))
 	}
 	for _, path := range sortedKeys(svc.Tmpfs) {
 		args = append(args, "--tmpfs", path+":size="+svc.Tmpfs[path]+",mode=1777")
