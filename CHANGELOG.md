@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.4.2 - 2026-05-28
+
+### Fixed
+
+- Release helper downloads now verify `simple-vps-linux-<arch>` against the
+  release `SHA256SUMS` file before copying the helper to a VPS.
+
+### Changed
+
+- `install.sh` now detects the install host OS/architecture, downloads the
+  matching release binary by default when no local build is available, and
+  verifies it against `SHA256SUMS`.
+
 ## v0.4.1 - 2026-05-28
 
 ### Fixed

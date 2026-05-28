@@ -1,5 +1,113 @@
 # Real-box smoke results
 
+## 2026-05-28 — v0.4.1 release-binary remote install smoke
+
+- **Host:** `178.105.101.122`
+- **Release tested:** `v0.4.1`
+- **Binary tested:** `simple-vps-darwin-arm64` copied to a temp directory
+  outside the source checkout.
+- **Mode:** `host install --mode remote --check --yes`
+
+### Process and result
+
+1. Built and published the `v0.4.1` release assets:
+   - `simple-vps-linux-amd64`
+   - `simple-vps-linux-arm64`
+   - `simple-vps-darwin-amd64`
+   - `simple-vps-darwin-arm64`
+   - `SHA256SUMS`
+2. Copied the Darwin release binary to `/tmp`, then ran remote install from
+   there so the installer could not rely on the source checkout.
+3. Exported `SIMPLE_VPS_RELEASE_TOKEN` from the local GitHub credential helper
+   because this repository's release assets are private in this environment.
+4. Ran remote install in check mode against the existing VPS:
+
+   ```sh
+   SIMPLE_VPS_RELEASE_TOKEN="$token" ./simple-vps host install \
+     --mode remote \
+     --host 178.105.101.122 \
+     --bootstrap-user root \
+     --ssh-key ~/.ssh/hetzner \
+     --operator-ssh-public-key-file /tmp/simple-vps-smoke-keys-20260528T100045Z/operator.pub \
+     --deploy-ssh-public-key-file /tmp/simple-vps-smoke-keys-20260528T100045Z/deploy.pub \
+     --timezone UTC --locale en_US.UTF-8 \
+     --no-tailscale --no-cloudflare-tunnel --no-litestream \
+     --check --yes
+   ```
+
+5. The first implementation tried to download the helper from the browser
+   release URL with `Authorization: Bearer ...`; GitHub still returned `404`
+   for private assets. The fix keeps the public URL path for public releases
+   and falls back to the GitHub Releases API asset endpoint for private assets.
+6. The final `v0.4.1` release smoke completed:
+
+   ```text
+   v0.4.1
+   connected
+   ==> Downloading Simple VPS Linux helper binary from https://github.com/fprl/simple-vps/releases/download/v0.4.1/simple-vps-linux-amd64
+   --> Running Go provisioner on target
+   ==> Running in local mode on localhost
+   ==> Apply 20260528T111340Z changed 2 operations
+   ==> Provisioning complete
+   ```
+
+### Follow-up landed after v0.4.1
+
+The v0.4.1 binary downloaded and executed the Linux helper successfully, but
+did not verify the helper against `SHA256SUMS`. The follow-up change adds
+SHA256 verification for release helper downloads and updates `install.sh` to
+download platform release binaries with SHA256 verification by default.
+
+## 2026-05-28 — post-v0.4.1 helper checksum + install UX smoke
+
+- **Host:** `178.105.101.122`
+- **Binary tested:** local Darwin build with `VERSION=v0.4.1`, exercising the
+  tagged release helper download path against the published `v0.4.1`
+  `simple-vps-linux-amd64` and `SHA256SUMS` assets.
+- **Fixture:** `/tmp/simple-vps-smoke-app-20260528T100045Z`
+- **Rebuild status:** not rebuilt in this pass. No `hcloud` CLI, Hetzner API
+  token, or local hcloud config was available from the workspace shell, so this
+  pass verified the existing VPS rather than a fresh provider rebuild.
+
+### Process and result
+
+1. Ran `make build VERSION=v0.4.1`.
+2. Ran remote `host install --check --yes` with `SIMPLE_VPS_RELEASE_TOKEN`.
+   The installer downloaded `simple-vps-linux-amd64`, downloaded
+   `SHA256SUMS`, verified the helper checksum, copied the helper to the VPS,
+   and completed the local provisioner in check mode.
+3. Ran the full app path against the existing host:
+   - `check production` -> valid
+   - `setup production` -> complete
+   - `secret put production smoke_key`
+   - `secret list --json production` -> `["smoke_key"]`
+   - `deploy production` -> `Deployed hello (production) at 3360f173051b`
+   - `status --json production` -> one running `web` container
+   - `logs production web --tail 20` -> nginx startup and healthcheck logs
+4. Verified HTTPS through Caddy with SNI/Host `smoke.spotslice.com` to the VPS
+   IP:
+
+   ```text
+   /health -> HTTP 200, body: ok
+   /       -> HTTP 200, body: smoke-ok-nginx
+   ```
+
+5. Ran public teardown:
+   `destroy production --confirm hello --purge`
+   -> `containers: 1 removed`, `route: removed`, `secrets: purged`.
+6. Verified `status --json production` returned an empty service list.
+
+### Install UX check
+
+The updated `install.sh` was also tested against a local HTTP release fixture:
+without a source checkout or manual asset selection, it detected
+`simple-vps-darwin-arm64`, downloaded that asset plus `SHA256SUMS`, verified
+the checksum, and executed the downloaded binary as:
+
+```text
+simple-vps host install --check --yes
+```
+
 ## 2026-05-28 — post JSON/locking/docs cleanup pass
 
 - **Host:** `178.105.101.122` (Hetzner, rebuilt before run)

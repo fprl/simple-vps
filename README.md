@@ -54,26 +54,21 @@ make fake-vps-install-smoke
 
 ## Install A VPS
 
-Download a release binary, then run `host install`:
+Download the installer and let it pick the right release binary for the
+current OS/architecture:
 
 ```bash
-asset=simple-vps-darwin-arm64 # use simple-vps-darwin-amd64 on Intel Macs
-curl -fsSL \
-  "https://github.com/fprl/simple-vps/releases/download/v0.4.1/${asset}" \
-  -o simple-vps
-chmod 0755 simple-vps
-
-./simple-vps version
+curl -fsSL https://raw.githubusercontent.com/fprl/simple-vps/main/install.sh \
+  -o install.sh
+chmod 0755 install.sh
 ```
 
-From macOS, remote install uploads or downloads the matching Linux helper
-binary for the target VPS automatically:
-
-If the release assets are private, set `SIMPLE_VPS_RELEASE_TOKEN`, `GH_TOKEN`,
-or `GITHUB_TOKEN` before running remote install.
+The installer downloads the `v0.4.2` release asset that matches your platform
+and verifies it against `SHA256SUMS`. From macOS, remote install also downloads
+and verifies the matching Linux helper binary for the target VPS.
 
 ```bash
-./simple-vps host install \
+./install.sh \
   --mode remote \
   --host 203.0.113.10 \
   --bootstrap-user root \
@@ -86,19 +81,24 @@ or `GITHUB_TOKEN` before running remote install.
   --yes
 ```
 
-The root `install.sh` is a thin bootstrap that finds, downloads, or builds a
-local `simple-vps` binary and then runs `simple-vps host install`.
+If the release assets are private, set `SIMPLE_VPS_RELEASE_TOKEN`, `GH_TOKEN`,
+or `GITHUB_TOKEN` before running the installer.
+
+The root `install.sh` is a thin bootstrap that finds, builds, or downloads a
+local `simple-vps` binary and then runs `simple-vps host install`. Override the
+release with `SIMPLE_VPS_VERSION=vX.Y.Z`, or point at a custom binary with
+`SIMPLE_VPS_BINARY_URL`.
 
 After install, verify the host:
 
 ```bash
 SIMPLE_VPS_SSH_KEY="$(cat ~/.ssh/simple-vps-deploy)" \
 SIMPLE_VPS_KNOWN_HOSTS="$(ssh-keyscan -t ed25519 -H 203.0.113.10 2>/dev/null)" \
-  ./simple-vps host status --json --server deploy@203.0.113.10
+  ./dist/simple-vps host status --json --server deploy@203.0.113.10
 
 SIMPLE_VPS_SSH_KEY="$(cat ~/.ssh/simple-vps-deploy)" \
 SIMPLE_VPS_KNOWN_HOSTS="$(ssh-keyscan -t ed25519 -H 203.0.113.10 2>/dev/null)" \
-  ./simple-vps host doctor --json --server deploy@203.0.113.10
+  ./dist/simple-vps host doctor --json --server deploy@203.0.113.10
 ```
 
 ## Deploy An App
@@ -129,7 +129,7 @@ Build all release binaries:
 
 ```bash
 make clean
-make build-release VERSION=v0.4.1
+make build-release VERSION=v0.4.2
 ```
 
 Artifacts land in `dist/`:

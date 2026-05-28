@@ -1,6 +1,9 @@
 package hostinstall
 
 import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -84,48 +87,66 @@ func (i *Installer) downloadReleaseHelperBinary(tag string, name string) (string
 
 	client := http.Client{Timeout: 2 * time.Minute}
 	token := releaseDownloadToken(i.Env)
-	req, err := http.NewRequest(http.MethodGet, downloadURL, nil)
+	data, err := i.downloadReleaseAsset(&client, tag, name, token, downloadURL, baseURL)
 	if err != nil {
 		return "", func() {}, err
+	}
+
+	sumsURL := baseURL + "/" + tag + "/SHA256SUMS"
+	sums, err := i.downloadReleaseAsset(&client, tag, "SHA256SUMS", token, sumsURL, baseURL)
+	if err != nil {
+		return "", func() {}, err
+	}
+	if err := verifyReleaseAssetChecksum(name, data, sums); err != nil {
+		return "", func() {}, err
+	}
+
+	return writeExecutableTempFile(name, bytes.NewReader(data))
+}
+
+func (i *Installer) downloadReleaseAsset(client *http.Client, tag string, name string, token string, downloadURL string, baseURL string) ([]byte, error) {
+	req, err := http.NewRequest(http.MethodGet, downloadURL, nil)
+	if err != nil {
+		return nil, err
 	}
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", func() {}, err
+		return nil, err
 	}
 	if resp.StatusCode != http.StatusOK {
 		if token != "" && resp.StatusCode == http.StatusNotFound && canUseReleaseAPI(i.Env, baseURL) {
 			_ = resp.Body.Close()
-			return i.downloadGitHubReleaseHelperBinary(&client, tag, name, token)
+			return i.downloadGitHubReleaseAsset(client, tag, name, token)
 		}
 		_ = resp.Body.Close()
-		return "", func() {}, fmt.Errorf("download %s failed: HTTP %d", downloadURL, resp.StatusCode)
+		return nil, fmt.Errorf("download %s failed: HTTP %d", downloadURL, resp.StatusCode)
 	}
 	defer resp.Body.Close()
 
-	return writeExecutableTempFile(name, resp.Body)
+	return io.ReadAll(resp.Body)
 }
 
-func (i *Installer) downloadGitHubReleaseHelperBinary(client *http.Client, tag string, name string, token string) (string, func(), error) {
+func (i *Installer) downloadGitHubReleaseAsset(client *http.Client, tag string, name string, token string) ([]byte, error) {
 	apiBaseURL := strings.TrimRight(envDefault(i.Env, "SIMPLE_VPS_RELEASE_API_BASE_URL", defaultReleaseAPIURL), "/")
 	releaseURL := apiBaseURL + "/releases/tags/" + url.PathEscape(tag)
 
 	req, err := http.NewRequest(http.MethodGet, releaseURL, nil)
 	if err != nil {
-		return "", func() {}, err
+		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Accept", "application/vnd.github+json")
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", func() {}, err
+		return nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", func() {}, fmt.Errorf("download %s via GitHub API failed: HTTP %d", name, resp.StatusCode)
+		return nil, fmt.Errorf("download %s via GitHub API failed: HTTP %d", name, resp.StatusCode)
 	}
 
 	var release struct {
@@ -135,7 +156,7 @@ func (i *Installer) downloadGitHubReleaseHelperBinary(client *http.Client, tag s
 		} `json:"assets"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
-		return "", func() {}, err
+		return nil, err
 	}
 
 	var assetURL string
@@ -146,26 +167,55 @@ func (i *Installer) downloadGitHubReleaseHelperBinary(client *http.Client, tag s
 		}
 	}
 	if assetURL == "" {
-		return "", func() {}, fmt.Errorf("release %s does not contain asset %s", tag, name)
+		return nil, fmt.Errorf("release %s does not contain asset %s", tag, name)
 	}
 
 	assetReq, err := http.NewRequest(http.MethodGet, assetURL, nil)
 	if err != nil {
-		return "", func() {}, err
+		return nil, err
 	}
 	assetReq.Header.Set("Authorization", "Bearer "+token)
 	assetReq.Header.Set("Accept", "application/octet-stream")
 
 	assetResp, err := client.Do(assetReq)
 	if err != nil {
-		return "", func() {}, err
+		return nil, err
 	}
 	defer assetResp.Body.Close()
 	if assetResp.StatusCode != http.StatusOK {
-		return "", func() {}, fmt.Errorf("download %s via GitHub API failed: HTTP %d", name, assetResp.StatusCode)
+		return nil, fmt.Errorf("download %s via GitHub API failed: HTTP %d", name, assetResp.StatusCode)
 	}
 
-	return writeExecutableTempFile(name, assetResp.Body)
+	return io.ReadAll(assetResp.Body)
+}
+
+func verifyReleaseAssetChecksum(name string, data []byte, sums []byte) error {
+	want, err := checksumForAsset(name, sums)
+	if err != nil {
+		return err
+	}
+	gotBytes := sha256.Sum256(data)
+	got := hex.EncodeToString(gotBytes[:])
+	if !strings.EqualFold(got, want) {
+		return fmt.Errorf("checksum mismatch for %s: got %s, want %s", name, got, want)
+	}
+	return nil
+}
+
+func checksumForAsset(name string, sums []byte) (string, error) {
+	for _, line := range strings.Split(string(sums), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 2 {
+			continue
+		}
+		if fields[1] == name || strings.TrimPrefix(fields[1], "*") == name {
+			if _, err := hex.DecodeString(fields[0]); err != nil || len(fields[0]) != sha256.Size*2 {
+				return "", fmt.Errorf("invalid SHA256SUMS entry for %s", name)
+			}
+			return fields[0], nil
+		}
+	}
+	return "", fmt.Errorf("SHA256SUMS does not contain %s", name)
 }
 
 func writeExecutableTempFile(name string, reader io.Reader) (string, func(), error) {
