@@ -9,11 +9,15 @@
   labels instead of the deleted legacy app/route registries.
 - `simple-vps deploy <env> --rebuild`, which passes
   `--no-cache --pull=always` to host-side `podman build`.
+- `simple-vps host install --ingress public|cloudflare|private` and
+  `--admin public-ssh|tailscale` presets.
 
 ### Changed
 
 - Spec installation examples now use the shipped raw-GitHub installer URL
   instead of the unprovisioned `simple-vps.dev/install.sh` placeholder.
+- Host install defaults now use public ingress and public SSH admin access;
+  Cloudflare Tunnel and Tailscale are enabled through the new presets.
 
 ## v0.4.2 - 2026-05-28
 
@@ -90,5 +94,3 @@ that serves the public CLI, host installer, and privileged server API.
 
 - Rollback is planned but not shipped.
 - Backup/restore is planned but not shipped.
-- `host install --ingress ...` and `--admin ...` preset flags are planned;
-  current installs use the lower-level provider flags directly.

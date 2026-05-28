@@ -19,6 +19,8 @@ func TestBuildPlanAndRemoteLocalInstallCommand(t *testing.T) {
 	opts.DeployUser = "deployer"
 	opts.OperatorSSHPublicKeyFile = operatorKeyFile
 	opts.DeploySSHPublicKeyFile = deployKeyFile
+	opts.Ingress = "cloudflare"
+	opts.Admin = "tailscale"
 	opts.TailscaleAuthKey = "tskey-auth-test"
 	opts.CloudflareAPIToken = "cf-token-test"
 	opts.CloudflareAccountID = "account-test"
@@ -38,6 +40,9 @@ func TestBuildPlanAndRemoteLocalInstallCommand(t *testing.T) {
 	if plan.Mode != "remote" || plan.TargetHost != "203.0.113.10" {
 		t.Fatalf("unexpected plan: %+v", plan)
 	}
+	if plan.Ingress != "cloudflare" || plan.Admin != "tailscale" {
+		t.Fatalf("unexpected presets: ingress=%s admin=%s", plan.Ingress, plan.Admin)
+	}
 	if plan.TailscaleAuthMode != "auth-key" {
 		t.Fatalf("unexpected tailscale auth mode: %s", plan.TailscaleAuthMode)
 	}
@@ -50,6 +55,8 @@ func TestBuildPlanAndRemoteLocalInstallCommand(t *testing.T) {
 		`/tmp/simple-vps-host-install host install --mode local`,
 		`--operator-user ops`,
 		`--deploy-user deployer`,
+		`--ingress cloudflare`,
+		`--admin tailscale`,
 		`--operator-ssh-public-key-file /tmp/operator.pub`,
 		`--deploy-ssh-public-key-file /tmp/deploy.pub`,
 		`--tailscale-auth-key tskey-auth-test`,
@@ -97,6 +104,66 @@ func TestSharedKeyRendersForOperatorAndDeploy(t *testing.T) {
 	}
 	if keys.Deploy != keys.Operator {
 		t.Fatalf("expected deploy key to reuse operator key, got %q", keys.Deploy)
+	}
+}
+
+func TestInstallPresetsMapToProviderFlags(t *testing.T) {
+	tests := []struct {
+		name             string
+		ingress          string
+		admin            string
+		wantCloudflare   bool
+		wantTailscale    bool
+		wantCloudflareMo string
+		wantTailscaleMo  string
+	}{
+		{name: "defaults", wantCloudflareMo: "disabled", wantTailscaleMo: "disabled"},
+		{name: "public ssh", ingress: "public", admin: "public-ssh", wantCloudflareMo: "disabled", wantTailscaleMo: "disabled"},
+		{name: "cloudflare tailscale", ingress: "cloudflare", admin: "tailscale", wantCloudflare: true, wantTailscale: true, wantCloudflareMo: "manual", wantTailscaleMo: "manual"},
+		{name: "private", ingress: "private", admin: "public-ssh", wantCloudflareMo: "disabled", wantTailscaleMo: "disabled"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opts := DefaultOptions(nil)
+			opts.Mode = "remote"
+			opts.TargetHost = "203.0.113.20"
+			opts.DeploySSHPublicKeyFile = writeKeyFile(t, "ssh-ed25519 AAAAdeploy test-deploy\n")
+			opts.Ingress = tt.ingress
+			opts.Admin = tt.admin
+
+			plan, err := BuildPlan(opts, false, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if plan.CloudflareTunnel != tt.wantCloudflare {
+				t.Fatalf("cloudflare=%v, want %v", plan.CloudflareTunnel, tt.wantCloudflare)
+			}
+			if plan.Tailscale != tt.wantTailscale {
+				t.Fatalf("tailscale=%v, want %v", plan.Tailscale, tt.wantTailscale)
+			}
+			if plan.CloudflareServiceMode != tt.wantCloudflareMo {
+				t.Fatalf("cloudflare mode=%s, want %s", plan.CloudflareServiceMode, tt.wantCloudflareMo)
+			}
+			if plan.TailscaleAuthMode != tt.wantTailscaleMo {
+				t.Fatalf("tailscale mode=%s, want %s", plan.TailscaleAuthMode, tt.wantTailscaleMo)
+			}
+		})
+	}
+}
+
+func TestInstallPresetsRejectInvalidValues(t *testing.T) {
+	opts := DefaultOptions(nil)
+	opts.Ingress = "vpn-provider-matrix"
+	_, err := BuildPlan(opts, false, false)
+	if err == nil || !strings.Contains(err.Error(), "invalid ingress mode") {
+		t.Fatalf("expected invalid ingress error, got %v", err)
+	}
+
+	opts = DefaultOptions(nil)
+	opts.Admin = "root-password"
+	_, err = BuildPlan(opts, false, false)
+	if err == nil || !strings.Contains(err.Error(), "invalid admin mode") {
+		t.Fatalf("expected invalid admin error, got %v", err)
 	}
 }
 

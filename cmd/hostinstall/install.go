@@ -28,6 +28,8 @@ type Options struct {
 	DeployUser               string
 	Timezone                 string
 	Locale                   string
+	Ingress                  string
+	Admin                    string
 	Tailscale                bool
 	TailscaleAuthKey         string
 	TailscaleHostname        string
@@ -54,6 +56,8 @@ type Plan struct {
 	DeployUser               string
 	Timezone                 string
 	Locale                   string
+	Ingress                  string
+	Admin                    string
 	Tailscale                bool
 	TailscaleAuthKey         string
 	TailscaleHostname        string
@@ -111,6 +115,8 @@ func (i *Installer) RunOptions(opts Options) error {
 	i.info("Operator user: %s", plan.OperatorUser)
 	i.info("Deploy user: %s", plan.DeployUser)
 	i.info("Timezone: %s", plan.Timezone)
+	i.info("Ingress: %s", plan.Ingress)
+	i.info("Admin: %s", plan.Admin)
 	i.info("Tailscale: %s", boolText(plan.Tailscale))
 	if plan.Tailscale {
 		i.info("Tailscale auth: %s", presentOrMissing(plan.TailscaleAuthKey, "auth key provided", "manual login required"))
@@ -158,10 +164,12 @@ func DefaultOptions(env map[string]string) Options {
 		DeployUser:               envDefault(env, "SIMPLE_VPS_DEPLOY_USER", "deploy"),
 		Timezone:                 envDefault(env, "SIMPLE_VPS_TIMEZONE", "UTC"),
 		Locale:                   envDefault(env, "SIMPLE_VPS_LOCALE", "en_US.UTF-8"),
-		Tailscale:                true,
+		Ingress:                  env["SIMPLE_VPS_INGRESS"],
+		Admin:                    env["SIMPLE_VPS_ADMIN"],
+		Tailscale:                false,
 		TailscaleAuthKey:         env["SIMPLE_VPS_TAILSCALE_AUTH_KEY"],
 		TailscaleHostname:        env["SIMPLE_VPS_TAILSCALE_HOSTNAME"],
-		CloudflareTunnel:         true,
+		CloudflareTunnel:         false,
 		CloudflareAPIToken:       env["SIMPLE_VPS_CLOUDFLARE_API_TOKEN"],
 		CloudflareAccountID:      env["SIMPLE_VPS_CLOUDFLARE_ACCOUNT_ID"],
 		CloudflareTunnelToken:    env["SIMPLE_VPS_CLOUDFLARE_TUNNEL_TOKEN"],
@@ -172,6 +180,12 @@ func DefaultOptions(env map[string]string) Options {
 }
 
 func BuildPlan(opts Options, isRoot bool, osReleaseExists bool) (Plan, error) {
+	var err error
+	opts, err = applyInstallPresets(opts)
+	if err != nil {
+		return Plan{}, err
+	}
+
 	mode := opts.Mode
 	if mode == "auto" {
 		if opts.TargetHost != "" {
@@ -257,6 +271,8 @@ func BuildPlan(opts Options, isRoot bool, osReleaseExists bool) (Plan, error) {
 		DeployUser:               opts.DeployUser,
 		Timezone:                 opts.Timezone,
 		Locale:                   opts.Locale,
+		Ingress:                  opts.Ingress,
+		Admin:                    opts.Admin,
 		Tailscale:                opts.Tailscale,
 		TailscaleAuthKey:         opts.TailscaleAuthKey,
 		TailscaleHostname:        opts.TailscaleHostname,
@@ -272,6 +288,43 @@ func BuildPlan(opts Options, isRoot bool, osReleaseExists bool) (Plan, error) {
 		CheckMode:                opts.CheckMode,
 		SharedKey:                opts.SharedKey,
 	}, nil
+}
+
+func applyInstallPresets(opts Options) (Options, error) {
+	switch opts.Ingress {
+	case "":
+		if opts.CloudflareTunnel {
+			opts.Ingress = "cloudflare"
+		} else {
+			opts.Ingress = "public"
+		}
+	case "public":
+		opts.Ingress = "public"
+		opts.CloudflareTunnel = false
+	case "cloudflare":
+		opts.CloudflareTunnel = true
+	case "private":
+		opts.CloudflareTunnel = false
+	default:
+		return Options{}, fmt.Errorf("invalid ingress mode: %s (expected public, cloudflare, or private)", opts.Ingress)
+	}
+
+	switch opts.Admin {
+	case "":
+		if opts.Tailscale {
+			opts.Admin = "tailscale"
+		} else {
+			opts.Admin = "public-ssh"
+		}
+	case "public-ssh":
+		opts.Admin = "public-ssh"
+		opts.Tailscale = false
+	case "tailscale":
+		opts.Tailscale = true
+	default:
+		return Options{}, fmt.Errorf("invalid admin mode: %s (expected public-ssh or tailscale)", opts.Admin)
+	}
+	return opts, nil
 }
 
 func (i *Installer) runRemote(plan Plan) error {
@@ -338,6 +391,8 @@ func (i *Installer) runLocal(plan Plan) error {
 		DeploySSHPublicKeys:    nonEmptyStrings(keyPlan.Deploy),
 		Timezone:               plan.Timezone,
 		Locale:                 plan.Locale,
+		Ingress:                plan.Ingress,
+		Admin:                  plan.Admin,
 		Tailscale:              plan.Tailscale,
 		TailscaleAuthKey:       plan.TailscaleAuthKey,
 		TailscaleHostname:      plan.TailscaleHostname,
@@ -377,6 +432,8 @@ func (i *Installer) dumpInstallPlan(plan Plan) error {
 	fmt.Fprintf(i.Stdout, "plan.operator_user=%s\n", plan.OperatorUser)
 	fmt.Fprintf(i.Stdout, "plan.deploy_user=%s\n", plan.DeployUser)
 	fmt.Fprintf(i.Stdout, "plan.shared_key=%s\n", boolText(plan.SharedKey))
+	fmt.Fprintf(i.Stdout, "plan.ingress=%s\n", plan.Ingress)
+	fmt.Fprintf(i.Stdout, "plan.admin=%s\n", plan.Admin)
 	fmt.Fprintf(i.Stdout, "plan.tailscale=%s\n", boolText(plan.Tailscale))
 	fmt.Fprintf(i.Stdout, "plan.tailscale_auth_mode=%s\n", plan.TailscaleAuthMode)
 	fmt.Fprintf(i.Stdout, "plan.cloudflare_tunnel=%s\n", boolText(plan.CloudflareTunnel))
@@ -540,6 +597,8 @@ func remoteLocalInstallCommand(binary string, plan Plan, operatorKeyFile string,
 		"--deploy-user", plan.DeployUser,
 		"--timezone", plan.Timezone,
 		"--locale", plan.Locale,
+		"--ingress", plan.Ingress,
+		"--admin", plan.Admin,
 	}
 	if operatorKeyFile != "" {
 		args = append(args, "--operator-ssh-public-key-file", operatorKeyFile)

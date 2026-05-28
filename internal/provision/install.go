@@ -33,6 +33,8 @@ type InstallOptions struct {
 	DeploySSHPublicKeys    []string
 	Timezone               string
 	Locale                 string
+	Ingress                string
+	Admin                  string
 	Tailscale              bool
 	TailscaleAuthKey       string
 	TailscaleHostname      string
@@ -164,7 +166,7 @@ func installOperations(opts InstallOptions, stateStore store.Store) []operation 
 	addPodman(&ops)
 	addPodmanHostBaseline(&ops)
 	addDeployTmpDir(&ops)
-	addCaddy(&ops)
+	addCaddy(&ops, opts)
 	if opts.InstallLitestream {
 		addLitestream(&ops)
 	}
@@ -265,8 +267,8 @@ func addSecurity(ops *[]operation, opts InstallOptions) {
 		{Rule: "default allow outgoing"},
 		{Rule: "allow 22/tcp"},
 		{Rule: "allow 41641/udp"},
-		{Rule: "allow 80/tcp", Delete: opts.CloudflareTunnel},
-		{Rule: "allow 443/tcp", Delete: opts.CloudflareTunnel},
+		{Rule: "allow 80/tcp", Delete: ingressMode(opts) != "public"},
+		{Rule: "allow 443/tcp", Delete: ingressMode(opts) != "public"},
 	} {
 		rule := rule
 		*ops = append(*ops, operation{name: "ufw " + rule.Rule, run: func(apply host.Apply) (bool, error) {
@@ -589,7 +591,7 @@ func ensureIngressNetwork(apply host.Apply) (bool, error) {
 // and systemd loops through Restart=on-failure until "start request
 // repeated too quickly" kills the service. We learned that the hard
 // way on real-box smoke; see docs/smoke-real-box-results.md finding 2.
-func addCaddy(ops *[]operation) {
+func addCaddy(ops *[]operation, opts InstallOptions) {
 	for _, dir := range []host.Directory{
 		{Path: "/etc/caddy", Owner: "root", Group: "root", Mode: 0755},
 		{Path: "/etc/caddy/conf.d", Owner: "root", Group: "root", Mode: 0755},
@@ -612,7 +614,7 @@ func addCaddy(ops *[]operation) {
 	*ops = append(*ops, operation{name: "caddy service", run: func(apply host.Apply) (bool, error) {
 		return host.EnsureSystemdUnit(apply, host.SystemdUnit{
 			Name:    "caddy.service",
-			Content: []byte(caddyUnit()),
+			Content: []byte(caddyUnit(ingressMode(opts))),
 			Action:  host.Started,
 		})
 	}})
@@ -628,9 +630,17 @@ func caddyMainFile() string {
 }
 
 // caddyUnit returns the systemd unit content that runs Caddy as a
-// Podman container on the shared `ingress` network with host ports
-// 80 and 443 published.
-func caddyUnit() string {
+// Podman container on the shared `ingress` network. Public ingress
+// publishes 80/443; Cloudflare ingress exposes Caddy only on loopback
+// for cloudflared; private ingress publishes no host port.
+func caddyUnit(mode string) string {
+	publish := ""
+	switch mode {
+	case "public":
+		publish = " --publish 80:80 --publish 443:443"
+	case "cloudflare":
+		publish = " --publish 127.0.0.1:8080:80"
+	}
 	return strings.Join([]string{
 		"[Unit]",
 		"Description=Caddy (Simple VPS managed, podman)",
@@ -644,8 +654,7 @@ func caddyUnit() string {
 		"ExecStartPre=-/usr/bin/podman rm caddy",
 		"ExecStart=/usr/bin/podman run --rm --name caddy" +
 			" --network ingress" +
-			" --publish 80:80" +
-			" --publish 443:443" +
+			publish +
 			" -v /etc/caddy:/etc/caddy:Z" +
 			" -v /var/lib/caddy:/data:Z" +
 			" docker.io/library/caddy:2-alpine",
@@ -656,6 +665,16 @@ func caddyUnit() string {
 		"WantedBy=multi-user.target",
 		"",
 	}, "\n")
+}
+
+func ingressMode(opts InstallOptions) string {
+	if opts.Ingress == "" {
+		if opts.CloudflareTunnel {
+			return "cloudflare"
+		}
+		return "public"
+	}
+	return opts.Ingress
 }
 
 func addLitestream(ops *[]operation) {
@@ -1011,8 +1030,11 @@ func commandOK(result host.CommandResult, program string, args []string) error {
 
 func desiredHost(opts InstallOptions) store.HostDesired {
 	ingress := store.HostIngressDesired{Expose: store.ExposePublic, Tunnel: store.TunnelNone}
-	if opts.CloudflareTunnel {
+	switch ingressMode(opts) {
+	case "cloudflare":
 		ingress = store.HostIngressDesired{Expose: store.ExposePrivate, Tunnel: store.TunnelCloudflare}
+	case "private":
+		ingress = store.HostIngressDesired{Expose: store.ExposePrivate, Tunnel: store.TunnelNone}
 	}
 	packages := map[string]store.DesiredPackage{
 		"caddy":  {Source: "caddy-apt", Track: "stable"},

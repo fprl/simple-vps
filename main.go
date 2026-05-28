@@ -233,6 +233,8 @@ type hostInstallCmd struct {
 	DeployUser               string `help:"Deploy user."`
 	Timezone                 string `help:"Host timezone."`
 	Locale                   string `help:"Host locale."`
+	Ingress                  string `help:"Ingress mode: public, cloudflare, or private."`
+	Admin                    string `help:"Admin access mode: public-ssh or tailscale."`
 	Tailscale                *bool  `negatable:"" help:"Install and configure Tailscale."`
 	TailscaleAuthKey         string `help:"Tailscale auth key."`
 	TailscaleHostname        string `help:"Tailscale hostname."`
@@ -281,6 +283,12 @@ func (c hostInstallCmd) Run() error {
 	}
 	if c.Locale != "" {
 		opts.Locale = c.Locale
+	}
+	if c.Ingress != "" {
+		opts.Ingress = c.Ingress
+	}
+	if c.Admin != "" {
+		opts.Admin = c.Admin
 	}
 	if c.Tailscale != nil {
 		opts.Tailscale = *c.Tailscale

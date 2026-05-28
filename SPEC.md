@@ -130,6 +130,8 @@ master key requirements are satisfied. See ADR-0007.
 simple-vps host status [--server <ssh-target>] [--json]
 simple-vps host doctor [--server <ssh-target>] [--json]
 simple-vps host install [install options]
+simple-vps host install --ingress public|cloudflare|private
+simple-vps host install --admin public-ssh|tailscale
 ```
 
 `status` and `doctor` report on host readiness through SSH. `host install`
@@ -144,13 +146,6 @@ simple-vps host install --tailscale --tailscale-auth-key=...
 ```
 
 See [docs/security-model.md](docs/security-model.md) for the supported modes.
-
-### Host operations — planned
-
-```bash
-simple-vps host install --ingress public|cloudflare|private   # planned (ADR-0002 ingress preset)
-simple-vps host install --admin public-ssh|tailscale          # planned
-```
 
 The ingress preset model (`--ingress`) and the admin-access mode
 (`--admin`) are the durable contract from [docs/security-model.md](docs/security-model.md);
@@ -265,18 +260,15 @@ The Go command underneath accepts the same flags:
 simple-vps host install --mode remote --host <ip> --bootstrap-user root
 ```
 
-Cloudflare Tunnel and Tailscale are opt-in, switched on by their own
-negatable flags. The `--ingress` and `--admin` preset model from
-[docs/security-model.md](docs/security-model.md) is the durable
-contract and the planned shape; today you reach the same outcomes
-through the individual flags:
+Cloudflare Tunnel and Tailscale are opt-in, switched on by the `--ingress`
+and `--admin` presets from [docs/security-model.md](docs/security-model.md):
 
 ```bash
 # Cloudflare Tunnel terminates ingress instead of the public 80/443:
-simple-vps host install --cloudflare-tunnel --cloudflare-tunnel-token=...
+simple-vps host install --ingress cloudflare --cloudflare-tunnel-token=...
 
 # Tailscale admin access (operator user reachable over the tailnet):
-simple-vps host install --tailscale --tailscale-auth-key=...
+simple-vps host install --admin tailscale --tailscale-auth-key=...
 ```
 
 After install, the primary checks are:

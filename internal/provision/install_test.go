@@ -650,6 +650,26 @@ func TestRunInstallWritesCaddyContainerSystemdUnit(t *testing.T) {
 	}
 }
 
+func TestCaddyUnitIngressModes(t *testing.T) {
+	public := caddyUnit("public")
+	if !strings.Contains(public, "--publish 80:80") || !strings.Contains(public, "--publish 443:443") {
+		t.Fatalf("public ingress should publish 80/443:\n%s", public)
+	}
+
+	cloudflare := caddyUnit("cloudflare")
+	if !strings.Contains(cloudflare, "--publish 127.0.0.1:8080:80") {
+		t.Fatalf("cloudflare ingress should publish loopback 8080:\n%s", cloudflare)
+	}
+	if strings.Contains(cloudflare, "--publish 80:80") || strings.Contains(cloudflare, "--publish 443:443") {
+		t.Fatalf("cloudflare ingress should not publish public 80/443:\n%s", cloudflare)
+	}
+
+	private := caddyUnit("private")
+	if strings.Contains(private, "--publish ") {
+		t.Fatalf("private ingress should not publish host ports:\n%s", private)
+	}
+}
+
 // --- Podman host baseline: UFW podman+ rules + registries.conf.d ---
 // (real-box smoke findings 3 + 4)
 

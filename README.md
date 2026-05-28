@@ -20,8 +20,7 @@ your app repo     ->  simple-vps deploy  ->  live app
 - `status`, `app list`, `logs`, `restart`, `destroy`, and JSON read surfaces.
 - Fake-VPS smoke tests and a real Ubuntu 24.04 VPS smoke runbook.
 
-Not shipped yet: rollback, backup/restore, and the planned `--ingress` /
-`--admin` preset flags. See [SPEC.md](SPEC.md).
+Not shipped yet: rollback and backup/restore. See [SPEC.md](SPEC.md).
 
 ## Start Here
 
@@ -75,8 +74,8 @@ and verifies the matching Linux helper binary for the target VPS.
   --ssh-key ~/.ssh/id_ed25519 \
   --operator-ssh-public-key-file ~/.ssh/id_ed25519.pub \
   --deploy-ssh-public-key-file ~/.ssh/simple-vps-deploy.pub \
-  --no-tailscale \
-  --no-cloudflare-tunnel \
+  --ingress public \
+  --admin public-ssh \
   --no-litestream \
   --yes
 ```
