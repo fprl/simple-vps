@@ -57,7 +57,7 @@ not a layout change.
       "tunnel": "cloudflare"
     },
     "features": {
-      "podman": true,
+      "docker": false,
       "litestream": true
     },
     "packages": {

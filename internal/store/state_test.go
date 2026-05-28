@@ -15,7 +15,6 @@ func TestStoreWritesADR0002Files(t *testing.T) {
 	desired := validHostDesired()
 	desired.Ingress.Tunnel = TunnelCloudflare
 	desired.Features.Litestream = true
-	desired.Features.Runtimes = []string{"bun"}
 	desired.Packages = map[string]DesiredPackage{
 		"litestream": {Source: "github-release", Version: "0.5.8"},
 		"caddy":      {Source: "caddy-apt", Track: "stable"},
@@ -106,7 +105,7 @@ func TestWriteHostStatePreservesDesired(t *testing.T) {
   "desired": {
       "users": {"operator":"operator", "deploy":"deploy"},
       "ingress": {"tunnel":"none", "expose":"private"},
-      "features": {"runtimes":["node", "bun"], "litestream":true, "docker":false},
+      "features": {"litestream":true, "docker":false},
       "packages": {
         "litestream": {"version":"0.5.8", "source":"github-release"},
         "caddy": {"track":"stable", "source":"caddy-apt"}
@@ -186,23 +185,6 @@ func TestWriteHostStateIsStableAcrossRepeatedWrites(t *testing.T) {
 	if string(before) != string(after) {
 		t.Fatalf("host state rewrites are not stable:\nbefore:\n%s\nafter:\n%s", before, after)
 	}
-}
-
-func TestStoreSortsHostDesiredSliceFieldsBeforeWrite(t *testing.T) {
-	storeA := Store{Root: t.TempDir()}
-	storeB := Store{Root: t.TempDir()}
-
-	desiredA := validHostDesired()
-	desiredA.Features.Runtimes = []string{"node", "bun"}
-	desiredB := validHostDesired()
-	desiredB.Features.Runtimes = []string{"bun", "node"}
-	if err := storeA.WriteHostDesired(desiredA); err != nil {
-		t.Fatal(err)
-	}
-	if err := storeB.WriteHostDesired(desiredB); err != nil {
-		t.Fatal(err)
-	}
-	assertSameFile(t, storeA.HostPath(), storeB.HostPath())
 }
 
 func TestStoreRejectsInvalidHostVersions(t *testing.T) {
@@ -339,11 +321,6 @@ func TestReadHostRejectsInvalidDesiredValues(t *testing.T) {
 			want:   "ingress.tunnel",
 		},
 		{
-			name:   "empty runtime",
-			mutate: func(d *HostDesired) { d.Features.Runtimes = []string{"bun", ""} },
-			want:   "features.runtimes",
-		},
-		{
 			name: "missing package source",
 			mutate: func(d *HostDesired) {
 				d.Packages["caddy"] = DesiredPackage{Track: "stable"}
@@ -378,9 +355,7 @@ func validHostDesired() HostDesired {
 			Expose: ExposePrivate,
 			Tunnel: TunnelNone,
 		},
-		Features: HostFeatures{
-			Runtimes: []string{},
-		},
+		Features: HostFeatures{},
 		Packages: map[string]DesiredPackage{},
 	}
 }
@@ -398,21 +373,6 @@ func hostDesiredRaw(t *testing.T, path string) string {
 		t.Fatal(err)
 	}
 	return string(raw.Desired)
-}
-
-func assertSameFile(t *testing.T, left string, right string) {
-	t.Helper()
-	leftData, err := os.ReadFile(left)
-	if err != nil {
-		t.Fatal(err)
-	}
-	rightData, err := os.ReadFile(right)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(leftData) != string(rightData) {
-		t.Fatalf("files differ:\n%s:\n%s\n%s:\n%s", left, leftData, right, rightData)
-	}
 }
 
 func writeHostWithDesired(t *testing.T, store Store, desired HostDesired) {

@@ -42,9 +42,8 @@ type HostIngressDesired struct {
 }
 
 type HostFeatures struct {
-	Docker     bool     `json:"docker"`
-	Litestream bool     `json:"litestream"`
-	Runtimes   []string `json:"runtimes"`
+	Docker     bool `json:"docker"`
+	Litestream bool `json:"litestream"`
 }
 
 type DesiredPackage struct {

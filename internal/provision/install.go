@@ -1029,7 +1029,6 @@ func desiredHost(opts InstallOptions) store.HostDesired {
 		Features: store.HostFeatures{
 			Docker:     opts.InstallDocker,
 			Litestream: opts.InstallLitestream,
-			Runtimes:   []string{},
 		},
 		Packages: packages,
 	}

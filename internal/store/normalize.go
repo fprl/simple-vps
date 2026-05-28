@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
-	"sort"
 	"strings"
 )
 
@@ -38,10 +37,6 @@ func normalizeHostDesired(desired *HostDesired) {
 	if desired.Packages == nil {
 		desired.Packages = map[string]DesiredPackage{}
 	}
-	if desired.Features.Runtimes == nil {
-		desired.Features.Runtimes = []string{}
-	}
-	sort.Strings(desired.Features.Runtimes)
 }
 
 func normalizeHostObserved(observed *HostObserved) {
@@ -87,11 +82,6 @@ func validateHostDesired(desired HostDesired) error {
 	case TunnelNone, TunnelCloudflare, TunnelTailscaleFunnel:
 	default:
 		return errors.New("ingress.tunnel must be none, cloudflare, or tailscale-funnel")
-	}
-	for _, runtime := range desired.Features.Runtimes {
-		if strings.TrimSpace(runtime) == "" {
-			return errors.New("features.runtimes cannot contain empty values")
-		}
 	}
 	for name, pkg := range desired.Packages {
 		if strings.TrimSpace(name) == "" {

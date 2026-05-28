@@ -63,7 +63,7 @@ func writeValidHost(t *testing.T, path string) {
   "desired": {
     "users": {"operator": "operator", "deploy": "deploy"},
     "ingress": {"expose": "private", "tunnel": "none"},
-    "features": {"docker": false, "litestream": false, "runtimes": []},
+    "features": {"docker": false, "litestream": false},
     "packages": {}
   },
   "observed": {"packages": {}, "ingress": {}},
