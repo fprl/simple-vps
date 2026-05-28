@@ -22,7 +22,7 @@ const (
 var (
 	AppRe        = names.AppRe
 	EnvRe        = names.EnvRe
-	ProcessRe    = names.ServiceRe
+	ProcessRe    = names.ProcessRe
 	SystemUserRe = names.SystemUserRe
 	EnvKeyRe     = names.EnvKeyRe
 )
@@ -83,7 +83,6 @@ type AppContext struct {
 	AppName    string
 	EnvName    string
 	Server     string
-	AppRoot    string
 	Shape      string
 	Dockerfile string
 	Processes  map[string]Process
@@ -169,10 +168,6 @@ func strictErrorMessage(err error) string {
 	return strings.Join(msgs, "; ")
 }
 
-func appRoot(app, env string) string {
-	return fmt.Sprintf("/var/apps/%s.%s", app, env)
-}
-
 func detectShape(root string, processes map[string]Process, routes map[string]Route) (string, string) {
 	hasDockerfile := false
 	if _, err := os.Stat(filepath.Join(root, "Dockerfile")); err == nil {
@@ -191,6 +186,10 @@ func detectShape(root string, processes map[string]Process, routes map[string]Ro
 	}
 
 	hasProcesses := len(processes) > 0
+	if !hasProcesses && len(routes) == 0 {
+		return "", "manifest must declare at least one [processes.<name>] block or route"
+	}
+
 	if hasProcesses || hasProcessRoute {
 		if !hasDockerfile {
 			return "", "manifest declares processes but is missing a Dockerfile"
@@ -205,9 +204,6 @@ func detectShape(root string, processes map[string]Process, routes map[string]Ro
 		return ShapeStatic, ""
 	}
 
-	if hasDockerfile {
-		return ShapeContainer, ""
-	}
 	return "", "manifest must declare at least one [processes.<name>] block or route"
 }
 
@@ -317,7 +313,6 @@ func LoadAppContext(root string, envName string) (*AppContext, error) {
 		AppName:    manifest.Name,
 		EnvName:    envName,
 		Server:     envBlock.Server,
-		AppRoot:    appRoot(manifest.Name, envName),
 		Shape:      shape,
 		Dockerfile: dockerfile,
 		Processes:  processes,

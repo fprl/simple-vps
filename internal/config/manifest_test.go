@@ -70,9 +70,6 @@ func TestCheckManifestAcceptsContainerV2(t *testing.T) {
 	if ctx.Shape != ShapeContainer {
 		t.Fatalf("shape = %q, want container", ctx.Shape)
 	}
-	if ctx.AppRoot != "/var/apps/api.production" {
-		t.Fatalf("AppRoot = %q", ctx.AppRoot)
-	}
 	web := ctx.Processes["web"]
 	if web.Port == nil || *web.Port != 3000 || web.Health != "/health" {
 		t.Fatalf("unexpected web process: %+v", web)
@@ -130,6 +127,24 @@ serve = "docs-dist"
 	}
 	if ctx.Shape != ShapeStatic {
 		t.Fatalf("shape = %q, want static", ctx.Shape)
+	}
+}
+
+func TestCheckManifestRejectsDockerfileOnlyManifest(t *testing.T) {
+	root := t.TempDir()
+	writeDockerfile(t, root)
+	writeManifest(t, root, `name = "api"
+
+[env.production]
+server = "deploy@example.com"
+`)
+
+	errors, _, err := CheckManifest(root, "production")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(errors, "manifest must declare at least one [processes.<name>] block or route") {
+		t.Fatalf("expected no-entrypoint error, got %v", errors)
 	}
 }
 
