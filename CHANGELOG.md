@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.4.1 - 2026-05-28
+
+### Fixed
+
+- Remote `host install` now works from a standalone downloaded release binary.
+  The installer looks for a matching `simple-vps-linux-<arch>` helper beside
+  the current binary or in `SIMPLE_VPS_HELPER_DIR`; if none exists and the
+  current binary has a release version, it downloads the matching Linux helper
+  from the GitHub release assets. Private release asset downloads honor
+  `SIMPLE_VPS_RELEASE_TOKEN`, `GH_TOKEN`, or `GITHUB_TOKEN`.
+
+### Changed
+
+- README install instructions now start from release binaries instead of a
+  source checkout.
+
 ## v0.4.0 - 2026-05-28
 
 This is the first real end-to-end Go implementation cut after the container

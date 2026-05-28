@@ -54,10 +54,26 @@ make fake-vps-install-smoke
 
 ## Install A VPS
 
-The root installer is a thin bootstrap that runs `simple-vps host install`:
+Download a release binary, then run `host install`:
 
 ```bash
-./install.sh \
+asset=simple-vps-darwin-arm64 # use simple-vps-darwin-amd64 on Intel Macs
+curl -fsSL \
+  "https://github.com/fprl/simple-vps/releases/download/v0.4.1/${asset}" \
+  -o simple-vps
+chmod 0755 simple-vps
+
+./simple-vps version
+```
+
+From macOS, remote install uploads or downloads the matching Linux helper
+binary for the target VPS automatically:
+
+If the release assets are private, set `SIMPLE_VPS_RELEASE_TOKEN`, `GH_TOKEN`,
+or `GITHUB_TOKEN` before running remote install.
+
+```bash
+./simple-vps host install \
   --mode remote \
   --host 203.0.113.10 \
   --bootstrap-user root \
@@ -70,16 +86,19 @@ The root installer is a thin bootstrap that runs `simple-vps host install`:
   --yes
 ```
 
+The root `install.sh` is a thin bootstrap that finds, downloads, or builds a
+local `simple-vps` binary and then runs `simple-vps host install`.
+
 After install, verify the host:
 
 ```bash
 SIMPLE_VPS_SSH_KEY="$(cat ~/.ssh/simple-vps-deploy)" \
 SIMPLE_VPS_KNOWN_HOSTS="$(ssh-keyscan -t ed25519 -H 203.0.113.10 2>/dev/null)" \
-  ./dist/simple-vps host status --json --server deploy@203.0.113.10
+  ./simple-vps host status --json --server deploy@203.0.113.10
 
 SIMPLE_VPS_SSH_KEY="$(cat ~/.ssh/simple-vps-deploy)" \
 SIMPLE_VPS_KNOWN_HOSTS="$(ssh-keyscan -t ed25519 -H 203.0.113.10 2>/dev/null)" \
-  ./dist/simple-vps host doctor --json --server deploy@203.0.113.10
+  ./simple-vps host doctor --json --server deploy@203.0.113.10
 ```
 
 ## Deploy An App
@@ -110,7 +129,7 @@ Build all release binaries:
 
 ```bash
 make clean
-make build-release VERSION=v0.4.0
+make build-release VERSION=v0.4.1
 ```
 
 Artifacts land in `dist/`:

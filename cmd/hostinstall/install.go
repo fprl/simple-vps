@@ -131,11 +131,7 @@ func (i *Installer) RunOptions(opts Options) error {
 
 	switch plan.Mode {
 	case "remote":
-		repoRoot, err := locateRepoRoot()
-		if err != nil {
-			return err
-		}
-		err = i.runRemote(plan, repoRoot)
+		err = i.runRemote(plan)
 	case "local":
 		err = i.runLocal(plan)
 	default:
@@ -278,7 +274,7 @@ func BuildPlan(opts Options, isRoot bool, osReleaseExists bool) (Plan, error) {
 	}, nil
 }
 
-func (i *Installer) runRemote(plan Plan, repoRoot string) error {
+func (i *Installer) runRemote(plan Plan) error {
 	keyPlan, err := resolveSSHKeyPlan(plan, false, "")
 	if err != nil {
 		return err
@@ -289,20 +285,15 @@ func (i *Installer) runRemote(plan Plan, repoRoot string) error {
 		return err
 	}
 
-	helperDir, cleanupHelper, err := i.prepareGoHelperBinaries(repoRoot)
-	if err != nil {
-		return err
-	}
-	defer cleanupHelper()
-
 	arch, err := i.remoteArch(plan)
 	if err != nil {
 		return err
 	}
-	helper := filepath.Join(helperDir, "simple-vps-linux-"+arch)
-	if !fileExists(helper) {
-		return fmt.Errorf("Simple VPS helper binary not found for target architecture %s: %s", arch, helper)
+	helper, cleanupHelper, err := i.prepareRemoteHelperBinary(arch)
+	if err != nil {
+		return err
 	}
+	defer cleanupHelper()
 
 	remoteHelper := "/tmp/simple-vps-host-install"
 	if err := i.copyRemote(plan, helper, remoteHelper); err != nil {

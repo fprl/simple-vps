@@ -1,0 +1,205 @@
+package hostinstall
+
+import (
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/fprl/simple-vps/internal/version"
+)
+
+func TestPrepareRemoteHelperUsesConfiguredHelperDir(t *testing.T) {
+	dir := t.TempDir()
+	helper := filepath.Join(dir, "simple-vps-linux-amd64")
+	if err := os.WriteFile(helper, []byte("helper"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	installer := NewInstaller()
+	installer.Env = map[string]string{"SIMPLE_VPS_HELPER_DIR": dir}
+
+	got, cleanup, err := installer.prepareRemoteHelperBinary("amd64")
+	defer cleanup()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != helper {
+		t.Fatalf("expected configured helper %q, got %q", helper, got)
+	}
+}
+
+func TestPrepareRemoteHelperDownloadsReleaseAsset(t *testing.T) {
+	prev := version.Version
+	version.Version = "v9.9.9-test"
+	t.Cleanup(func() { version.Version = prev })
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v9.9.9-test/simple-vps-linux-arm64" {
+			t.Fatalf("unexpected release asset path: %s", r.URL.Path)
+		}
+		_, _ = w.Write([]byte("downloaded-helper"))
+	}))
+	t.Cleanup(server.Close)
+
+	installer := NewInstaller()
+	installer.Env = map[string]string{"SIMPLE_VPS_RELEASE_BASE_URL": server.URL}
+
+	got, cleanup, err := installer.prepareRemoteHelperBinary("arm64")
+	defer cleanup()
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "downloaded-helper" {
+		t.Fatalf("unexpected downloaded helper content: %q", data)
+	}
+	info, err := os.Stat(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0755 {
+		t.Fatalf("expected helper mode 0755, got %v", info.Mode().Perm())
+	}
+}
+
+func TestPrepareRemoteHelperReleaseBuildPrefersDownloadOverRepoRoot(t *testing.T) {
+	prev := version.Version
+	version.Version = "v9.9.9-test"
+	t.Cleanup(func() { version.Version = prev })
+
+	sourceDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(sourceDir, "go.mod"), []byte("module invalid.example/simple-vps\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SIMPLE_VPS_REPO_ROOT", sourceDir)
+	previousWorkingDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(previousWorkingDir); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v9.9.9-test/simple-vps-linux-amd64" {
+			t.Fatalf("unexpected release asset path: %s", r.URL.Path)
+		}
+		_, _ = w.Write([]byte("downloaded-helper"))
+	}))
+	t.Cleanup(server.Close)
+
+	installer := NewInstaller()
+	installer.Env = map[string]string{"SIMPLE_VPS_RELEASE_BASE_URL": server.URL}
+
+	got, cleanup, err := installer.prepareRemoteHelperBinary("amd64")
+	defer cleanup()
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "downloaded-helper" {
+		t.Fatalf("expected downloaded helper, got %q", data)
+	}
+}
+
+func TestPrepareRemoteHelperUsesReleaseToken(t *testing.T) {
+	prev := version.Version
+	version.Version = "v9.9.9-test"
+	t.Cleanup(func() { version.Version = prev })
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer test-token" {
+			t.Fatalf("unexpected authorization header: %q", got)
+		}
+		_, _ = w.Write([]byte("downloaded-helper"))
+	}))
+	t.Cleanup(server.Close)
+
+	installer := NewInstaller()
+	installer.Env = map[string]string{
+		"SIMPLE_VPS_RELEASE_BASE_URL": server.URL,
+		"GH_TOKEN":                    "test-token",
+	}
+
+	_, cleanup, err := installer.prepareRemoteHelperBinary("amd64")
+	defer cleanup()
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPrepareRemoteHelperFallsBackToGitHubAssetAPI(t *testing.T) {
+	prev := version.Version
+	version.Version = "v9.9.9-test"
+	t.Cleanup(func() { version.Version = prev })
+
+	var serverURL string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer test-token" {
+			t.Fatalf("unexpected authorization header: %q", got)
+		}
+
+		switch r.URL.Path {
+		case "/v9.9.9-test/simple-vps-linux-amd64":
+			http.NotFound(w, r)
+		case "/releases/tags/v9.9.9-test":
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprintf(w, `{"assets":[{"name":"simple-vps-linux-amd64","url":%q}]}`, serverURL+"/assets/1")
+		case "/assets/1":
+			if got := r.Header.Get("Accept"); got != "application/octet-stream" {
+				t.Fatalf("unexpected accept header: %q", got)
+			}
+			_, _ = w.Write([]byte("private-release-helper"))
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	serverURL = server.URL
+	t.Cleanup(server.Close)
+
+	installer := NewInstaller()
+	installer.Env = map[string]string{
+		"SIMPLE_VPS_RELEASE_BASE_URL":     server.URL,
+		"SIMPLE_VPS_RELEASE_API_BASE_URL": server.URL,
+		"GH_TOKEN":                        "test-token",
+	}
+
+	got, cleanup, err := installer.prepareRemoteHelperBinary("amd64")
+	defer cleanup()
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "private-release-helper" {
+		t.Fatalf("unexpected downloaded helper content: %q", data)
+	}
+}
+
+func TestReleaseVersionDetection(t *testing.T) {
+	for _, value := range []string{"v0.4.0", "v1.2.3-rc1"} {
+		if !isReleaseVersion(value) {
+			t.Fatalf("%q should be treated as a release version", value)
+		}
+	}
+	for _, value := range []string{"dev", "v0.4.0-dirty", "aeadd20"} {
+		if isReleaseVersion(value) {
+			t.Fatalf("%q should not be treated as a release version", value)
+		}
+	}
+}
