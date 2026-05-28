@@ -47,6 +47,7 @@ func TestContainerSmoke(t *testing.T) {
 	t.Run("rollback runs an older local image release", env.testRollback)
 	t.Run("backup and restore round-trip app state", env.testBackupRestore)
 	t.Run("concurrent deploys of the same app env serialize", env.testConcurrentDeploys)
+	t.Run("static-only app deploys and restores without containers", env.testStaticOnlyAppLifecycle)
 	t.Run("@secret refs resolve through put/list/rm into the runtime env", env.testSecretLifecycle)
 	t.Run("status + logs surface deployed processes without SSHing in", env.testStatusAndLogs)
 	t.Run("restart bounces containers in place via podman restart", env.testRestart)
@@ -179,6 +180,14 @@ func (e *smokeEnv) testBackupRestore(t *testing.T) {
 	if got != "durable-state" {
 		t.Fatalf("restored data = %q, want durable-state", got)
 	}
+	envRootStat := strings.TrimSpace(e.dockerExec(t, "stat -c '%a %U' "+identity.EnvRoot("api", "production")))
+	if envRootStat != "755 root" {
+		t.Fatalf("restored env root ownership = %q, want `755 root`", envRootStat)
+	}
+	dataStat := strings.TrimSpace(e.dockerExec(t, "stat -c '%a %U' "+identity.DataDir("api", "production")))
+	if dataStat != "2775 "+identity.SystemUser("api", "production") {
+		t.Fatalf("restored data ownership = %q, want `2775 %s`", dataStat, identity.SystemUser("api", "production"))
+	}
 	status := e.simpleVPS(t, app, nil, "status", "production")
 	assertContains(t, status, "web")
 	assertContains(t, status, "running")
@@ -259,6 +268,64 @@ func (e *smokeEnv) testConcurrentDeploys(t *testing.T) {
 	status := e.simpleVPS(t, app, nil, "status", "production")
 	assertContains(t, status, "web")
 	assertContains(t, status, "running")
+}
+
+func (e *smokeEnv) testStaticOnlyAppLifecycle(t *testing.T) {
+	app := filepath.Join(e.tmp, "static-site")
+	mustMkdir(t, app)
+	writeStaticFixture(t, app)
+	e.commitFixture(t, app)
+
+	e.simpleVPS(t, app, nil, "setup", "production")
+	e.simpleVPS(t, app, nil, "deploy", "production")
+
+	status := e.simpleVPS(t, app, nil, "status", "production")
+	assertContains(t, status, "site (production)")
+	assertContains(t, status, "no processes running")
+
+	rawListJSON := e.simpleVPS(t, app, nil, "app", "list", "--json")
+	var listPayload struct {
+		Apps []struct {
+			App       string `json:"app"`
+			Env       string `json:"env"`
+			Processes []struct {
+				Process string `json:"process"`
+			} `json:"processes"`
+		} `json:"apps"`
+	}
+	if err := json.Unmarshal([]byte(rawListJSON), &listPayload); err != nil {
+		t.Fatalf("app list --json output not parseable as JSON: %v\nraw:\n%s", err, rawListJSON)
+	}
+	foundStatic := false
+	for _, listed := range listPayload.Apps {
+		if listed.App == "site" && listed.Env == "production" && len(listed.Processes) == 0 {
+			foundStatic = true
+		}
+	}
+	if !foundStatic {
+		t.Fatalf("app list --json missing static-only site env:\n%+v", listPayload.Apps)
+	}
+
+	e.assertRemoteBody(t, "curl -fsS -H 'Host: static.example.com' http://127.0.0.1/", "static-ok")
+
+	e.simpleVPS(t, app, nil, "backup", "production")
+	rawBackups := e.simpleVPS(t, app, nil, "backup", "--json", "list", "production")
+	var backups struct {
+		Backups []struct {
+			ID string `json:"id"`
+		} `json:"backups"`
+	}
+	if err := json.Unmarshal([]byte(rawBackups), &backups); err != nil {
+		t.Fatalf("backup list --json output not parseable as JSON: %v\nraw:\n%s", err, rawBackups)
+	}
+	if len(backups.Backups) == 0 || backups.Backups[0].ID == "" {
+		t.Fatalf("expected static backup, got %+v", backups.Backups)
+	}
+	backupID := backups.Backups[0].ID
+
+	e.simpleVPS(t, app, nil, "destroy", "production", "--confirm", "site")
+	e.simpleVPS(t, app, nil, "restore", "--from", backupID, "production")
+	e.assertRemoteBody(t, "curl -fsS -H 'Host: static.example.com' http://127.0.0.1/", "static-ok")
 }
 
 // testSecretLifecycle covers the @secret:KEY resolution path end-to-end
@@ -611,6 +678,21 @@ resources = { memory = "512m", cpus = 0.5 }
 [routes.app]
 host = "api.example.com"
 process = "web"
+`)
+}
+
+func writeStaticFixture(t *testing.T, app string) {
+	t.Helper()
+	mustMkdir(t, filepath.Join(app, "dist"))
+	mustWrite(t, filepath.Join(app, "dist", "index.html"), "static-ok")
+	mustWrite(t, filepath.Join(app, "simple-vps.toml"), `name = "site"
+
+[env.production]
+server = "fake-vps"
+
+[routes.home]
+host = "static.example.com"
+serve = "dist"
 `)
 }
 

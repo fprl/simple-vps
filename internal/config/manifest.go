@@ -277,6 +277,9 @@ func CheckManifest(root string, envName string) ([]string, []string, error) {
 		if shape == ShapeStatic && mergedDeploy.Release != "" {
 			errors = append(errors, "[deploy].release is only supported for container apps")
 		}
+		if shape == ShapeStatic && len(mergedVars) > 0 {
+			errors = append(errors, "[vars] is only supported for container apps")
+		}
 	}
 
 	return errors, warnings, nil

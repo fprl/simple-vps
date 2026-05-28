@@ -133,6 +133,33 @@ serve = "docs-dist"
 	}
 }
 
+func TestCheckManifestRejectsStaticVars(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "dist"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	writeManifest(t, root, `name = "site"
+
+[env.production]
+server = "deploy@example.com"
+
+[vars]
+DATABASE_URL = "@secret:DATABASE_URL"
+
+[routes.home]
+host = "example.com"
+serve = "dist"
+`)
+
+	errors, _, err := CheckManifest(root, "production")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(errors, "[vars] is only supported for container apps") {
+		t.Fatalf("expected static vars error, got %v", errors)
+	}
+}
+
 func TestReadManifestRejectsOldFields(t *testing.T) {
 	root := t.TempDir()
 	writeManifest(t, root, `name = "api"

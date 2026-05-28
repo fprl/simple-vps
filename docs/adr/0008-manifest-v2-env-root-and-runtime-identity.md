@@ -34,8 +34,9 @@ Public config uses `processes`, not `services`. A process is one
 long-running container process from the app image. Multiple processes
 share one Dockerfile and one built image.
 
-Non-secret env vars live in `[vars]`, with env-specific overrides under
-`[env.<name>.vars]`.
+For container apps, non-secret env vars live in `[vars]`, with
+env-specific overrides under `[env.<name>.vars]`. Static-only apps reject
+`[vars]` because there is no runtime env to inject.
 
 Route entries live in one `[routes.*]` namespace. A route has exactly
 one target:
@@ -183,7 +184,9 @@ zero-downtime.
 ### Static routes
 
 Static-only apps are part of v1. Caddy serves uploaded static directories
-directly; nginx is not involved.
+directly; nginx is not involved. Static backups include the active static
+release assets so restore can bring a static-only app back without
+containers.
 
 Mixed container plus static routes are useful, but may be deferred until
 the static release metadata is clean. The public shape already reserves

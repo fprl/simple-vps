@@ -68,10 +68,10 @@ simple-vps check [env]                                # validate manifest
 simple-vps setup <env>                                # create per-env user, paths, Podman network
 simple-vps deploy <env> [--dirty] [--rebuild]         # build image or publish static assets, route via Caddy
 simple-vps status <env> [--json]                      # runtime process table
-simple-vps app list [--server <ssh-target>] [--json]  # podman labels-sourced app/env list
+simple-vps app list [--server <ssh-target>] [--json]  # env identity + podman labels app/env list
 simple-vps restart <env> [process] [--json]           # bounce running processes in place (same image)
 simple-vps rollback <env> [release] [--json]          # run an older local image release
-simple-vps backup [--to=<destination>] <env>          # local tar backup of data, manifest, secrets, release metadata
+simple-vps backup [--to=<destination>] <env>          # local tar backup of data/static assets, manifest, secrets, release metadata
 simple-vps backup [--json] list <env>                 # list local backups
 simple-vps backup rm <env> <backup-id>                # remove one local backup
 simple-vps restore --from=<backup-id> [--dry-run] <env> # restore local backup and run saved image
@@ -105,9 +105,11 @@ by a host-side file lock. `setup`, `deploy`, `restart`, `destroy`, and
 secret writes/removals cannot interleave against the same environment.
 Different environments can proceed independently.
 
-Non-secret values live in `[vars]`, with env-specific overrides in
-`[env.<env>.vars]`. Secret values are referenced by whole-value
-`@secret:KEY` references and resolved on the host before deploy execution.
+For container apps, non-secret runtime values live in `[vars]`, with
+env-specific overrides in `[env.<env>.vars]`. Secret values are referenced
+by whole-value `@secret:KEY` references and resolved on the host before
+deploy execution. Static-only apps reject `[vars]` because there is no
+runtime env to inject.
 
 Backup and restore are paired primitives. The bar is: fresh VPS, host
 bootstrap, one `restore`, app running again when the saved image is still
@@ -241,7 +243,7 @@ host = "old.example.com"
 redirect = "https://api.example.com"
 ```
 
-Non-secret runtime values are declared once in `[vars]` and overridden per
+Container runtime values are declared once in `[vars]` and overridden per
 env with `[env.<env>.vars]`. Whole-value `@secret:KEY` references resolve
 from the host secret store during deploy.
 

@@ -55,6 +55,9 @@ func (c appRollbackCmd) runLocked() {
 		utils.Die(err.Error(), 1)
 	}
 	defer cleanup()
+	if app.Shape != config.ShapeContainer {
+		utils.Die(fmt.Sprintf("rollback currently supports container apps only (got shape %q)", app.Shape), 1)
+	}
 
 	userID, groupID, err := hostUserIDs(identity.SystemUser(c.App, c.Env))
 	if err != nil {
@@ -212,6 +215,10 @@ func loadAppliedAppContext(app, env string) (*config.AppContext, func(), error) 
 		cleanup()
 		return nil, func() {}, err
 	}
+	if err := createStaticServePlaceholders(tmp, env); err != nil {
+		cleanup()
+		return nil, func() {}, err
+	}
 	ctx, err := config.LoadAppContext(tmp, env)
 	if err != nil {
 		cleanup()
@@ -221,11 +228,34 @@ func loadAppliedAppContext(app, env string) (*config.AppContext, func(), error) 
 		cleanup()
 		return nil, func() {}, fmt.Errorf("applied manifest names app %s, expected %s", ctx.AppName, app)
 	}
-	if ctx.Shape != config.ShapeContainer {
-		cleanup()
-		return nil, func() {}, fmt.Errorf("rollback currently supports container apps only (got shape %q)", ctx.Shape)
-	}
 	return ctx, cleanup, nil
+}
+
+func createStaticServePlaceholders(root, env string) error {
+	manifest, err := config.ReadManifest(root)
+	if err != nil {
+		return err
+	}
+	create := func(routes map[string]config.Route) error {
+		for _, route := range routes {
+			if route.Serve == "" {
+				continue
+			}
+			if err := os.MkdirAll(filepath.Join(root, route.Serve), 0755); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if err := create(manifest.Routes); err != nil {
+		return err
+	}
+	if block, ok := manifest.Env[env]; ok {
+		if err := create(block.Routes); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func processNames(processes map[string]config.Process) []string {

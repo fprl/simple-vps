@@ -30,12 +30,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 SITE_RE = re.compile(r'^\s*"(?P<host>[^"]+)"\s*\{\s*$')
 PROXY_RE = re.compile(r'^\s*reverse_proxy\s+http://(?P<upstream>[A-Za-z0-9_.-]+):(?P<port>\d+)\s*$')
 REDIR_RE = re.compile(r'^\s*redir\s+"(?P<to>[^"]+)"\s+permanent\s*$')
+ROOT_RE = re.compile(r'^\s*root\s+\*\s+"(?P<root>[^"]+)"\s*$')
 
 CONF_DIR = "/etc/caddy/conf.d"
 
 
 def load_routes():
-    """Return {host: {"proxy": "container_name:port"} | {"redir": "url"}}."""
+    """Return {host: {"proxy": ...} | {"redir": ...} | {"static": ...}}."""
     routes = {}
     if not os.path.isdir(CONF_DIR):
         return routes
@@ -72,6 +73,10 @@ def load_routes():
             m = REDIR_RE.match(line)
             if m:
                 routes[current_host] = {"redir": m.group("to")}
+                continue
+            m = ROOT_RE.match(line)
+            if m:
+                routes[current_host] = {"static": m.group("root")}
                 continue
     return routes
 
@@ -155,6 +160,34 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", "0")
         self.end_headers()
 
+    def static(self, root):
+        rel = self.path.split("?", 1)[0].split("#", 1)[0]
+        if rel in ("", "/"):
+            rel = "/index.html"
+        rel = os.path.normpath(rel.lstrip("/"))
+        if rel.startswith("..") or os.path.isabs(rel):
+            self.not_found()
+            return
+        target = os.path.abspath(os.path.join(root, rel))
+        root_abs = os.path.abspath(root)
+        if target != root_abs and not target.startswith(root_abs + os.sep):
+            self.not_found()
+            return
+        if os.path.isdir(target):
+            target = os.path.join(target, "index.html")
+        try:
+            with open(target, "rb") as f:
+                body = f.read()
+        except OSError:
+            self.not_found()
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(body)
+
     def serve(self):
         routes = load_routes()
         host = self.host_header()
@@ -167,6 +200,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if "redir" in route:
             self.redir(route["redir"])
+            return
+        if "static" in route:
+            self.static(route["static"])
             return
         self.not_found()
 
