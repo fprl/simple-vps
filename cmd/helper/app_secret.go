@@ -1,6 +1,7 @@
 package helper
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -56,8 +57,9 @@ func (c appSecretPutCmd) Run() error {
 }
 
 type appSecretListCmd struct {
-	App string `arg:"" help:"App name."`
-	Env string `arg:"" help:"Env name."`
+	App  string `arg:"" help:"App name."`
+	Env  string `arg:"" help:"Env name."`
+	JSON bool   `name:"json" help:"Emit structured JSON instead of plain key lines."`
 }
 
 func (c appSecretListCmd) Run() error {
@@ -68,11 +70,33 @@ func (c appSecretListCmd) Run() error {
 	if err != nil {
 		utils.Die(err.Error(), 1)
 	}
+	if c.JSON {
+		payload := secretListPayloadFor(c.App, c.Env, keys)
+		buf, err := json.MarshalIndent(payload, "", "  ")
+		if err != nil {
+			utils.Die(err.Error(), 1)
+		}
+		fmt.Println(string(buf))
+		return nil
+	}
 	// Keys only. Never values.
 	for _, k := range keys {
 		fmt.Println(k)
 	}
 	return nil
+}
+
+type secretListPayload struct {
+	App  string   `json:"app"`
+	Env  string   `json:"env"`
+	Keys []string `json:"keys"`
+}
+
+func secretListPayloadFor(app, env string, keys []string) secretListPayload {
+	if keys == nil {
+		keys = []string{}
+	}
+	return secretListPayload{App: app, Env: env, Keys: keys}
 }
 
 type appSecretRmCmd struct {

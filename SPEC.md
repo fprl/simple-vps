@@ -67,7 +67,7 @@ simple-vps restart <env> [service] [--json]           # bounce running services 
 simple-vps destroy <env> --confirm <app> [--purge]    # tear down one environment; --yes for automation
 simple-vps logs <env> [service] [--follow] [--tail N] # podman logs against the labelled container
 simple-vps secret put <env> <KEY>                     # stdin-only write to /etc/simple-vps/secrets/<app>/<env>/<key>
-simple-vps secret list <env>                          # keys only, never values
+simple-vps secret list <env> [--json]                 # keys only, never values
 simple-vps secret rm <env> <KEY>                      # remove one key
 simple-vps ssh <env>                                  # SSH into the host
 ```
@@ -122,8 +122,8 @@ master key requirements are satisfied. See ADR-0007.
 ### Host operations — shipping today
 
 ```bash
-simple-vps host status [--server <ssh-target>]
-simple-vps host doctor [--server <ssh-target>]
+simple-vps host status [--server <ssh-target>] [--json]
+simple-vps host doctor [--server <ssh-target>] [--json]
 simple-vps host install [install options]
 ```
 
@@ -143,16 +143,13 @@ See [docs/security-model.md](docs/security-model.md) for the supported modes.
 ### Host operations — planned
 
 ```bash
-simple-vps host status --json                         # planned
-simple-vps host doctor --json                         # planned
 simple-vps host install --ingress public|cloudflare|private   # planned (ADR-0002 ingress preset)
 simple-vps host install --admin public-ssh|tailscale          # planned
 ```
 
 The ingress preset model (`--ingress`) and the admin-access mode
 (`--admin`) are the durable contract from [docs/security-model.md](docs/security-model.md);
-they map to the individual flags above and ship together with the
-`--json` rollout.
+they map to the individual flags above.
 
 ### Diagnostics
 
@@ -176,8 +173,8 @@ installer, and host helper.
 Shipping today:
 
 ```bash
-sudo simple-vps server status
-sudo simple-vps server doctor
+sudo simple-vps server status [--json]
+sudo simple-vps server doctor [--json]
 
 sudo simple-vps server app setup-env <app> <env>
 sudo simple-vps server app destroy-env [--purge] <app> <env>
@@ -186,7 +183,7 @@ sudo simple-vps server app status [--json] <app> <env>
 sudo simple-vps server app restart [--json] <app> <env> [service]
 sudo simple-vps server app logs [--follow] [--tail=N] <app> <env> [service]
 sudo simple-vps server app secret put <app> <env> <key>
-sudo simple-vps server app secret list <app> <env>
+sudo simple-vps server app secret list [--json] <app> <env>
 sudo simple-vps server app secret rm <app> <env> <key>
 
 sudo simple-vps server cloudflare publish --app <name> <host>

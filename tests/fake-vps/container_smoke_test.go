@@ -205,6 +205,21 @@ service = "web"
 	if strings.Contains(listing, "postgres://") {
 		t.Fatalf("secret list leaked the value:\n%s", listing)
 	}
+	rawSecretJSON := e.simpleVPS(t, app, nil, "secret", "list", "--json", "production")
+	var secretPayload struct {
+		App  string   `json:"app"`
+		Env  string   `json:"env"`
+		Keys []string `json:"keys"`
+	}
+	if err := json.Unmarshal([]byte(rawSecretJSON), &secretPayload); err != nil {
+		t.Fatalf("secret list --json output not parseable as JSON: %v\nraw:\n%s", err, rawSecretJSON)
+	}
+	if secretPayload.App != "sec" || secretPayload.Env != "production" || len(secretPayload.Keys) != 1 || secretPayload.Keys[0] != "db_url" {
+		t.Fatalf("unexpected secret list --json payload: %+v", secretPayload)
+	}
+	if strings.Contains(rawSecretJSON, "postgres://") {
+		t.Fatalf("secret list --json leaked the value:\n%s", rawSecretJSON)
+	}
 
 	// 4. deploy: helper resolves @secret:db_url into the env file
 	// next to the literal LOG_LEVEL.

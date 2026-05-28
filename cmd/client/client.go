@@ -203,11 +203,17 @@ func serverCommand(args ...string) string {
 	return strings.Join(parts, " ")
 }
 
-func serverStatusCommand() string {
+func serverStatusCommand(jsonFlag bool) string {
+	if jsonFlag {
+		return serverCommand("status", "--json")
+	}
 	return serverCommand("status")
 }
 
-func serverDoctorCommand() string {
+func serverDoctorCommand(jsonFlag bool) string {
+	if jsonFlag {
+		return serverCommand("doctor", "--json")
+	}
 	return serverCommand("doctor")
 }
 
@@ -271,7 +277,10 @@ func serverAppSecretPutCommand(appName, envName, key string) string {
 	return serverCommand("app", "secret", "put", appName, envName, key)
 }
 
-func serverAppSecretListCommand(appName, envName string) string {
+func serverAppSecretListCommand(appName, envName string, jsonFlag bool) string {
+	if jsonFlag {
+		return serverCommand("app", "secret", "list", "--json", appName, envName)
+	}
 	return serverCommand("app", "secret", "list", appName, envName)
 }
 
@@ -280,24 +289,42 @@ func serverAppSecretRmCommand(appName, envName, key string) string {
 }
 
 func parseServerFlag(args []string) (string, []string, error) {
+	flags, err := parseHostFlags(args)
+	if err != nil {
+		return "", nil, err
+	}
+	return flags.server, flags.rest, nil
+}
+
+type hostFlags struct {
+	server string
+	json   bool
+	rest   []string
+}
+
+func parseHostFlags(args []string) (hostFlags, error) {
+	flags := hostFlags{}
 	var rest []string
-	server := ""
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
-		if arg != "--server" {
+		switch arg {
+		case "--json":
+			flags.json = true
+		case "--server":
+			if i+1 >= len(args) {
+				return hostFlags{}, errors.New("--server requires a value")
+			}
+			flags.server = args[i+1]
+			if !config.ValidateSshTarget(flags.server) {
+				return hostFlags{}, errors.New("--server must be an SSH target like deploy@example.com")
+			}
+			i++
+		default:
 			rest = append(rest, arg)
-			continue
 		}
-		if i+1 >= len(args) {
-			return "", nil, errors.New("--server requires a value")
-		}
-		server = args[i+1]
-		if !config.ValidateSshTarget(server) {
-			return "", nil, errors.New("--server must be an SSH target like deploy@example.com")
-		}
-		i++
 	}
-	return server, rest, nil
+	flags.rest = rest
+	return flags, nil
 }
 
 func readTargetServer(root string, explicitServer string) (string, error) {
@@ -602,7 +629,7 @@ func CmdSecretPut(root string, envName string, key string) {
 	fmt.Printf("Stored secret %s for %s (%s). Run `simple-vps deploy %s` to apply.\n", key, ctx.AppName, envName, envName)
 }
 
-func CmdSecretList(root string, envName string) {
+func CmdSecretList(root string, envName string, jsonFlag bool) {
 	ctx, err := config.LoadAppContext(root, envName)
 	if err != nil {
 		utils.Die(err.Error(), 1)
@@ -613,7 +640,11 @@ func CmdSecretList(root string, envName string) {
 	}
 	defer runner.Close()
 
-	out := runSSHChecked(runner, ctx.Server, serverAppSecretListCommand(ctx.AppName, envName), "secret list failed")
+	out := runSSHChecked(runner, ctx.Server, serverAppSecretListCommand(ctx.AppName, envName, jsonFlag), "secret list failed")
+	if jsonFlag {
+		fmt.Print(out)
+		return
+	}
 	out = strings.TrimSuffix(out, "\n")
 	if out == "" {
 		// No keys — print nothing rather than an explicit "no
@@ -657,10 +688,11 @@ func envKeyValid(key string) error {
 func CmdHost(args []string) {
 	sub := "status"
 
-	serverFlag, rest, err := parseServerFlag(args)
+	flags, err := parseHostFlags(args)
 	if err != nil {
 		utils.Die(err.Error(), 1)
 	}
+	rest := flags.rest
 	if len(rest) > 0 {
 		sub = rest[0]
 	}
@@ -669,7 +701,7 @@ func CmdHost(args []string) {
 		utils.Die("host requires subcommand: status, doctor", 1)
 	}
 
-	server, err := readTargetServer(".", serverFlag)
+	server, err := readTargetServer(".", flags.server)
 	if err != nil {
 		utils.Die(err.Error(), 1)
 	}
@@ -681,11 +713,25 @@ func CmdHost(args []string) {
 	defer runner.Close()
 
 	if sub == "status" {
-		out := runSSHChecked(runner, server, serverStatusCommand(), "failed to read server status")
+		out := runSSHChecked(runner, server, serverStatusCommand(flags.json), "failed to read server status")
 		fmt.Print(out)
 	} else {
-		out := runSSHChecked(runner, server, serverDoctorCommand(), "failed to run doctor")
-		fmt.Print(out)
+		stdout, stderr, code, err := runner.RunSSH(server, serverDoctorCommand(flags.json))
+		if err != nil || code != 0 {
+			if flags.json && json.Valid([]byte(stdout)) {
+				fmt.Print(stdout)
+				os.Exit(1)
+			}
+			detail := strings.TrimSpace(stderr)
+			if detail == "" {
+				detail = strings.TrimSpace(stdout)
+			}
+			if detail != "" {
+				utils.Die(fmt.Sprintf("failed to run doctor: %s", detail), 1)
+			}
+			utils.Die("failed to run doctor", 1)
+		}
+		fmt.Print(stdout)
 	}
 }
 
