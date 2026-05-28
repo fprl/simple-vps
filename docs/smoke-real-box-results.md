@@ -1,5 +1,38 @@
 # Real-box smoke results
 
+## 2026-05-28 — v0.4.3 release install smoke
+
+- **Host:** `178.105.101.122`
+- **Release tested:** `v0.4.3`
+- **Install path tested:** `install.sh` copied to
+  `/tmp/simple-vps-install-smoke-v0.4.3`, outside the source checkout.
+- **Mode:** `host install --mode remote --check --yes`
+- **Token:** `SIMPLE_VPS_RELEASE_TOKEN` from local GitHub auth, required because
+  release assets are private in this environment.
+
+### Process and result
+
+1. Tagged and published `v0.4.3` with:
+   - `simple-vps-linux-amd64`
+   - `simple-vps-linux-arm64`
+   - `simple-vps-darwin-amd64`
+   - `simple-vps-darwin-arm64`
+   - `SHA256SUMS`
+2. Copied `install.sh` to `/tmp/simple-vps-install-smoke-v0.4.3` so it could
+   not use the source checkout.
+3. Ran remote install in check mode against the existing VPS. The temp
+   installer downloaded the `v0.4.3` Darwin asset and the published Linux
+   helper asset, then completed:
+
+   ```text
+   connected
+   ==> Apply 20260528T141226Z changed 2 operations
+   ==> Provisioning complete
+   ```
+
+**Outcome:** pass. The published v0.4.3 installer path works from outside the
+checkout.
+
 ## 2026-05-28 — main backup/restore real-box smoke
 
 - **Host:** `178.105.101.122`
