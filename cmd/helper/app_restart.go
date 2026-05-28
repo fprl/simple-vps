@@ -36,6 +36,13 @@ func (c appRestartCmd) Run() error {
 	if err := validateAppEnv(c.App, c.Env); err != nil {
 		utils.Die(err.Error(), 1)
 	}
+	withAppEnvLock(c.App, c.Env, func() {
+		c.runLocked()
+	})
+	return nil
+}
+
+func (c appRestartCmd) runLocked() {
 	targets, err := resolveRestartTargets(c.App, c.Env, c.Service)
 	if err != nil {
 		utils.Die(err.Error(), 1)
@@ -74,10 +81,9 @@ func (c appRestartCmd) Run() error {
 			utils.Die(err.Error(), 1)
 		}
 		fmt.Println(string(buf))
-		return nil
+		return
 	}
 	fmt.Print(renderRestartText(c.App, c.Env, results))
-	return nil
 }
 
 type restartPayload struct {

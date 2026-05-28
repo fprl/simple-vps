@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -41,6 +42,7 @@ func TestContainerSmoke(t *testing.T) {
 	env.waitForSSH(t)
 
 	t.Run("container app reaches setup + deploy + caddy proxy", env.testContainerAppLifecycle)
+	t.Run("concurrent deploys of the same app env serialize", env.testConcurrentDeploys)
 	t.Run("@secret refs resolve through put/list/rm into the runtime env", env.testSecretLifecycle)
 	t.Run("status + logs surface deployed services without SSHing in", env.testStatusAndLogs)
 	t.Run("restart bounces containers in place via podman restart", env.testRestart)
@@ -135,6 +137,36 @@ EOF`)
 	if firstFragment != secondFragment {
 		t.Fatalf("expected stable fragment across deploys, got:\nfirst:\n%s\nsecond:\n%s", firstFragment, secondFragment)
 	}
+}
+
+func (e *smokeEnv) testConcurrentDeploys(t *testing.T) {
+	app := filepath.Join(e.tmp, "container-api")
+	start := make(chan struct{})
+	results := make(chan commandResult, 2)
+
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			results <- e.runSimpleVPS(t, app, nil, "deploy", "production")
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+
+	for result := range results {
+		if result.err != nil {
+			t.Fatalf("concurrent deploy failed: %v\nstdout:\n%s\nstderr:\n%s", result.err, result.stdout, result.stderr)
+		}
+		assertContains(t, result.stdout, "Deployed api (production)")
+	}
+
+	status := e.simpleVPS(t, app, nil, "status", "production")
+	assertContains(t, status, "web")
+	assertContains(t, status, "running")
 }
 
 // testSecretLifecycle covers the @secret:KEY resolution path end-to-end

@@ -48,6 +48,13 @@ func (c appApplyCmd) Run() error {
 	if err := validateAppEnv(c.App, c.Env); err != nil {
 		utils.Die(err.Error(), 1)
 	}
+	withAppEnvLock(c.App, c.Env, func() {
+		c.runLocked()
+	})
+	return nil
+}
+
+func (c appApplyCmd) runLocked() {
 	// host.ValidateDeployTmpSource resolves symlinks, ensures the
 	// path is a regular file under the deploy tmp root, and (if invoked
 	// via sudo) verifies the file is owned by the deploying user — so a
@@ -174,7 +181,6 @@ func (c appApplyCmd) Run() error {
 	}
 
 	fmt.Printf("Deployed %s (%s) at %s\n", c.App, c.Env, c.SHA)
-	return nil
 }
 
 // hostUserIDs looks up the uid:gid for the per-env Linux account. We
