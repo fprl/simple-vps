@@ -43,6 +43,7 @@ func TestContainerSmoke(t *testing.T) {
 
 	t.Run("container app reaches setup + deploy + caddy proxy", env.testContainerAppLifecycle)
 	t.Run("rollback runs an older local image release", env.testRollback)
+	t.Run("backup and restore round-trip app state", env.testBackupRestore)
 	t.Run("concurrent deploys of the same app env serialize", env.testConcurrentDeploys)
 	t.Run("@secret refs resolve through put/list/rm into the runtime env", env.testSecretLifecycle)
 	t.Run("status + logs surface deployed services without SSHing in", env.testStatusAndLogs)
@@ -144,6 +145,42 @@ EOF`)
 	e.simpleVPS(t, app, nil, "deploy", "production", "--rebuild")
 	commandsLog = e.ssh(t, "cat /run/fake-podman/commands.log")
 	assertContains(t, commandsLog, "podman build --no-cache --pull=always")
+}
+
+func (e *smokeEnv) testBackupRestore(t *testing.T) {
+	app := filepath.Join(e.tmp, "container-api")
+	e.dockerExec(t, "printf 'durable-state' > /var/apps/api/production/shared/data.txt")
+
+	e.simpleVPS(t, app, nil, "backup", "production")
+	rawList := e.simpleVPS(t, app, nil, "backup", "--json", "list", "production")
+	var list struct {
+		Backups []struct {
+			ID      string `json:"id"`
+			Release string `json:"release"`
+		} `json:"backups"`
+	}
+	if err := json.Unmarshal([]byte(rawList), &list); err != nil {
+		t.Fatalf("backup list --json output not parseable as JSON: %v\nraw:\n%s", err, rawList)
+	}
+	if len(list.Backups) == 0 || list.Backups[0].ID == "" {
+		t.Fatalf("expected at least one backup, got %+v", list.Backups)
+	}
+	backupID := list.Backups[0].ID
+
+	e.simpleVPS(t, app, nil, "destroy", "production", "--yes")
+	if exists := e.run(t, e.repoRoot, nil, "docker", "exec", e.container, "bash", "-c", "test -e /var/apps/api/production/shared/data.txt"); exists.err == nil {
+		t.Fatal("destroy should remove shared data before restore")
+	}
+
+	e.simpleVPS(t, app, nil, "restore", "--from", backupID, "production")
+	got := strings.TrimSpace(e.dockerExec(t, "cat /var/apps/api/production/shared/data.txt"))
+	if got != "durable-state" {
+		t.Fatalf("restored shared data = %q, want durable-state", got)
+	}
+	status := e.simpleVPS(t, app, nil, "status", "production")
+	assertContains(t, status, "web")
+	assertContains(t, status, "running")
+	e.assertRemoteBody(t, "curl -fsS -H 'Host: api.example.com' http://127.0.0.1/health", "ok")
 }
 
 func (e *smokeEnv) testRollback(t *testing.T) {

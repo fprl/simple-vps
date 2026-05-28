@@ -13,6 +13,9 @@
   `--admin public-ssh|tailscale` presets.
 - `simple-vps rollback <env> [release] [--json]` and the matching
   `server app rollback` helper command for local image-based rollback.
+- Local `simple-vps backup`, `backup list`, `backup rm`, and `restore`
+  primitives covering shared data, applied manifest, secrets, and release
+  metadata.
 
 ### Changed
 
@@ -94,4 +97,5 @@ that serves the public CLI, host installer, and privileged server API.
 
 ### Known Gaps
 
-- Backup/restore is planned but not shipped.
+- Remote backup destinations and portable encrypted secret bundles are still
+  planned; the shipped backup driver is local filesystem.

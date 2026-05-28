@@ -23,6 +23,8 @@ type cli struct {
 	Status   statusCmd        `cmd:"" help:"Show running services for an environment."`
 	Restart  restartCmd       `cmd:"" help:"Restart services for an environment (bounces in place; same image)."`
 	Rollback rollbackCmd      `cmd:"" help:"Run an older local image release for an environment."`
+	Backup   backupCmd        `cmd:"" help:"Back up app data, manifest, and secrets."`
+	Restore  restoreCmd       `cmd:"" help:"Restore app data, manifest, and secrets from a backup."`
 	Destroy  destroyCmd       `cmd:"" help:"Destroy an app environment on the host."`
 	Logs     logsCmd          `cmd:"" help:"Tail logs for one service."`
 	App      appCmd           `cmd:"" help:"Inspect apps on a host."`
@@ -141,6 +143,53 @@ type rollbackCmd struct {
 
 func (c rollbackCmd) Run() error {
 	client.CmdRollback(".", c.Env, c.Release, c.JSON)
+	return nil
+}
+
+type backupCmd struct {
+	Args []string `arg:"" optional:"" help:"Either <env>, list <env>, or rm <env> <backup-id>."`
+	To   string   `name:"to" help:"Destination directory on the host. Supports plain paths and file:// URLs."`
+	JSON bool     `name:"json" help:"Emit structured JSON for list."`
+}
+
+func (c backupCmd) Run() error {
+	sub := "create"
+	args := c.Args
+	if len(args) > 0 {
+		switch args[0] {
+		case "list", "rm":
+			sub = args[0]
+			args = args[1:]
+		}
+	}
+	switch sub {
+	case "create":
+		if len(args) != 1 {
+			return fmt.Errorf("backup requires <env>")
+		}
+		client.CmdBackup(".", args[0], c.To)
+	case "list":
+		if len(args) != 1 {
+			return fmt.Errorf("backup list requires <env>")
+		}
+		client.CmdBackupList(".", args[0], c.JSON)
+	case "rm":
+		if len(args) != 2 {
+			return fmt.Errorf("backup rm requires <env> <backup-id>")
+		}
+		client.CmdBackupRm(".", args[0], args[1])
+	}
+	return nil
+}
+
+type restoreCmd struct {
+	Env    string `arg:"" help:"Environment to restore."`
+	From   string `name:"from" required:"" help:"Backup ID or path on the host."`
+	DryRun bool   `name:"dry-run" help:"Show what would be restored without writing."`
+}
+
+func (c restoreCmd) Run() error {
+	client.CmdRestore(".", c.Env, c.From, c.DryRun)
 	return nil
 }
 

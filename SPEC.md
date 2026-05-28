@@ -66,6 +66,10 @@ simple-vps status <env> [--json]                      # podman ps-sourced servic
 simple-vps app list [--server <ssh-target>] [--json]  # podman labels-sourced app/env list
 simple-vps restart <env> [service] [--json]           # bounce running services in place (same image)
 simple-vps rollback <env> [release] [--json]          # run an older local image release
+simple-vps backup [--to=<destination>] <env>          # local tar backup of shared data, manifest, secrets, release metadata
+simple-vps backup [--json] list <env>                 # list local backups
+simple-vps backup rm <env> <backup-id>                # remove one local backup
+simple-vps restore --from=<backup-id> [--dry-run] <env> # restore local backup and run saved image
 simple-vps destroy <env> --confirm <app> [--purge]    # tear down one environment; --yes for automation
 simple-vps logs <env> [service] [--follow] [--tail N] # podman logs against the labelled container
 simple-vps secret put <env> <KEY>                     # stdin-only write to /etc/simple-vps/secrets/<app>/<env>/<key>
@@ -100,21 +104,11 @@ Non-secret env values live in `[env.<env>.env]` blocks in the manifest
 today. Secret values are referenced by whole-value `@secret:KEY`
 references and resolved on the host before deploy execution.
 
-### Backup and restore — planned
-
-```bash
-simple-vps backup <env>                               # planned
-simple-vps backup <env> --to=<destination>            # planned
-simple-vps backup list <env> [--json]                 # planned
-simple-vps backup rm <env> <backup-id>                # planned
-
-simple-vps restore <env> --from=<backup-id>           # planned
-simple-vps restore <env> --from=<backup-id> --dry-run # planned
-```
-
 Backup and restore are paired primitives. The bar is: fresh VPS, host
-bootstrap, one `restore`, app running again when source access and secret
-master key requirements are satisfied. See ADR-0007.
+bootstrap, one `restore`, app running again when the saved image is still
+available locally. The shipped destination driver is local filesystem
+(`file://` or a plain host path); S3/restic destination drivers and encrypted
+portable secret bundles remain future scope. See ADR-0007.
 
 ### Host operations — shipping today
 
@@ -175,6 +169,10 @@ sudo simple-vps server app list [--json]
 sudo simple-vps server app status [--json] <app> <env>
 sudo simple-vps server app restart [--json] <app> <env> [service]
 sudo simple-vps server app rollback [--json] <app> <env> [release]
+sudo simple-vps server app backup [--to=<destination>] <app> <env>
+sudo simple-vps server app backup [--json] list <app> <env>
+sudo simple-vps server app backup rm <app> <env> <backup-id>
+sudo simple-vps server app backup --from=<backup-id> [--dry-run] restore <app> <env>
 sudo simple-vps server app logs [--follow] [--tail=N] <app> <env> [service]
 sudo simple-vps server app secret put <app> <env> <key>
 sudo simple-vps server app secret list [--json] <app> <env>

@@ -188,6 +188,57 @@ func TestServerAppRollbackCommandSupportsReleaseAndJSON(t *testing.T) {
 	}
 }
 
+func TestServerAppBackupCommands(t *testing.T) {
+	tests := []struct {
+		name string
+		got  string
+		want string
+	}{
+		{
+			name: "create",
+			got:  serverAppBackupCommand("api", "production", ""),
+			want: "sudo simple-vps server app backup api production",
+		},
+		{
+			name: "create to",
+			got:  serverAppBackupCommand("api", "production", "/tmp/backups"),
+			want: "sudo simple-vps server app backup --to /tmp/backups api production",
+		},
+		{
+			name: "list",
+			got:  serverAppBackupListCommand("api", "production", false),
+			want: "sudo simple-vps server app backup list api production",
+		},
+		{
+			name: "list json",
+			got:  serverAppBackupListCommand("api", "production", true),
+			want: "sudo simple-vps server app backup --json list api production",
+		},
+		{
+			name: "rm",
+			got:  serverAppBackupRmCommand("api", "production", "backup-id"),
+			want: "sudo simple-vps server app backup rm api production backup-id",
+		},
+		{
+			name: "restore",
+			got:  serverAppRestoreCommand("api", "production", "backup-id", false),
+			want: "sudo simple-vps server app backup --from backup-id restore api production",
+		},
+		{
+			name: "restore dry run",
+			got:  serverAppRestoreCommand("api", "production", "backup-id", true),
+			want: "sudo simple-vps server app backup --from backup-id --dry-run restore api production",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.got != tt.want {
+				t.Fatalf("unexpected command:\nwant: %s\n got: %s", tt.want, tt.got)
+			}
+		})
+	}
+}
+
 func TestServerAppDestroyEnvCommand(t *testing.T) {
 	got := serverAppDestroyEnvCommand("api", "production", false)
 	want := "sudo simple-vps server app destroy-env api production"

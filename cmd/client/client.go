@@ -289,6 +289,37 @@ func serverAppRollbackCommand(appName, envName, release string, jsonFlag bool) s
 	return serverCommand(args...)
 }
 
+func serverAppBackupCommand(appName, envName, dest string) string {
+	args := []string{"app", "backup"}
+	if dest != "" {
+		args = append(args, "--to", dest)
+	}
+	args = append(args, appName, envName)
+	return serverCommand(args...)
+}
+
+func serverAppBackupListCommand(appName, envName string, jsonFlag bool) string {
+	args := []string{"app", "backup"}
+	if jsonFlag {
+		args = append(args, "--json")
+	}
+	args = append(args, "list", appName, envName)
+	return serverCommand(args...)
+}
+
+func serverAppBackupRmCommand(appName, envName, id string) string {
+	return serverCommand("app", "backup", "rm", appName, envName, id)
+}
+
+func serverAppRestoreCommand(appName, envName, from string, dryRun bool) string {
+	args := []string{"app", "backup", "--from", from}
+	if dryRun {
+		args = append(args, "--dry-run")
+	}
+	args = append(args, "restore", appName, envName)
+	return serverCommand(args...)
+}
+
 func serverAppDestroyEnvCommand(appName, envName string, purge bool) string {
 	args := []string{"app", "destroy-env"}
 	if purge {
@@ -622,6 +653,67 @@ func CmdRollback(root string, envName string, release string, jsonFlag bool) {
 	defer runner.Close()
 
 	out := runSSHChecked(runner, ctx.Server, serverAppRollbackCommand(ctx.AppName, envName, release, jsonFlag), "rollback failed")
+	fmt.Print(out)
+}
+
+func CmdBackup(root string, envName string, dest string) {
+	ctx, err := config.LoadAppContext(root, envName)
+	if err != nil {
+		utils.Die(err.Error(), 1)
+	}
+	runner, err := NewCommandRunner()
+	if err != nil {
+		utils.Die(err.Error(), 1)
+	}
+	defer runner.Close()
+
+	out := runSSHChecked(runner, ctx.Server, serverAppBackupCommand(ctx.AppName, envName, dest), "backup failed")
+	fmt.Print(out)
+}
+
+func CmdBackupList(root string, envName string, jsonFlag bool) {
+	ctx, err := config.LoadAppContext(root, envName)
+	if err != nil {
+		utils.Die(err.Error(), 1)
+	}
+	runner, err := NewCommandRunner()
+	if err != nil {
+		utils.Die(err.Error(), 1)
+	}
+	defer runner.Close()
+
+	out := runSSHChecked(runner, ctx.Server, serverAppBackupListCommand(ctx.AppName, envName, jsonFlag), "backup list failed")
+	fmt.Print(out)
+}
+
+func CmdBackupRm(root string, envName string, id string) {
+	ctx, err := config.LoadAppContext(root, envName)
+	if err != nil {
+		utils.Die(err.Error(), 1)
+	}
+	runner, err := NewCommandRunner()
+	if err != nil {
+		utils.Die(err.Error(), 1)
+	}
+	defer runner.Close()
+
+	out := runSSHChecked(runner, ctx.Server, serverAppBackupRmCommand(ctx.AppName, envName, id), "backup rm failed")
+	fmt.Print(out)
+}
+
+func CmdRestore(root string, envName string, from string, dryRun bool) {
+	ctx, err := config.LoadAppContext(root, envName)
+	if err != nil {
+		utils.Die(err.Error(), 1)
+	}
+	runner, err := NewCommandRunner()
+	if err != nil {
+		utils.Die(err.Error(), 1)
+	}
+	defer runner.Close()
+
+	runSSHChecked(runner, ctx.Server, serverAppSetupEnvCommand(ctx.AppName, envName), "restore setup failed")
+	out := runSSHChecked(runner, ctx.Server, serverAppRestoreCommand(ctx.AppName, envName, from, dryRun), "restore failed")
 	fmt.Print(out)
 }
 
