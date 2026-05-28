@@ -657,6 +657,7 @@ func caddyUnit(mode string) string {
 			publish +
 			" -v /etc/caddy:/etc/caddy:Z" +
 			" -v /var/lib/caddy:/data:Z" +
+			" -v /var/apps:/var/apps:ro,Z" +
 			" docker.io/library/caddy:2-alpine",
 		"ExecStop=/usr/bin/podman stop caddy",
 		"Restart=on-failure",

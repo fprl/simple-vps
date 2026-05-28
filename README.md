@@ -125,7 +125,7 @@ simple-vps logs production
 Secrets are stored on the host and referenced from the manifest:
 
 ```bash
-printf '%s' "$DATABASE_URL" | simple-vps secret put production DATABASE_URL
+printf '%s' "$DATABASE_URL" | simple-vps secret set production DATABASE_URL
 simple-vps secret list --json production
 ```
 

@@ -19,23 +19,15 @@ import (
 	"github.com/fprl/simple-vps/internal/utils"
 )
 
-// appApplyCmd is the per-env, all-services deploy primitive. Given a
+// appApplyCmd is the per-env deploy primitive. Given a
 // streamed source tarball and a manifest, it:
 //
-//  1. Validates the manifest against the new shape rules.
-//  2. Writes the resolved env file to <shared>/.env (literal values only
-//     plus @secret:KEY values resolved against the per-(app, env, key)
-//     store).
-//  3. Extracts the tarball and runs `podman build` to tag a new image.
-//  4. For each service: stops the running container, starts a fresh
-//     one joined to the per-env network plus the shared `ingress`
-//     network, waits for the healthcheck.
-//  5. Synthesizes a Caddyfile fragment for the manifest's routes and
-//     reloads Caddy.
-//
-// Atomicity is per-service (ADR-0006 Cut 1). The current lifecycle is
-// deliberately simple: stop the old container, start the replacement,
-// verify it, then reload Caddy.
+//  1. Validates the manifest.
+//  2. Resolves vars/secrets into runtime/.env for container apps.
+//  3. Builds the image or snapshots static assets.
+//  4. Starts new versioned process containers and verifies web health.
+//  5. Synthesizes a Caddyfile fragment, validates, reloads, and only
+//     then removes old routed containers.
 type appApplyCmd struct {
 	App      string `arg:"" help:"App name."`
 	Env      string `arg:"" help:"Env name."`
@@ -100,56 +92,31 @@ func (c appApplyCmd) runLocked() {
 	if err != nil {
 		utils.Die(err.Error(), 1)
 	}
-	if app.Shape != config.ShapeContainer {
-		utils.Die(fmt.Sprintf("apply supports container apps only (got shape %q)", app.Shape), 1)
-	}
-	if len(app.Services) == 0 {
-		utils.Die("manifest must declare at least one [services.<name>] block", 1)
-	}
-	if err := persistAppliedManifest(c.App, c.Env, manifestPath); err != nil {
-		utils.Die(err.Error(), 1)
-	}
-	// 2. Resolve env. Literal values from the manifest first; then
-	// pull each @secret:KEY reference from the per-(app, env, key)
-	// store and merge into the same map. A missing secret fails the
-	// deploy before any container restarts so we never half-apply.
-	resolved, err := resolveEnv(c.App, c.Env, app.Env, app.SecretRefs)
-	if err != nil {
-		utils.Die(err.Error(), 1)
-	}
-	if err := writeEnvFile(c.App, c.Env, resolved); err != nil {
+	if err := writeEnvIdentity(c.App, c.Env); err != nil {
 		utils.Die(err.Error(), 1)
 	}
 
-	// 3. Resolve numeric uid:gid for the per-env user. Podman's `--user`
-	// resolves names inside the container's /etc/passwd, which generally
-	// won't know about our host account. Pass numeric ids instead so the
-	// container process runs as the host owner of /var/apps/<app>/<env>.
-	userID, groupID, err := hostUserIDs(identity.SystemUser(c.App, c.Env))
-	if err != nil {
-		utils.Die(err.Error(), 1)
-	}
-
-	// 4. Build the image.
-	imageTag := identity.ImageTag(c.App, c.Env, c.SHA)
-	buildArgs := podmanBuildArgs(c.App, c.Env, imageTag, c.SHA, filepath.Join(ctxDir, "Dockerfile"), ctxDir, c.Rebuild)
-	if _, err := utils.RunChecked("podman", buildArgs, ""); err != nil {
-		utils.Die(fmt.Sprintf("podman build: %v", err), 1)
-	}
-
-	// 5. Start each service. Containers join the per-(app, env) network
-	// for intra-app DNS and the shared `ingress` network so Caddy can
-	// reach them by container name (ADR-0006 Cut 2). No host-loopback
-	// `--publish`: the host-port allocator that lived here is gone.
-	for _, svcName := range sortedKeys(app.Services) {
-		svc := app.Services[svcName]
-		if err := startService(c.App, c.Env, svcName, svc, imageTag, userID, groupID); err != nil {
+	var oldWebContainers []string
+	var newWebContainers []string
+	var staticSnapshot *staticCurrentSnapshot
+	switch app.Shape {
+	case config.ShapeContainer:
+		oldWebContainers, newWebContainers = c.applyContainer(ctxDir, app)
+	case config.ShapeStatic:
+		snapshot, err := snapshotStaticCurrent(c.App, c.Env)
+		if err != nil {
+			utils.Die(fmt.Sprintf("snapshot static current: %v", err), 1)
+		}
+		staticSnapshot = &snapshot
+		if err := c.applyStatic(ctxDir, app); err != nil {
 			utils.Die(err.Error(), 1)
 		}
+	default:
+		utils.Die(fmt.Sprintf("unsupported app shape %q", app.Shape), 1)
 	}
 
 	// 6. Write the per-app Caddyfile fragment (`reverse_proxy
-	// http://<container>:<service-port>`), validate the full Caddyfile
+	// http://<container>:<process-port>`), validate the full Caddyfile
 	// inside the Caddy container, then reload Caddy in place. The
 	// fragment lives under `/etc/caddy/conf.d/` which the main Caddyfile
 	// imports; we never `caddy reload --config <fragment>` because that
@@ -163,18 +130,35 @@ func (c appApplyCmd) runLocked() {
 	if err != nil {
 		utils.Die(fmt.Sprintf("snapshot existing fragment: %v", err), 1)
 	}
-	if err := writeAppCaddyfile(c.App, c.Env, app); err != nil {
+	if err := writeAppCaddyfile(c.App, c.Env, app, c.SHA); err != nil {
+		if staticSnapshot != nil {
+			_ = restoreStaticCurrent(c.App, c.Env, *staticSnapshot)
+		}
 		utils.Die(err.Error(), 1)
 	}
 	if _, err := utils.RunChecked("podman", []string{"exec", "caddy", "caddy", "validate", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"}, ""); err != nil {
 		if restoreErr := restoreCaddyFragment(caddyPath, prevFragment, prevExisted); restoreErr != nil {
 			utils.Die(fmt.Sprintf("caddy validate rejected the fragment AND restore failed (manual fix required at %s): %v (restore: %v)", caddyPath, err, restoreErr), 1)
 		}
+		if staticSnapshot != nil {
+			_ = restoreStaticCurrent(c.App, c.Env, *staticSnapshot)
+		}
 		utils.Die(fmt.Sprintf("caddy validate rejected the fragment, restored previous: %v", err), 1)
 	}
 	if _, err := utils.RunChecked("podman", []string{"exec", "caddy", "caddy", "reload", "--config", "/etc/caddy/Caddyfile"}, ""); err != nil {
+		_ = restoreCaddyFragment(caddyPath, prevFragment, prevExisted)
+		if staticSnapshot != nil {
+			_ = restoreStaticCurrent(c.App, c.Env, *staticSnapshot)
+		}
 		utils.Die(fmt.Sprintf("caddy reload: %v", err), 1)
 	}
+	if err := persistAppliedManifest(c.App, c.Env, filepath.Join(ctxDir, "simple-vps.toml")); err != nil {
+		utils.Die(err.Error(), 1)
+	}
+	for _, name := range oldWebContainers {
+		_, _ = utils.RunChecked("podman", []string{"rm", "-f", name}, "")
+	}
+	_ = newWebContainers
 
 	fmt.Printf("Deployed %s (%s) at %s\n", c.App, c.Env, c.SHA)
 }
@@ -194,6 +178,126 @@ func persistAppliedManifest(app, env, manifestPath string) error {
 	return nil
 }
 
+func (c appApplyCmd) applyContainer(ctxDir string, app *config.AppContext) ([]string, []string) {
+	if len(app.Processes) == 0 {
+		utils.Die("manifest must declare at least one [processes.<name>] block", 1)
+	}
+	resolved, err := resolveEnv(c.App, c.Env, app.Vars, app.SecretRefs)
+	if err != nil {
+		utils.Die(err.Error(), 1)
+	}
+	if err := writeEnvFile(c.App, c.Env, resolved); err != nil {
+		utils.Die(err.Error(), 1)
+	}
+
+	userID, groupID, err := hostUserIDs(identity.SystemUser(c.App, c.Env))
+	if err != nil {
+		utils.Die(err.Error(), 1)
+	}
+
+	imageTag := identity.ImageTag(c.App, c.Env, c.SHA)
+	buildArgs := podmanBuildArgs(c.App, c.Env, imageTag, c.SHA, filepath.Join(ctxDir, "Dockerfile"), ctxDir, c.Rebuild)
+	if _, err := utils.RunChecked("podman", buildArgs, ""); err != nil {
+		utils.Die(fmt.Sprintf("podman build: %v", err), 1)
+	}
+
+	if app.Deploy.Release != "" {
+		if err := runReleaseCommand(c.App, c.Env, app.Deploy.Release, imageTag, userID, groupID, c.SHA); err != nil {
+			utils.Die(err.Error(), 1)
+		}
+	}
+
+	existing, err := podmanPSContainers(c.App, c.Env)
+	if err != nil {
+		utils.Die(err.Error(), 1)
+	}
+	var oldWeb []string
+	var nextWeb []string
+	for _, processName := range sortedKeys(app.Processes) {
+		proc := app.Processes[processName]
+		if proc.Port == nil {
+			for _, old := range processContainers(existing, processName, "") {
+				_, _ = utils.RunChecked("podman", []string{"rm", "-f", old}, "")
+			}
+		}
+		next := identity.ContainerName(c.App, c.Env, processName, c.SHA)
+		if err := startProcess(c.App, c.Env, processName, proc, imageTag, userID, groupID, c.SHA); err != nil {
+			utils.Die(err.Error(), 1)
+		}
+		if proc.Port != nil {
+			oldWeb = append(oldWeb, processContainers(existing, processName, c.SHA)...)
+			nextWeb = append(nextWeb, next)
+		}
+	}
+	return oldWeb, nextWeb
+}
+
+func (c appApplyCmd) applyStatic(ctxDir string, app *config.AppContext) error {
+	releaseDir := filepath.Join(identity.StaticDir(c.App, c.Env), "releases", c.SHA)
+	if err := os.RemoveAll(releaseDir); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(releaseDir, 0755); err != nil {
+		return err
+	}
+	for _, routeName := range sortedKeys(app.Routes) {
+		route := app.Routes[routeName]
+		if route.Serve == "" {
+			continue
+		}
+		src := filepath.Join(ctxDir, route.Serve)
+		dst := filepath.Join(releaseDir, routeName)
+		if err := os.MkdirAll(dst, 0755); err != nil {
+			return err
+		}
+		if _, err := utils.RunChecked("cp", []string{"-a", src + "/.", dst + "/"}, ""); err != nil {
+			return fmt.Errorf("copy static route %s: %v", routeName, err)
+		}
+	}
+	current := filepath.Join(identity.StaticDir(c.App, c.Env), "current")
+	_ = os.Remove(current)
+	if err := os.Symlink(releaseDir, current); err != nil {
+		return fmt.Errorf("update static current symlink: %v", err)
+	}
+	return nil
+}
+
+type staticCurrentSnapshot struct {
+	Target  string
+	Existed bool
+}
+
+func snapshotStaticCurrent(app, env string) (staticCurrentSnapshot, error) {
+	path := filepath.Join(identity.StaticDir(app, env), "current")
+	return snapshotStaticCurrentAt(path)
+}
+
+func snapshotStaticCurrentAt(path string) (staticCurrentSnapshot, error) {
+	target, err := os.Readlink(path)
+	if err == nil {
+		return staticCurrentSnapshot{Target: target, Existed: true}, nil
+	}
+	if os.IsNotExist(err) {
+		return staticCurrentSnapshot{}, nil
+	}
+	return staticCurrentSnapshot{}, err
+}
+
+func restoreStaticCurrent(app, env string, snapshot staticCurrentSnapshot) error {
+	path := filepath.Join(identity.StaticDir(app, env), "current")
+	return restoreStaticCurrentAt(path, snapshot)
+}
+
+func restoreStaticCurrentAt(path string, snapshot staticCurrentSnapshot) error {
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if snapshot.Existed {
+		return os.Symlink(snapshot.Target, path)
+	}
+	return nil
+}
+
 func podmanBuildArgs(app, env, imageTag, release, dockerfile, ctxDir string, rebuild bool) []string {
 	args := []string{"build"}
 	if rebuild {
@@ -201,9 +305,10 @@ func podmanBuildArgs(app, env, imageTag, release, dockerfile, ctxDir string, reb
 	}
 	args = append(args,
 		"-t", imageTag,
-		"--label", "app="+app,
-		"--label", "env="+env,
-		"--label", "simple_vps_release="+release,
+		"--label", "simple-vps.app="+app,
+		"--label", "simple-vps.env="+env,
+		"--label", "simple-vps.infra_id="+identity.InfraID(app, env),
+		"--label", "simple-vps.release="+release,
 		"-f", dockerfile,
 		ctxDir,
 	)
@@ -251,7 +356,7 @@ func renderEnvFile(vals map[string]string) string {
 // Manifest literals and secret refs are guaranteed disjoint by
 // `config.splitEnvBlock` (a value either *is* a secret ref or is a
 // literal; never both). Returning a fresh map keeps the caller's
-// `app.Env` intact for any future reuse.
+// `app.Vars` intact for any future reuse.
 func resolveEnv(app, env string, literals map[string]string, refs map[string]string) (map[string]string, error) {
 	out := make(map[string]string, len(literals)+len(refs))
 	for k, v := range literals {
@@ -278,7 +383,7 @@ func resolveEnv(app, env string, literals map[string]string, refs map[string]str
 		out[envKey] = string(val)
 	}
 	if len(missing) > 0 {
-		return nil, fmt.Errorf("unresolved @secret references: %s — run `simple-vps secret put %s <key>` for each", strings.Join(missing, ", "), env)
+		return nil, fmt.Errorf("unresolved @secret references: %s — run `simple-vps secret set %s <key>` for each", strings.Join(missing, ", "), env)
 	}
 	return out, nil
 }
@@ -298,22 +403,19 @@ func writeEnvFile(app, env string, vals map[string]string) error {
 	return nil
 }
 
-// buildPodmanRunArgs is the pure-function core of startService:
-// produces the `podman run` argv for one service. Extracted so it can
+// buildPodmanRunArgs is the pure-function core of startProcess:
+// produces the `podman run` argv for one process. Extracted so it can
 // be unit-tested without shelling out.
 //
 // The initial hardening subset from ADR-0005 §7 is always present:
 // per-env Linux user, --cap-drop=ALL, --security-opt no-new-privileges,
 // --pids-limit, --read-only with a default 64 MiB tmpfs at /tmp.
-// Manifest-declared tmpfs entries (validated at check time) extend
-// the read-only rootfs with additional writable scratch in a
-// deterministic, sorted order. No --publish: Caddy reaches the
-// service over the shared `ingress` network by container DNS
-// (ADR-0006 Cut 2). Manifest-declared memory, CPU, and
-// NET_BIND_SERVICE settings render to the closed set of §7 flags.
-func buildPodmanRunArgs(app, env, svcName string, svc config.Service, imageTag, userID, groupID string, envFileExists bool) []string {
-	containerName := identity.ContainerName(app, env, svcName)
-	shared := identity.SharedDir(app, env)
+// No --publish: Caddy reaches the process over the shared `ingress`
+// network by container DNS. Manifest-declared memory and CPU limits
+// render to the closed set of runtime flags.
+func buildPodmanRunArgs(app, env, processName string, proc config.Process, imageTag, userID, groupID, release string, envFileExists bool) []string {
+	containerName := identity.ContainerName(app, env, processName, release)
+	dataDir := identity.DataDir(app, env)
 	appNet := identity.Network(app, env)
 	envFile := identity.EnvFile(app, env)
 
@@ -323,91 +425,69 @@ func buildPodmanRunArgs(app, env, svcName string, svc config.Service, imageTag, 
 		"--restart", "unless-stopped",
 		"--user", userID + ":" + groupID,
 		"--cap-drop", "ALL",
-	}
-	if svc.NetBindService != nil && *svc.NetBindService {
-		args = append(args, "--cap-add", "NET_BIND_SERVICE")
-	}
-	args = append(args,
 		"--security-opt", "no-new-privileges",
 		"--pids-limit", "512",
 		"--read-only",
 		// mode=1777 (sticky world-writable) so the per-env container
 		// user (--user above) can actually write here. Without it,
 		// the tmpfs is owned by root and the unprivileged container
-		// process fails with EACCES. Same shape applies to every
-		// manifest-declared tmpfs below.
+		// process fails with EACCES.
 		"--tmpfs", "/tmp:size=64m,mode=1777",
 		"--network", appNet,
 		"--network", "ingress",
-		"-v", shared+":"+shared+":Z",
-		"--label", "app="+app,
-		"--label", "env="+env,
-		"--label", "service="+svcName,
-	)
-	// Mirror the `simple_vps_release` label from the image onto the
-	// container so `podman ps --format json` surfaces it without an
-	// extra `podman image inspect` hop. The image tag is canonical
-	// `simple-vps/<app>-<env>:<sha>`; pull the SHA off the end.
-	if i := strings.LastIndex(imageTag, ":"); i > 0 && i < len(imageTag)-1 {
-		args = append(args, "--label", "simple_vps_release="+imageTag[i+1:])
+		"-v", dataDir + ":/data:Z",
+		"--label", "simple-vps.app=" + app,
+		"--label", "simple-vps.env=" + env,
+		"--label", "simple-vps.process=" + processName,
+		"--label", "simple-vps.infra_id=" + identity.InfraID(app, env),
+		"--label", "simple-vps.release=" + release,
 	}
-	if svc.Memory != nil {
-		args = append(args, "--memory", *svc.Memory)
+	if proc.Resources.Memory != nil {
+		args = append(args, "--memory", *proc.Resources.Memory)
 	}
-	if svc.CPUs != nil {
-		args = append(args, "--cpus", strconv.FormatFloat(*svc.CPUs, 'f', -1, 64))
-	}
-	for _, path := range sortedKeys(svc.Tmpfs) {
-		args = append(args, "--tmpfs", path+":size="+svc.Tmpfs[path]+",mode=1777")
+	if proc.Resources.CPUs != nil {
+		args = append(args, "--cpus", strconv.FormatFloat(*proc.Resources.CPUs, 'f', -1, 64))
 	}
 	if envFileExists {
 		args = append(args, "--env-file", envFile)
 	}
 	args = append(args, imageTag)
-	if svc.Command != "" {
+	if proc.Command != "" {
 		// Override the image CMD via /bin/sh -c so users can write the
 		// command as a single string (ADR-0005 §13).
-		args = append(args, "/bin/sh", "-c", svc.Command)
+		args = append(args, "/bin/sh", "-c", proc.Command)
 	}
 	return args
 }
 
-func startService(app, env, svcName string, svc config.Service, imageTag, userID, groupID string) error {
-	containerName := identity.ContainerName(app, env, svcName)
+func startProcess(app, env, processName string, proc config.Process, imageTag, userID, groupID, release string) error {
+	containerName := identity.ContainerName(app, env, processName, release)
 	envFile := identity.EnvFile(app, env)
 
-	// Stop and remove any existing container of the same name.
 	_, _ = utils.RunChecked("podman", []string{"rm", "-f", containerName}, "")
 
 	envFileExists := false
 	if _, err := os.Stat(envFile); err == nil {
 		envFileExists = true
 	}
-	args := buildPodmanRunArgs(app, env, svcName, svc, imageTag, userID, groupID, envFileExists)
+	args := buildPodmanRunArgs(app, env, processName, proc, imageTag, userID, groupID, release, envFileExists)
 
 	if _, err := utils.RunChecked("podman", args, ""); err != nil {
 		return fmt.Errorf("podman run %s: %v", containerName, err)
 	}
 
-	if svc.Port != nil && svc.Healthcheck != "" {
-		if err := waitHealthy(containerName, *svc.Port, svc.Healthcheck, healthcheckTimeout(svc)); err != nil {
+	if proc.Port != nil && proc.Health != "" {
+		if err := waitHealthy(containerName, *proc.Port, proc.Health, 30*time.Second); err != nil {
 			// Surface logs on failure so the user can see why.
 			out, _ := exec.Command("podman", "logs", "--tail", "50", containerName).CombinedOutput()
 			os.Stderr.Write(out)
-			return fmt.Errorf("healthcheck failed for %s: %v", svcName, err)
+			return fmt.Errorf("health check failed for %s: %v", processName, err)
 		}
 	}
 	return nil
 }
 
-func healthcheckTimeout(svc config.Service) time.Duration {
-	if svc.HealthcheckTimeout != nil && *svc.HealthcheckTimeout > 0 {
-		return time.Duration(*svc.HealthcheckTimeout) * time.Second
-	}
-	return 30 * time.Second
-}
-
-// waitHealthy probes the app container's healthcheck via Caddy on the
+// waitHealthy probes the app container's health path via Caddy on the
 // shared `ingress` network. The helper itself runs on the host and is
 // not a member of `ingress`, so it can't talk to the app container's
 // DNS name directly. The Caddy container is on `ingress` by design and
@@ -435,62 +515,179 @@ func waitHealthy(containerName string, port int, path string, timeout time.Durat
 	return lastErr
 }
 
+func runReleaseCommand(app, env, command, imageTag, userID, groupID, release string) error {
+	name := identity.ContainerName(app, env, "release", release)
+	_, _ = utils.RunChecked("podman", []string{"rm", "-f", name}, "")
+	args := []string{
+		"run", "--rm",
+		"--name", name,
+		"--user", userID + ":" + groupID,
+		"--cap-drop", "ALL",
+		"--security-opt", "no-new-privileges",
+		"--pids-limit", "512",
+		"--network", identity.Network(app, env),
+		"-v", identity.DataDir(app, env) + ":/data:Z",
+		"--label", "simple-vps.app=" + app,
+		"--label", "simple-vps.env=" + env,
+		"--label", "simple-vps.process=release",
+		"--label", "simple-vps.infra_id=" + identity.InfraID(app, env),
+		"--label", "simple-vps.release=" + release,
+	}
+	if _, err := os.Stat(identity.EnvFile(app, env)); err == nil {
+		args = append(args, "--env-file", identity.EnvFile(app, env))
+	}
+	args = append(args, imageTag, "/bin/sh", "-c", command)
+	if _, err := utils.RunChecked("podman", args, ""); err != nil {
+		return fmt.Errorf("release command failed: %v", err)
+	}
+	return nil
+}
+
+func processContainers(entries []containerEntry, processName, excludeRelease string) []string {
+	var names []string
+	for _, e := range entries {
+		if e.Labels["simple-vps.process"] != processName {
+			continue
+		}
+		if excludeRelease != "" && e.Labels["simple-vps.release"] == excludeRelease {
+			continue
+		}
+		if len(e.Names) > 0 {
+			names = append(names, e.Names[0])
+		}
+	}
+	sort.Strings(names)
+	return names
+}
+
 func caddyfilePath(app, env string) string {
 	return fmt.Sprintf("/etc/caddy/conf.d/simple-vps-%s-%s.caddy", app, env)
 }
 
-func renderAppCaddyfile(app, env string, ctx *config.AppContext) (string, error) {
-	var blocks []string
+func renderAppCaddyfile(app, env string, ctx *config.AppContext, release string) (string, error) {
+	type hostKey struct {
+		host string
+		tls  string
+	}
+	grouped := map[hostKey][]string{}
 	for _, name := range sortedKeys(ctx.Routes) {
 		route := ctx.Routes[name]
-		var body string
-		switch route.Type {
-		case "proxy":
-			svc, ok := ctx.Services[route.Service]
-			if !ok || svc.Port == nil {
-				return "", fmt.Errorf("route %q references service %q with no port", name, route.Service)
-			}
-			// Container DNS over the shared `ingress` network
-			// (ADR-0006 Cut 2): Caddy reaches each service by the
-			// per-(app, env, service) container name. No host-loopback
-			// hop, no port allocator.
-			upstream := identity.ContainerName(app, env, route.Service)
-			body = fmt.Sprintf("\treverse_proxy http://%s:%d\n", upstream, *svc.Port)
-		case "redirect":
-			// Quote the destination so a hostile value can't inject extra
-			// Caddyfile directives. Manifest validation only enforces an
-			// http://‌/https:// prefix, which still leaves room for
-			// whitespace/newline injection on the bare token form.
-			quotedTo, err := caddy.CaddyQuote(route.To)
-			if err != nil {
-				return "", fmt.Errorf("route %q: %v", name, err)
-			}
-			body = fmt.Sprintf("\tredir %s permanent\n", quotedTo)
-		default:
-			return "", fmt.Errorf("route %q: unsupported type %q", name, route.Type)
+		grouped[hostKey{host: route.Host, tls: route.TLS}] = append(grouped[hostKey{host: route.Host, tls: route.TLS}], name)
+	}
+
+	keys := make([]hostKey, 0, len(grouped))
+	for key := range grouped {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].host != keys[j].host {
+			return keys[i].host < keys[j].host
 		}
-		// TLS knob (manifest validation already constrained it to
-		// "" / "auto" / "internal"). "internal" emits a self-signed
-		// cert directive; "auto" / "" lets Caddy provision Let's
-		// Encrypt as normal.
+		return keys[i].tls < keys[j].tls
+	})
+
+	var blocks []string
+	for _, key := range keys {
+		routeNames := grouped[key]
+		sort.SliceStable(routeNames, func(i, j int) bool {
+			left := ctx.Routes[routeNames[i]].Path
+			right := ctx.Routes[routeNames[j]].Path
+			if left == right {
+				return routeNames[i] < routeNames[j]
+			}
+			if left == "" {
+				return false
+			}
+			if right == "" {
+				return true
+			}
+			return len(left) > len(right)
+		})
+
 		var prelude string
-		if route.TLS == "internal" {
+		if key.tls == "internal" {
 			prelude = "\ttls internal\n"
 		}
-		// Quote the host on the block selector — hostnames are
-		// validated, but `CaddyQuote` is the consistent boundary for
-		// every user-controlled string we put into a Caddyfile.
-		quotedHost, err := caddy.CaddyQuote(route.Host)
-		if err != nil {
-			return "", fmt.Errorf("route %q: %v", name, err)
+		var body strings.Builder
+		useHandles := len(routeNames) > 1 || ctx.Routes[routeNames[0]].Path != ""
+		for _, routeName := range routeNames {
+			rendered, err := renderRouteBody(app, env, ctx, routeName, release, useHandles)
+			if err != nil {
+				return "", err
+			}
+			body.WriteString(rendered)
 		}
-		blocks = append(blocks, fmt.Sprintf("%s {\n%s%s}\n", quotedHost, prelude, body))
+		quotedHost, err := caddy.CaddyQuote(key.host)
+		if err != nil {
+			return "", err
+		}
+		blocks = append(blocks, fmt.Sprintf("%s {\n%s%s}\n", quotedHost, prelude, body.String()))
 	}
 	return "# generated by simple-vps server app apply — do not edit\n" + strings.Join(blocks, "\n"), nil
 }
 
-func writeAppCaddyfile(app, env string, ctx *config.AppContext) error {
-	content, err := renderAppCaddyfile(app, env, ctx)
+func renderRouteBody(app, env string, ctx *config.AppContext, routeName string, release string, wrap bool) (string, error) {
+	route := ctx.Routes[routeName]
+	body, err := renderRouteDirectives(app, env, ctx, routeName, release)
+	if err != nil {
+		return "", err
+	}
+	if !wrap {
+		return indent(body, 1), nil
+	}
+	if route.Path == "" {
+		return "\thandle {\n" + indent(body, 2) + "\t}\n", nil
+	}
+	if route.Serve != "" {
+		return fmt.Sprintf("\thandle %s {\n\t\trewrite * /\n%s\t}\n\thandle_path %s/* {\n%s\t}\n",
+			route.Path, indent(body, 2), route.Path, indent(body, 2)), nil
+	}
+	return fmt.Sprintf("\thandle %s {\n%s\t}\n\thandle %s/* {\n%s\t}\n",
+		route.Path, indent(body, 2), route.Path, indent(body, 2)), nil
+}
+
+func renderRouteDirectives(app, env string, ctx *config.AppContext, routeName string, release string) (string, error) {
+	route := ctx.Routes[routeName]
+	switch {
+	case route.Process != "":
+		proc, ok := ctx.Processes[route.Process]
+		if !ok || proc.Port == nil {
+			return "", fmt.Errorf("route %q references process %q with no port", routeName, route.Process)
+		}
+		upstream := identity.ContainerName(app, env, route.Process, release)
+		return fmt.Sprintf("reverse_proxy http://%s:%d\n", upstream, *proc.Port), nil
+	case route.Serve != "":
+		root := filepath.Join(identity.StaticDir(app, env), "current", routeName)
+		quotedRoot, err := caddy.CaddyQuote(root)
+		if err != nil {
+			return "", fmt.Errorf("route %q: %v", routeName, err)
+		}
+		return fmt.Sprintf("root * %s\nfile_server\n", quotedRoot), nil
+	case route.Redirect != "":
+		quotedTo, err := caddy.CaddyQuote(route.Redirect)
+		if err != nil {
+			return "", fmt.Errorf("route %q: %v", routeName, err)
+		}
+		return fmt.Sprintf("redir %s permanent\n", quotedTo), nil
+	default:
+		return "", fmt.Errorf("route %q has no target", routeName)
+	}
+}
+
+func indent(s string, levels int) string {
+	prefix := strings.Repeat("\t", levels)
+	lines := strings.Split(s, "\n")
+	for i, line := range lines {
+		if line == "" {
+			continue
+		}
+		lines[i] = prefix + line
+	}
+	return strings.Join(lines, "\n")
+}
+
+func writeAppCaddyfile(app, env string, ctx *config.AppContext, release string) error {
+	content, err := renderAppCaddyfile(app, env, ctx, release)
 	if err != nil {
 		return err
 	}

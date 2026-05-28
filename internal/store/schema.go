@@ -80,15 +80,6 @@ type ApplyMeta struct {
 	OperationsChanged int    `json:"operations_changed"`
 }
 
-// `AppsFile` (apps.json) and `RoutesFile` (routes.json) were the
-// pre-cutover state model — one file per "what apps exist" / "what
-// routes are published". The container deploy flow (ADR-0005 + ADR-0006
-// Cut 2) doesn't write either: app inventory comes from `podman ps`
-// labels, route table comes from per-app fragments under
-// /etc/caddy/conf.d/. The types and their CRUD were deleted in
-// PR #39 along with the legacy Caddy renderer; only host.json and
-// the Cloudflare provider state remain.
-
 type CloudflareRoute struct {
 	App         string `json:"app"`
 	ZoneID      string `json:"zone_id"`

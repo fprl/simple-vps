@@ -121,11 +121,9 @@ func hostStatusStateLines(state hostStateStatus) []string {
 	return []string{fmt.Sprintf("state: not installed (missing %s)", state.Path)}
 }
 
-// statusStateLines reports the host-install state only. Per-app/per-env
-// counts intentionally do not appear: the legacy apps.json / routes.json
-// registers aren't written by the container deploy flow, so any count
-// derived from them would be a lie. Live (app, env) inventory belongs in
-// a future `status` rewrite sourced from `podman ps` labels.
+// statusStateLines reports the host-install state only. App/env inventory
+// belongs to `simple-vps app list`, which merges env identity files with
+// live Podman labels.
 func statusStateLines(stateStore store.Store) ([]string, error) {
 	installed, err := stateStore.HostInstalled()
 	if err != nil {

@@ -3,7 +3,7 @@
 Binds to an OS-assigned localhost port and writes that port number to
 the file path given as argv[1] so fake-podman state can record where
 this container is reachable from the host. Answers 200 "ok" to every
-GET/HEAD/POST so the helper's deploy-time healthcheck and any
+GET/HEAD/POST so the helper's deploy-time health check and any
 Caddy-proxied request both succeed.
 """
 

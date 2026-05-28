@@ -14,9 +14,9 @@ import (
 // the process inside is re-execed. To pick up manifest changes, use
 // `simple-vps deploy`.
 //
-// If a service argument is given, only that one bounces. Otherwise
+// If a process argument is given, only that one bounces. Otherwise
 // every container with matching app/env labels gets restarted, one at
-// a time so a half-broken service can't hide behind a "restarted"
+// a time so a half-broken process can't hide behind a "restarted"
 // summary. After each restart the helper re-queries `podman ps` and
 // fails fast if the container didn't come back to `running` — the
 // user finds out at restart time, not the next time they look at
@@ -28,7 +28,7 @@ import (
 type appRestartCmd struct {
 	App     string `arg:"" help:"App name."`
 	Env     string `arg:"" help:"Env name."`
-	Service string `arg:"" optional:"" help:"Service to bounce. Omitted = all services."`
+	Process string `arg:"" optional:"" help:"Process to bounce. Omitted = all processes."`
 	JSON    bool   `name:"json" help:"Emit structured JSON instead of the text summary."`
 }
 
@@ -43,12 +43,12 @@ func (c appRestartCmd) Run() error {
 }
 
 func (c appRestartCmd) runLocked() {
-	targets, err := resolveRestartTargets(c.App, c.Env, c.Service)
+	targets, err := resolveRestartTargets(c.App, c.Env, c.Process)
 	if err != nil {
 		utils.Die(err.Error(), 1)
 	}
 
-	results := make([]serviceStatus, 0, len(targets))
+	results := make([]processStatus, 0, len(targets))
 	for _, t := range targets {
 		if _, err := utils.RunChecked("podman", []string{"restart", t.Container}, ""); err != nil {
 			utils.Die(fmt.Sprintf("podman restart %s: %v", t.Container, err), 1)
@@ -63,10 +63,10 @@ func (c appRestartCmd) runLocked() {
 		}
 		state := postRestartState(post, t.Container)
 		if state != "running" {
-			utils.Die(fmt.Sprintf("service %s did not return to running after restart (state=%s)", t.Service, state), 1)
+			utils.Die(fmt.Sprintf("process %s did not return to running after restart (state=%s)", t.Process, state), 1)
 		}
-		results = append(results, serviceStatus{
-			Service:   t.Service,
+		results = append(results, processStatus{
+			Process:   t.Process,
 			Container: t.Container,
 			State:     state,
 			Image:     t.Image,
@@ -89,41 +89,41 @@ func (c appRestartCmd) runLocked() {
 type restartPayload struct {
 	App       string          `json:"app"`
 	Env       string          `json:"env"`
-	Restarted []serviceStatus `json:"restarted"`
+	Restarted []processStatus `json:"restarted"`
 }
 
-// resolveRestartTargets finds the labelled (app, env) services and
+// resolveRestartTargets finds the labelled (app, env) processes and
 // optionally narrows to one by name. Refuses to run when nothing is
 // running for the (app, env) — that's the "use `deploy` to recreate"
 // case and surfacing it as a clear error beats a silent no-op.
-func resolveRestartTargets(app, env, service string) ([]serviceStatus, error) {
+func resolveRestartTargets(app, env, process string) ([]processStatus, error) {
 	entries, err := podmanPSContainers(app, env)
 	if err != nil {
 		return nil, err
 	}
-	return pickRestartTargets(app, env, service, containersToServices(entries))
+	return pickRestartTargets(app, env, process, containersToProcesses(entries))
 }
 
 // pickRestartTargets is the pure-function half of resolveRestartTargets:
-// given the services that `podman ps` returned, narrow to the one the
+// given the processes that `podman ps` returned, narrow to the one the
 // user asked for (or hand back all of them, in deterministic order).
 // Split out so tests can exercise the filter logic without mocking out
 // the `podman ps` shell-out; the latter is covered by the smoke.
-func pickRestartTargets(app, env, service string, services []serviceStatus) ([]serviceStatus, error) {
-	if len(services) == 0 {
-		return nil, fmt.Errorf("no services running for %s (%s)", app, env)
+func pickRestartTargets(app, env, process string, processes []processStatus) ([]processStatus, error) {
+	if len(processes) == 0 {
+		return nil, fmt.Errorf("no processes running for %s (%s)", app, env)
 	}
-	if service != "" {
-		for _, s := range services {
-			if s.Service == service {
-				return []serviceStatus{s}, nil
+	if process != "" {
+		for _, s := range processes {
+			if s.Process == process {
+				return []processStatus{s}, nil
 			}
 		}
-		return nil, fmt.Errorf("no service %q for %s (%s)", service, app, env)
+		return nil, fmt.Errorf("no process %q for %s (%s)", process, app, env)
 	}
-	// `containersToServices` already sorts; restate the assumption so
+	// `containersToProcesses` already sorts; restate the assumption so
 	// the rolling order is obvious at the call site.
-	return services, nil
+	return processes, nil
 }
 
 // postRestartState looks up one container by name in a fresh ps dump
@@ -140,15 +140,15 @@ func postRestartState(entries []containerEntry, containerName string) string {
 	return "missing"
 }
 
-func renderRestartText(app, env string, results []serviceStatus) string {
+func renderRestartText(app, env string, results []processStatus) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s (%s)\n", app, env)
 	if len(results) == 0 {
-		b.WriteString("  no services restarted\n")
+		b.WriteString("  no processes restarted\n")
 		return b.String()
 	}
 	for _, s := range results {
-		fmt.Fprintf(&b, "  %-12s restarted (%s)\n", s.Service, s.State)
+		fmt.Fprintf(&b, "  %-12s restarted (%s)\n", s.Process, s.State)
 	}
 	return b.String()
 }

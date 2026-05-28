@@ -53,12 +53,9 @@ case "$verb" in
     ;;
 
   ps)
-    # Supports two shapes:
-    #   * raw label dump (legacy callers like the old port allocator)
-    #   * `podman ps -a [--filter label=K=V ...] --format json` — what
-    #     `server app status` now uses. Returns a JSON array matching
-    #     the fields containerEntry in cmd/helper/app_status.go cares
-    #     about: Names, State, Status, Image, Labels.
+    # Supports `podman ps -a [--filter label=K=V ...] --format json`.
+    # Returns the fields containerEntry in cmd/helper/app_status.go
+    # cares about: Names, State, Status, Image, Labels.
     fmt=""
     declare -a filters=()
     while [[ $# -gt 0 ]]; do
@@ -75,12 +72,8 @@ case "$verb" in
     done
 
     if [[ "$fmt" != "json" ]]; then
-      # Legacy dump — unchanged behavior.
-      for f in "$state_dir"/containers/*.labels; do
-        [[ -f "$f" ]] || continue
-        cat "$f"
-      done
-      exit 0
+      echo "fake podman: unsupported ps format: $fmt" >&2
+      exit 1
     fi
 
     # Emit JSON for every container whose labels match every
@@ -204,11 +197,10 @@ for image_path in sorted(glob.glob(os.path.join(state_dir, "images", "*")), key=
                     k, v = line.split("=", 1)
                     labels[k] = v
     repo = ""
-    tag = labels.get("simple_vps_release", "")
-    app = labels.get("app", "")
-    env = labels.get("env", "")
-    if app and env:
-        repo = f"simple-vps/{app}-{env}"
+    tag = labels.get("simple-vps.release", "")
+    infra_id = labels.get("simple-vps.infra_id", "")
+    if infra_id:
+        repo = f"simple-vps/{infra_id}"
     out.append({"Repository": repo, "Tag": tag, "Labels": labels})
 print(json.dumps(out))
 PY

@@ -16,18 +16,18 @@ import (
 // /etc/simple-vps/secrets/<app>/<env>/<key> (mode 0600, root:root) and
 // are resolved into the runtime env file by `server app apply`.
 type appSecretCmd struct {
-	Put  appSecretPutCmd  `cmd:"put" help:"Write a secret value from stdin."`
+	Set  appSecretSetCmd  `cmd:"set" help:"Write a secret value from stdin."`
 	List appSecretListCmd `cmd:"list" help:"List secret keys for an (app, env) pair."`
 	Rm   appSecretRmCmd   `cmd:"rm" help:"Remove a secret key."`
 }
 
-type appSecretPutCmd struct {
+type appSecretSetCmd struct {
 	App string `arg:"" help:"App name."`
 	Env string `arg:"" help:"Env name."`
 	Key string `arg:"" help:"Secret key (env-var name)."`
 }
 
-func (c appSecretPutCmd) Run() error {
+func (c appSecretSetCmd) Run() error {
 	if err := validateAppEnv(c.App, c.Env); err != nil {
 		utils.Die(err.Error(), 1)
 	}

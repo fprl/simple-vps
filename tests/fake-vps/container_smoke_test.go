@@ -9,6 +9,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/fprl/simple-vps/internal/identity"
 )
 
 // TestContainerSmoke exercises the new container-deploy lifecycle (ADR-0005
@@ -16,7 +18,7 @@ import (
 //
 //   - `simple-vps setup production` calls `server app setup-env`, which
 //     creates the per-env Linux user, on-disk layout under
-//     /var/apps/<app>/<env>/, and the per-(app, env) Podman network.
+//     /var/apps/<app>.<env>/, and the per-(app, env) Podman network.
 //   - `simple-vps deploy production` tars the working tree, uploads the
 //     manifest, calls `server app apply`, which runs `podman build` +
 //     `podman run` (§7 hardening subset) without any host-port
@@ -46,7 +48,7 @@ func TestContainerSmoke(t *testing.T) {
 	t.Run("backup and restore round-trip app state", env.testBackupRestore)
 	t.Run("concurrent deploys of the same app env serialize", env.testConcurrentDeploys)
 	t.Run("@secret refs resolve through put/list/rm into the runtime env", env.testSecretLifecycle)
-	t.Run("status + logs surface deployed services without SSHing in", env.testStatusAndLogs)
+	t.Run("status + logs surface deployed processes without SSHing in", env.testStatusAndLogs)
 	t.Run("restart bounces containers in place via podman restart", env.testRestart)
 	t.Run("destroy tears down one app environment", env.testDestroy)
 }
@@ -76,39 +78,39 @@ EOF`)
 	// 1. Setup creates the per-env user, paths, and per-(app, env) network.
 	e.simpleVPS(t, app, nil, "setup", "production")
 
-	e.ssh(t, "getent passwd app-api-production >/dev/null")
-	e.ssh(t, "test -d /var/apps/api/production/shared")
-	e.ssh(t, "test -f /run/fake-podman/networks/app-api-production")
+	e.ssh(t, "getent passwd "+identity.SystemUser("api", "production")+" >/dev/null")
+	e.ssh(t, "test -d "+identity.DataDir("api", "production"))
+	e.ssh(t, "test -f "+identity.IdentityFile("api", "production"))
+	e.ssh(t, "test -f /run/fake-podman/networks/"+identity.Network("api", "production"))
 
 	// 2. Deploy on a clean tree.
 	e.simpleVPS(t, app, nil, "deploy", "production")
+	release := gitRelease(t, e, app)
+	webContainer := identity.ContainerName("api", "production", "web", release)
 
-	// 3. fake-podman should have logged build + run for the web service.
+	// 3. fake-podman should have logged build + run for the web process.
 	commandsLog := e.ssh(t, "cat /run/fake-podman/commands.log")
 	assertContains(t, commandsLog, "podman build")
 	assertContains(t, commandsLog, "podman run")
-	assertContains(t, commandsLog, "--name app-api-production-web")
+	assertContains(t, commandsLog, "--name "+webContainer)
 	assertContains(t, commandsLog, "--user ") // numeric uid:gid
 	assertContains(t, commandsLog, "--read-only")
 	assertContains(t, commandsLog, "--tmpfs /tmp:size=64m,mode=1777")
 	assertContains(t, commandsLog, "--cap-drop ALL")
-	assertContains(t, commandsLog, "--cap-add NET_BIND_SERVICE")
 	assertContains(t, commandsLog, "--security-opt no-new-privileges")
 	assertContains(t, commandsLog, "--memory 512m")
 	assertContains(t, commandsLog, "--cpus 0.5")
-	assertContains(t, commandsLog, "--network app-api-production")
+	assertContains(t, commandsLog, "--network "+identity.Network("api", "production"))
 	assertContains(t, commandsLog, "--network ingress")
 
 	// 4. App container must NOT carry the host-port label (that path is
 	// gone with Caddy-in-container) and the run line must NOT carry a
 	// --publish (no host loopback ingress).
-	labels := e.ssh(t, "cat /run/fake-podman/containers/app-api-production-web.labels")
-	assertContains(t, labels, "app=api")
-	assertContains(t, labels, "env=production")
-	assertContains(t, labels, "service=web")
-	if strings.Contains(labels, "simple_vps_host_port=") {
-		t.Fatalf("simple_vps_host_port label leaked into Caddy-in-container flow:\n%s", labels)
-	}
+	labels := e.ssh(t, "cat /run/fake-podman/containers/"+webContainer+".labels")
+	assertContains(t, labels, "simple-vps.app=api")
+	assertContains(t, labels, "simple-vps.env=production")
+	assertContains(t, labels, "simple-vps.process=web")
+	assertContains(t, labels, "simple-vps.release="+release)
 	if strings.Contains(commandsLog, "--publish 127.0.0.1:") {
 		t.Fatalf("app container still publishes a host loopback port; Caddy-in-container should drop this:\n%s", commandsLog)
 	}
@@ -117,7 +119,7 @@ EOF`)
 	// 127.0.0.1.
 	fragment := e.ssh(t, "cat /etc/caddy/conf.d/simple-vps-api-production.caddy")
 	assertContains(t, fragment, `"api.example.com" {`)
-	assertContains(t, fragment, "reverse_proxy http://app-api-production-web:3000")
+	assertContains(t, fragment, "reverse_proxy http://"+webContainer+":3000")
 	if strings.Contains(fragment, "127.0.0.1") {
 		t.Fatalf("Caddy fragment still uses host loopback; should be container DNS:\n%s", fragment)
 	}
@@ -149,7 +151,7 @@ EOF`)
 
 func (e *smokeEnv) testBackupRestore(t *testing.T) {
 	app := filepath.Join(e.tmp, "container-api")
-	e.dockerExec(t, "printf 'durable-state' > /var/apps/api/production/shared/data.txt")
+	e.dockerExec(t, "printf 'durable-state' > "+identity.DataDir("api", "production")+"/data.txt")
 
 	e.simpleVPS(t, app, nil, "backup", "production")
 	rawList := e.simpleVPS(t, app, nil, "backup", "--json", "list", "production")
@@ -168,14 +170,14 @@ func (e *smokeEnv) testBackupRestore(t *testing.T) {
 	backupID := list.Backups[0].ID
 
 	e.simpleVPS(t, app, nil, "destroy", "production", "--yes")
-	if exists := e.run(t, e.repoRoot, nil, "docker", "exec", e.container, "bash", "-c", "test -e /var/apps/api/production/shared/data.txt"); exists.err == nil {
-		t.Fatal("destroy should remove shared data before restore")
+	if exists := e.run(t, e.repoRoot, nil, "docker", "exec", e.container, "bash", "-c", "test -e "+identity.DataDir("api", "production")+"/data.txt"); exists.err == nil {
+		t.Fatal("destroy should remove data before restore")
 	}
 
 	e.simpleVPS(t, app, nil, "restore", "--from", backupID, "production")
-	got := strings.TrimSpace(e.dockerExec(t, "cat /var/apps/api/production/shared/data.txt"))
+	got := strings.TrimSpace(e.dockerExec(t, "cat "+identity.DataDir("api", "production")+"/data.txt"))
 	if got != "durable-state" {
-		t.Fatalf("restored shared data = %q, want durable-state", got)
+		t.Fatalf("restored data = %q, want durable-state", got)
 	}
 	status := e.simpleVPS(t, app, nil, "status", "production")
 	assertContains(t, status, "web")
@@ -197,11 +199,11 @@ func (e *smokeEnv) testRollback(t *testing.T) {
 
 	rawJSON := e.simpleVPS(t, app, nil, "rollback", "--json", "production")
 	var payload struct {
-		App      string   `json:"app"`
-		Env      string   `json:"env"`
-		Previous string   `json:"previous"`
-		Release  string   `json:"release"`
-		Services []string `json:"services"`
+		App       string   `json:"app"`
+		Env       string   `json:"env"`
+		Previous  string   `json:"previous"`
+		Release   string   `json:"release"`
+		Processes []string `json:"processes"`
 	}
 	if err := json.Unmarshal([]byte(rawJSON), &payload); err != nil {
 		t.Fatalf("rollback --json output not parseable as JSON: %v\nraw:\n%s", err, rawJSON)
@@ -209,22 +211,22 @@ func (e *smokeEnv) testRollback(t *testing.T) {
 	if payload.App != "api" || payload.Env != "production" || payload.Previous != newRelease || payload.Release != oldRelease {
 		t.Fatalf("unexpected rollback payload: %+v", payload)
 	}
-	if len(payload.Services) != 1 || payload.Services[0] != "web" {
-		t.Fatalf("expected rollback to restart web service, got %+v", payload.Services)
+	if len(payload.Processes) != 1 || payload.Processes[0] != "web" {
+		t.Fatalf("expected rollback to restart web process, got %+v", payload.Processes)
 	}
 
 	statusJSON := e.simpleVPS(t, app, nil, "status", "--json", "production")
 	var status struct {
-		Services []struct {
-			Service string `json:"service"`
+		Processes []struct {
+			Process string `json:"process"`
 			Release string `json:"release"`
-		} `json:"services"`
+		} `json:"processes"`
 	}
 	if err := json.Unmarshal([]byte(statusJSON), &status); err != nil {
 		t.Fatalf("status after rollback not parseable as JSON: %v\nraw:\n%s", err, statusJSON)
 	}
-	if len(status.Services) != 1 || status.Services[0].Service != "web" || status.Services[0].Release != oldRelease {
-		t.Fatalf("status did not report rolled-back release %s: %+v", oldRelease, status.Services)
+	if len(status.Processes) != 1 || status.Processes[0].Process != "web" || status.Processes[0].Release != oldRelease {
+		t.Fatalf("status did not report rolled-back release %s: %+v", oldRelease, status.Processes)
 	}
 	e.assertRemoteBody(t, "curl -fsS -H 'Host: api.example.com' http://127.0.0.1/health", "ok")
 }
@@ -263,7 +265,7 @@ func (e *smokeEnv) testConcurrentDeploys(t *testing.T) {
 // against the helper-side store under /etc/simple-vps/secrets/:
 //
 //  1. setup the app/env baseline
-//  2. `simple-vps secret put` over SSH-stdin (value never on argv)
+//  2. `simple-vps secret set` over SSH-stdin (value never on argv)
 //  3. `simple-vps secret list` shows the key (NOT the value)
 //  4. deploy a manifest that references @secret:db_url
 //  5. the on-host env file contains the literal env values AND the
@@ -282,26 +284,25 @@ CMD ["/bin/sh", "-c", "sleep 3600"]
 [env.production]
 server = "fake-vps"
 
-[env.production.env]
+[vars]
 LOG_LEVEL = "info"
 DATABASE_URL = "@secret:db_url"
 
-[services.web]
+[processes.web]
 port = 3000
-healthcheck = "/health"
+health = "/health"
 
 [routes.app]
 host = "sec.example.com"
-type = "proxy"
-service = "web"
+process = "web"
 `)
 	e.commitFixture(t, app)
 	e.simpleVPS(t, app, nil, "setup", "production")
 
-	// 1. put: value over stdin, never argv. The fake-VPS harness uses
+	// 1. set: value over stdin, never argv. The fake-VPS harness uses
 	// docker exec ssh under the hood and the helper reads from its
-	// own stdin in `secret put`.
-	e.simpleVPS(t, app, []byte("postgres://verybadidea"), "secret", "put", "production", "db_url")
+	// own stdin in `secret set`.
+	e.simpleVPS(t, app, []byte("postgres://verybadidea"), "secret", "set", "production", "db_url")
 
 	// 2. file lands at the expected path, root-owned, mode 0600,
 	// containing the value verbatim (no trailing newline — the client
@@ -346,7 +347,7 @@ service = "web"
 	// 4. deploy: helper resolves @secret:db_url into the env file
 	// next to the literal LOG_LEVEL.
 	e.simpleVPS(t, app, nil, "deploy", "production")
-	envFile := e.dockerExec(t, "cat /var/apps/sec/production/shared/.env")
+	envFile := e.dockerExec(t, "cat "+identity.EnvFile("sec", "production"))
 	if !strings.Contains(envFile, "LOG_LEVEL=info\n") {
 		t.Fatalf("env file missing literal LOG_LEVEL:\n%s", envFile)
 	}
@@ -355,9 +356,10 @@ service = "web"
 	}
 
 	// 5. env file mode + ownership: 0600 owned by the per-env user.
-	envStat := strings.TrimSpace(e.dockerExec(t, "stat -c '%a %U' /var/apps/sec/production/shared/.env"))
-	if envStat != "600 app-sec-production" {
-		t.Fatalf("env file perms wrong: %q (want `600 app-sec-production`)", envStat)
+	envStat := strings.TrimSpace(e.dockerExec(t, "stat -c '%a %U' "+identity.EnvFile("sec", "production")))
+	wantOwner := identity.SystemUser("sec", "production")
+	if envStat != "600 "+wantOwner {
+		t.Fatalf("env file perms wrong: %q (want `600 %s`)", envStat, wantOwner)
 	}
 
 	// 6. rm removes the key.
@@ -378,19 +380,19 @@ service = "web"
 
 // testStatusAndLogs covers the read-only operator surface introduced
 // in PR #38. Assumes the earlier subtests have already deployed the
-// `api` container app and left its `web` service running.
+// `api` container app and left its `web` process running.
 func (e *smokeEnv) testStatusAndLogs(t *testing.T) {
 	app := filepath.Join(e.tmp, "container-api")
 
-	// Text status surfaces the web service, its container, and the
-	// simple_vps_release label baked in by `app apply`.
+	// Text status surfaces the web process, its container, and the
+	// release label baked in by `app apply`.
 	text := e.simpleVPS(t, app, nil, "status", "production")
 	assertContains(t, text, "api (production)")
 	assertContains(t, text, "web")
 	assertContains(t, text, "running")
 	assertContains(t, text, "release=")
-	if strings.Contains(text, "no services running") {
-		t.Fatalf("status reported `no services running` after a successful deploy:\n%s", text)
+	if strings.Contains(text, "no processes running") {
+		t.Fatalf("status reported `no processes running` after a successful deploy:\n%s", text)
 	}
 
 	// JSON status carries the same data in a structured shape.
@@ -398,14 +400,14 @@ func (e *smokeEnv) testStatusAndLogs(t *testing.T) {
 	// might still slip through a substring check.
 	rawJSON := e.simpleVPS(t, app, nil, "status", "--json", "production")
 	var payload struct {
-		App      string `json:"app"`
-		Env      string `json:"env"`
-		Services []struct {
-			Service   string `json:"service"`
+		App       string `json:"app"`
+		Env       string `json:"env"`
+		Processes []struct {
+			Process   string `json:"process"`
 			Container string `json:"container"`
 			State     string `json:"state"`
 			Release   string `json:"release"`
-		} `json:"services"`
+		} `json:"processes"`
 	}
 	if err := json.Unmarshal([]byte(rawJSON), &payload); err != nil {
 		t.Fatalf("status --json output not parseable as JSON: %v\nraw:\n%s", err, rawJSON)
@@ -413,14 +415,14 @@ func (e *smokeEnv) testStatusAndLogs(t *testing.T) {
 	if payload.App != "api" || payload.Env != "production" {
 		t.Fatalf("status --json mis-identifies the app: %+v", payload)
 	}
-	if len(payload.Services) != 1 || payload.Services[0].Service != "web" {
-		t.Fatalf("expected one service `web`, got: %+v", payload.Services)
+	if len(payload.Processes) != 1 || payload.Processes[0].Process != "web" {
+		t.Fatalf("expected one process `web`, got: %+v", payload.Processes)
 	}
-	if payload.Services[0].Container != "app-api-production-web" {
-		t.Fatalf("unexpected container name: %+v", payload.Services[0])
+	if payload.Processes[0].Container == "" || !strings.Contains(payload.Processes[0].Container, "-web-") {
+		t.Fatalf("unexpected container name: %+v", payload.Processes[0])
 	}
-	if payload.Services[0].Release == "" {
-		t.Fatalf("status --json missing simple_vps_release label: %+v", payload.Services[0])
+	if payload.Processes[0].Release == "" {
+		t.Fatalf("status --json missing release label: %+v", payload.Processes[0])
 	}
 
 	// Host-level app listing is sourced from Podman labels instead
@@ -428,12 +430,12 @@ func (e *smokeEnv) testStatusAndLogs(t *testing.T) {
 	rawListJSON := e.simpleVPS(t, app, nil, "app", "list", "--json")
 	var listPayload struct {
 		Apps []struct {
-			App      string `json:"app"`
-			Env      string `json:"env"`
-			Services []struct {
-				Service string `json:"service"`
+			App       string `json:"app"`
+			Env       string `json:"env"`
+			Processes []struct {
+				Process string `json:"process"`
 				State   string `json:"state"`
-			} `json:"services"`
+			} `json:"processes"`
 		} `json:"apps"`
 	}
 	if err := json.Unmarshal([]byte(rawListJSON), &listPayload); err != nil {
@@ -444,43 +446,42 @@ func (e *smokeEnv) testStatusAndLogs(t *testing.T) {
 	}
 	found := false
 	for _, listed := range listPayload.Apps {
-		if listed.App == "api" && listed.Env == "production" && len(listed.Services) == 1 && listed.Services[0].Service == "web" {
+		if listed.App == "api" && listed.Env == "production" && len(listed.Processes) == 1 && listed.Processes[0].Process == "web" {
 			found = true
 		}
 	}
 	if !found {
-		t.Fatalf("app list --json missing api/production/web:\n%+v", listPayload.Apps)
+		t.Fatalf("app list --json missing api/production/web process:\n%+v", listPayload.Apps)
 	}
 
 	// Logs reaches `podman logs` on the right container and prints
 	// the deterministic stub line.
 	logs := e.simpleVPS(t, app, nil, "logs", "production", "web")
-	assertContains(t, logs, "fake podman logs for app-api-production-web")
+	assertContains(t, logs, "fake podman logs for "+payload.Processes[0].Container)
 
-	// Service argument is required when... actually our fixture only
-	// has one service, so omitting it should work too. Cover that.
+	// Process argument is optional when exactly one process exists.
 	logsNoSvc := e.simpleVPS(t, app, nil, "logs", "production")
-	assertContains(t, logsNoSvc, "fake podman logs for app-api-production-web")
+	assertContains(t, logsNoSvc, "fake podman logs for "+payload.Processes[0].Container)
 
-	// Unknown service errors clearly.
+	// Unknown process errors clearly.
 	missing := e.runSimpleVPS(t, app, nil, "logs", "production", "nope")
 	if missing.err == nil {
-		t.Fatal("expected logs to fail when service is unknown")
+		t.Fatal("expected logs to fail when process is unknown")
 	}
 	if !strings.Contains(missing.stderr, "nope") {
-		t.Fatalf("error should name the missing service, got: %s", missing.stderr)
+		t.Fatalf("error should name the missing process, got: %s", missing.stderr)
 	}
 }
 
 // testRestart covers `simple-vps restart` against the live container
 // flow. Assumes the earlier `testContainerAppLifecycle` subtest has
 // already deployed the `api` container app and left its `web`
-// service running on the fake VPS.
+// process running on the fake VPS.
 func (e *smokeEnv) testRestart(t *testing.T) {
 	app := filepath.Join(e.tmp, "container-api")
 
 	// Whole-env restart text output names the env and the bounced
-	// service, with the post-restart state.
+	// process, with the post-restart state.
 	text := e.simpleVPS(t, app, nil, "restart", "production")
 	assertContains(t, text, "api (production)")
 	assertContains(t, text, "web")
@@ -490,8 +491,9 @@ func (e *smokeEnv) testRestart(t *testing.T) {
 	// is the assertion that proves the helper used the in-place
 	// primitive (not an `rm`/`run` cycle that would force a re-build
 	// or lose container state).
+	currentContainer := currentWebContainer(t, e, app)
 	commandsLog := e.ssh(t, "cat /run/fake-podman/commands.log")
-	assertContains(t, commandsLog, "podman restart app-api-production-web")
+	assertContains(t, commandsLog, "podman restart "+currentContainer)
 
 	// The end-to-end Caddy route should still work after the bounce —
 	// the container kept its labels, network membership, and listener
@@ -505,7 +507,7 @@ func (e *smokeEnv) testRestart(t *testing.T) {
 		App       string `json:"app"`
 		Env       string `json:"env"`
 		Restarted []struct {
-			Service   string `json:"service"`
+			Process   string `json:"process"`
 			Container string `json:"container"`
 			State     string `json:"state"`
 		} `json:"restarted"`
@@ -516,32 +518,32 @@ func (e *smokeEnv) testRestart(t *testing.T) {
 	if payload.App != "api" || payload.Env != "production" {
 		t.Fatalf("restart --json mis-identifies the app: %+v", payload)
 	}
-	if len(payload.Restarted) != 1 || payload.Restarted[0].Service != "web" {
-		t.Fatalf("expected one restarted service `web`, got: %+v", payload.Restarted)
+	if len(payload.Restarted) != 1 || payload.Restarted[0].Process != "web" {
+		t.Fatalf("expected one restarted process `web`, got: %+v", payload.Restarted)
 	}
 	if payload.Restarted[0].State != "running" {
 		t.Fatalf("expected state=running after restart, got: %+v", payload.Restarted[0])
 	}
 
-	// Service-scoped restart hits just the named service.
+	// Process-scoped restart hits just the named process.
 	svcOut := e.simpleVPS(t, app, nil, "restart", "production", "web")
 	assertContains(t, svcOut, "web")
 	assertContains(t, svcOut, "restarted (running)")
 
-	// Unknown service errors with a clear message that names the
+	// Unknown process errors with a clear message that names the
 	// missing one.
 	missing := e.runSimpleVPS(t, app, nil, "restart", "production", "nope")
 	if missing.err == nil {
-		t.Fatal("expected restart to fail for unknown service")
+		t.Fatal("expected restart to fail for unknown process")
 	}
 	if !strings.Contains(missing.stderr+missing.stdout, "nope") {
-		t.Fatalf("error should name the missing service, got:\nstdout: %s\nstderr: %s", missing.stdout, missing.stderr)
+		t.Fatalf("error should name the missing process, got:\nstdout: %s\nstderr: %s", missing.stdout, missing.stderr)
 	}
 }
 
 // testDestroy covers the public `simple-vps destroy` wrapper and the
 // privileged `server app destroy-env` teardown path. It intentionally
-// runs after status/logs/restart because it removes the shared
+// runs after status/logs/restart because it removes the
 // container-api fixture from the fake VPS.
 func (e *smokeEnv) testDestroy(t *testing.T) {
 	app := filepath.Join(e.tmp, "container-api")
@@ -557,7 +559,8 @@ func (e *smokeEnv) testDestroy(t *testing.T) {
 	}
 
 	// Give --purge something observable to remove.
-	e.simpleVPS(t, app, []byte("throwaway"), "secret", "put", "production", "cleanup_key")
+	e.simpleVPS(t, app, []byte("throwaway"), "secret", "set", "production", "cleanup_key")
+	currentContainer := currentWebContainer(t, e, app)
 
 	out := e.simpleVPS(t, app, nil, "destroy", "production", "--confirm", "api", "--purge")
 	assertContains(t, out, "Destroyed api (production)")
@@ -566,19 +569,19 @@ func (e *smokeEnv) testDestroy(t *testing.T) {
 	assertContains(t, out, "secrets: purged")
 
 	commandsLog := e.ssh(t, "cat /run/fake-podman/commands.log")
-	assertContains(t, commandsLog, "podman rm -f app-api-production-web")
-	assertContains(t, commandsLog, "podman network rm app-api-production")
+	assertContains(t, commandsLog, "podman rm -f "+currentContainer)
+	assertContains(t, commandsLog, "podman network rm "+identity.Network("api", "production"))
 	assertContains(t, commandsLog, "podman exec caddy caddy reload --config /etc/caddy/Caddyfile")
 
-	e.dockerExec(t, "test ! -e /run/fake-podman/containers/app-api-production-web.labels")
-	e.dockerExec(t, "test ! -e /run/fake-podman/networks/app-api-production")
+	e.dockerExec(t, "test ! -e /run/fake-podman/containers/"+currentContainer+".labels")
+	e.dockerExec(t, "test ! -e /run/fake-podman/networks/"+identity.Network("api", "production"))
 	e.dockerExec(t, "test ! -e /etc/caddy/conf.d/simple-vps-api-production.caddy")
-	e.dockerExec(t, "test ! -e /var/apps/api/production")
+	e.dockerExec(t, "test ! -e "+identity.EnvRoot("api", "production"))
 	e.dockerExec(t, "test ! -e /etc/simple-vps/secrets/api/production")
-	e.dockerExec(t, "! getent passwd app-api-production >/dev/null")
+	e.dockerExec(t, "! getent passwd "+identity.SystemUser("api", "production")+" >/dev/null")
 
 	status := e.simpleVPS(t, app, nil, "status", "production")
-	assertContains(t, status, "no services running")
+	assertContains(t, status, "no processes running")
 
 	// Fake Caddy re-reads conf.d on every request, so route removal is
 	// visible immediately after the reload.
@@ -600,16 +603,39 @@ CMD ["/bin/sh", "-c", "sleep 3600"]
 [env.production]
 server = "fake-vps"
 
-[services.web]
+[processes.web]
 port = 3000
-healthcheck = "/health"
-memory = "512m"
-cpus = 0.5
-net_bind_service = true
+health = "/health"
+resources = { memory = "512m", cpus = 0.5 }
 
 [routes.app]
 host = "api.example.com"
-type = "proxy"
-service = "web"
+process = "web"
 `)
+}
+
+func gitRelease(t *testing.T, e *smokeEnv, app string) string {
+	t.Helper()
+	return strings.TrimSpace(e.mustRun(t, app, nil, "git", "rev-parse", "--short=12", "HEAD"))
+}
+
+func currentWebContainer(t *testing.T, e *smokeEnv, app string) string {
+	t.Helper()
+	rawJSON := e.simpleVPS(t, app, nil, "status", "--json", "production")
+	var payload struct {
+		Processes []struct {
+			Process   string `json:"process"`
+			Container string `json:"container"`
+		} `json:"processes"`
+	}
+	if err := json.Unmarshal([]byte(rawJSON), &payload); err != nil {
+		t.Fatalf("status --json output not parseable as JSON: %v\nraw:\n%s", err, rawJSON)
+	}
+	for _, proc := range payload.Processes {
+		if proc.Process == "web" {
+			return proc.Container
+		}
+	}
+	t.Fatalf("status --json missing web process:\n%s", rawJSON)
+	return ""
 }

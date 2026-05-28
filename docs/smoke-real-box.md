@@ -97,10 +97,34 @@ SIMPLE_VPS_KNOWN_HOSTS="$(ssh-keyscan -t ed25519 -H <IP> 2>/dev/null)" \
 ```sh
 mkdir -p /tmp/simple-vps-smoke-app && cd /tmp/simple-vps-smoke-app
 
+cat > server.py <<'EOF'
+from http.server import BaseHTTPRequestHandler, HTTPServer
+import os
+
+class Handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == "/health":
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"ok")
+            return
+        if self.path == "/":
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(("smoke-ok:" + os.environ.get("SMOKE_SECRET", "missing")).encode())
+            return
+        self.send_response(404)
+        self.end_headers()
+
+HTTPServer(("0.0.0.0", 3000), Handler).serve_forever()
+EOF
+
 cat > Dockerfile <<'EOF'
-FROM docker.io/library/nginx:alpine
-RUN printf 'server {\n  listen 3000;\n  location = /health { add_header Content-Type text/plain; return 200 "ok"; }\n  location = / { add_header Content-Type text/plain; return 200 "smoke-ok-nginx"; }\n  location / { return 404; }\n}\n' > /etc/nginx/conf.d/default.conf
+FROM docker.io/library/python:3.12-alpine
+WORKDIR /app
+COPY server.py .
 EXPOSE 3000
+CMD ["python", "/app/server.py"]
 EOF
 
 cat > simple-vps.toml <<'EOF'
@@ -109,26 +133,17 @@ name = "hello"
 [env.production]
 server = "deploy@<IP>"
 
-[env.production.env]
+[vars]
 SMOKE_SECRET = "@secret:smoke_key"
 
-[services.web]
+[processes.web]
 port = 3000
-healthcheck = "/health"
-
-# `--read-only` is on by default per ADR-0005 §7. Most stock images
-# (nginx, Apache httpd, postgres, ...) need writable scratch beyond
-# `/tmp:64m`. Declare the extra mounts here. Keys are absolute paths;
-# values match `^[1-9][0-9]*(k|m|g)$`. The provisioner adds mode=1777
-# so the per-env container user can actually write.
-[services.web.tmpfs]
-"/var/cache/nginx" = "32m"
-"/var/run" = "16m"
+health = "/health"
+resources = { memory = "256m", cpus = 0.5 }
 
 [routes.app]
 host = "smoke.<your-domain>"
-type = "proxy"
-service = "web"
+process = "web"
 tls = "internal"  # self-signed cert; drop or set to "auto" once DNS resolves
 EOF
 
@@ -138,19 +153,8 @@ git config user.name "Smoke"
 git add . && git commit -q -m "fixture"
 ```
 
-`nginx:alpine` is the smallest image that:
-
-- Has a stateless HTTP server.
-- Has a well-known set of writable paths (`/var/cache/nginx`,
-  `/var/run`) that we cover with manifest tmpfs entries.
-- Exercises the `--read-only` + tmpfs combination, so a broken
-  combination of the two would surface here before a real user hits
-  it. (Earlier smokes used `python:3-alpine` because it didn't need
-  any writable rootfs paths — fine as a sanity check, but doesn't
-  exercise tmpfs.)
-
-If you swap it for a different image, check what paths the image
-writes to at startup and add them under `[services.<name>.tmpfs]`.
+This fixture keeps the image boring: one Dockerfile, one web process, one
+health path, one secret reference, and no image-specific writable-path knobs.
 
 ## 3. Setup and deploy
 
@@ -162,14 +166,14 @@ SIMPLE_VPS_KNOWN_HOSTS="$(ssh-keyscan -t ed25519 -H <IP> 2>/dev/null)" \
   /path/to/simple-vps/dist/simple-vps setup production
 
 # Verify on the box (over SSH as root):
-#   getent passwd app-hello-production         # → uid:gid created
-#   ls /var/apps/hello/production/             # → shared/
-#   podman network ls                           # → app-hello-production
+#   test -d /var/apps/hello.production/data
+#   jq . /var/apps/hello.production/simple-vps.json
+#   podman network ls                           # includes the derived infra_id
 
 printf 'smoke-secret-value' | \
 SIMPLE_VPS_SSH_KEY="$(cat /tmp/simple-vps-smoke-keys/deploy)" \
 SIMPLE_VPS_KNOWN_HOSTS="$(ssh-keyscan -t ed25519 -H <IP> 2>/dev/null)" \
-  /path/to/simple-vps/dist/simple-vps secret put production smoke_key
+  /path/to/simple-vps/dist/simple-vps secret set production smoke_key
 
 SIMPLE_VPS_SSH_KEY="$(cat /tmp/simple-vps-smoke-keys/deploy)" \
 SIMPLE_VPS_KNOWN_HOSTS="$(ssh-keyscan -t ed25519 -H <IP> 2>/dev/null)" \
@@ -202,7 +206,7 @@ The fixture sets `tls = "internal"`, so the Caddy fragment lands as:
 ```
 "smoke.<your-domain>" {
     tls internal
-    reverse_proxy http://app-hello-production-web:3000
+    reverse_proxy http://<derived-infra-id>-web-<release>:3000
 }
 ```
 
@@ -228,17 +232,17 @@ curl -k -sS \
   https://smoke.<your-domain>/
 ```
 
-Expected: `HTTP 200` + body `smoke-ok-nginx`.
+Expected: `HTTP 200` + body `smoke-ok:smoke-secret-value`.
 
 These two responses prove the full path:
 
 ```
 your curl
   └→ HTTPS to <IP>:443
-       └→ Caddy container (on `ingress`, self-signed via `tls internal`)
-            └→ aardvark-dns resolves `app-hello-production-web`
+           └→ Caddy container (on `ingress`, self-signed via `tls internal`)
+            └→ aardvark-dns resolves the versioned web container
                  └→ Podman bridge → app container
-                      └→ nginx serves /health → 200 ok
+                      └→ Python app serves /health → 200 ok
 ```
 
 ## 5. Teardown
@@ -259,4 +263,4 @@ SIMPLE_VPS_KNOWN_HOSTS="$(ssh-keyscan -t ed25519 -H <IP> 2>/dev/null)" \
 ```
 
 Expected destroy output names the removed container, removed route, and
-purged secrets. Expected status after destroy has an empty `services` array.
+purged secrets. Expected status after destroy has an empty `processes` array.

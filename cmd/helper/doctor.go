@@ -220,10 +220,8 @@ func doctorStateFindings(stateStore store.Store) []string {
 	if _, err := stateStore.ReadHost(); err != nil {
 		findings = append(findings, fmt.Sprintf("host state: %v", err))
 	}
-	// apps.json / routes.json are no longer written by the container
-	// deploy flow; nothing to validate. ReadCloudflare stays because
-	// Cloudflare Tunnel provider state is still host-level (set by the
-	// installer, used at routing time).
+	// ReadCloudflare stays because Cloudflare Tunnel provider state is
+	// host-level: set by the installer, used at routing time.
 	if _, err := stateStore.ReadCloudflare(); err != nil {
 		findings = append(findings, fmt.Sprintf("cloudflare state: %v", err))
 	}

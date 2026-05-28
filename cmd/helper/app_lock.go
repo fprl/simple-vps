@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"syscall"
 
+	"github.com/fprl/simple-vps/internal/identity"
 	"github.com/fprl/simple-vps/internal/utils"
 )
 
@@ -23,7 +24,7 @@ func appEnvLockDir() string {
 }
 
 func appEnvLockPath(app, env string) string {
-	return filepath.Join(appEnvLockDir(), fmt.Sprintf("%s-%s.lock", app, env))
+	return filepath.Join(appEnvLockDir(), fmt.Sprintf("%s.lock", identity.InfraID(app, env)))
 }
 
 func acquireAppEnvLock(app, env string) (*appEnvLock, error) {

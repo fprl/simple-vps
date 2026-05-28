@@ -14,73 +14,69 @@ import (
 	"github.com/pelletier/go-toml/v2"
 )
 
-const ShapeContainer = "container"
+const (
+	ShapeContainer = "container"
+	ShapeStatic    = "static"
+)
 
 var (
 	AppRe        = names.AppRe
 	EnvRe        = names.EnvRe
-	ServiceRe    = names.ServiceRe
+	ProcessRe    = names.ServiceRe
 	SystemUserRe = names.SystemUserRe
 	EnvKeyRe     = names.EnvKeyRe
 )
 
 const secretPrefix = "@secret:"
 
-type Service struct {
-	Command            string `toml:"command"`
-	Port               *int   `toml:"port"`
-	Healthcheck        string `toml:"healthcheck"`
-	HealthcheckStatus  *int   `toml:"healthcheck_status"`
-	HealthcheckTimeout *int   `toml:"healthcheck_timeout"`
-	// Memory and CPUs are per-service Podman resource limits from the
-	// §7 security floor. Memory uses the same compact size grammar as
-	// tmpfs (`512m`, `1g`). CPUs is a positive numeric quota (`0.5`,
-	// `1`, `2.25`) and renders directly to Podman's --cpus flag.
+type Resources struct {
 	Memory *string  `toml:"memory"`
 	CPUs   *float64 `toml:"cpus"`
-	// NetBindService is the only manifest-expressible Linux capability.
-	// It maps to --cap-add=NET_BIND_SERVICE for images that need to bind
-	// privileged ports inside the container after --cap-drop=ALL.
-	NetBindService *bool `toml:"net_bind_service"`
-	// Tmpfs declares additional writable tmpfs mounts for stock
-	// images that need scratch beyond the always-on `/tmp:64m` from
-	// the §7 security floor (e.g., nginx wants `/var/cache/nginx`
-	// and `/var/run`). Keys are absolute paths; values are Podman
-	// size strings (`64m`, `1g`, ...). Validation in `validateServiceTmpfs`
-	// enforces a denylist of dangerous targets and the size grammar.
-	Tmpfs map[string]string `toml:"tmpfs"`
+}
+
+type Process struct {
+	Command   string    `toml:"command"`
+	Port      *int      `toml:"port"`
+	Health    string    `toml:"health"`
+	Resources Resources `toml:"resources"`
 }
 
 type Route struct {
-	Host    string `toml:"host"`
-	Type    string `toml:"type"`
-	Service string `toml:"service"`
-	To      string `toml:"to"`
+	Host     string `toml:"host"`
+	Path     string `toml:"path"`
+	Process  string `toml:"process"`
+	Serve    string `toml:"serve"`
+	Redirect string `toml:"redirect"`
 	// TLS controls Caddy's automatic-HTTPS behavior for this route:
-	//   - ""        — same as "auto"
-	//   - "auto"    — emit nothing; Caddy provisions Let's Encrypt
-	//   - "internal" — emit `tls internal`; self-signed cert (private
-	//                  DNS, no public ACME, dev/test boxes)
-	// "off" is intentionally not yet supported. Reject anything else
-	// at check time.
+	//   - ""         — same as "auto"
+	//   - "auto"     — emit nothing; Caddy provisions Let's Encrypt
+	//   - "internal" — emit `tls internal`; self-signed cert for
+	//                  private DNS, dev, and smoke boxes
+	//
+	// "off" is intentionally not supported. Reject anything else at
+	// check time so typos never silently downgrade HTTPS behavior.
 	TLS string `toml:"tls"`
 }
 
+type DeployConfig struct {
+	Release string `toml:"release"`
+}
+
 type EnvBlock struct {
-	Server   string             `toml:"server"`
-	Services map[string]Service `toml:"services"`
-	Routes   map[string]Route   `toml:"routes"`
-	// Env is the [env.<env>.env] block. Values must be strings (or whole-value
-	// @secret:KEY references); non-string TOML values are rejected at check
-	// time. Captured as any so we can produce precise type errors.
-	Env map[string]any `toml:"env"`
+	Server    string             `toml:"server"`
+	Processes map[string]Process `toml:"processes"`
+	Routes    map[string]Route   `toml:"routes"`
+	Vars      map[string]any     `toml:"vars"`
+	Deploy    DeployConfig       `toml:"deploy"`
 }
 
 type Manifest struct {
-	Name     string              `toml:"name"`
-	Services map[string]Service  `toml:"services"`
-	Routes   map[string]Route    `toml:"routes"`
-	Env      map[string]EnvBlock `toml:"env"`
+	Name      string              `toml:"name"`
+	Processes map[string]Process  `toml:"processes"`
+	Routes    map[string]Route    `toml:"routes"`
+	Vars      map[string]any      `toml:"vars"`
+	Deploy    DeployConfig        `toml:"deploy"`
+	Env       map[string]EnvBlock `toml:"env"`
 }
 
 type AppContext struct {
@@ -90,10 +86,11 @@ type AppContext struct {
 	AppRoot    string
 	Shape      string
 	Dockerfile string
-	Services   map[string]Service
+	Processes  map[string]Process
 	Routes     map[string]Route
-	// Env holds resolved non-secret env values for this env.
-	Env map[string]string
+	Deploy     DeployConfig
+	// Vars holds resolved non-secret env values for this env.
+	Vars map[string]string
 	// SecretRefs maps env-var key -> secret key name. The helper resolves
 	// these against the per-(app, env, key) secret store before deploy.
 	SecretRefs map[string]string
@@ -144,11 +141,9 @@ func ReadManifest(root string) (*Manifest, error) {
 		return nil, fmt.Errorf("simple-vps.toml not found")
 	}
 	var manifest Manifest
-	// Strict decoding: any field outside the schema (legacy `runtime`,
-	// `[build]`, `keep_releases`, or a typo) becomes a check-time error
-	// rather than silently passing as a no-op. Pre-user repo, no compat
-	// window — stale config that looks honored but does nothing is
-	// worse than a clear "unknown field" error.
+	// Strict decoding: removed fields (`runtime`, `[build]`, `[services]`,
+	// `[env.*.env]`, `tmpfs`, route `type`, etc.) fail at
+	// check time instead of silently becoming no-ops.
 	dec := toml.NewDecoder(bytes.NewReader(data)).DisallowUnknownFields()
 	if err := dec.Decode(&manifest); err != nil {
 		return nil, fmt.Errorf("failed to parse simple-vps.toml: %s", strictErrorMessage(err))
@@ -156,9 +151,6 @@ func ReadManifest(root string) (*Manifest, error) {
 	return &manifest, nil
 }
 
-// strictErrorMessage turns go-toml/v2's terse "strict mode: fields in the
-// document are missing in the target struct" wrapper into something a user
-// can actually act on — the offending field names plus their positions.
 func strictErrorMessage(err error) string {
 	var missing *toml.StrictMissingError
 	if !errors.As(err, &missing) || len(missing.Errors) == 0 {
@@ -177,11 +169,46 @@ func strictErrorMessage(err error) string {
 	return strings.Join(msgs, "; ")
 }
 
-func detectShape(root string) (string, string) {
+func appRoot(app, env string) string {
+	return fmt.Sprintf("/var/apps/%s.%s", app, env)
+}
+
+func detectShape(root string, processes map[string]Process, routes map[string]Route) (string, string) {
+	hasDockerfile := false
 	if _, err := os.Stat(filepath.Join(root, "Dockerfile")); err == nil {
+		hasDockerfile = true
+	}
+
+	hasProcessRoute := false
+	hasServeRoute := false
+	for _, route := range routes {
+		if route.Process != "" {
+			hasProcessRoute = true
+		}
+		if route.Serve != "" {
+			hasServeRoute = true
+		}
+	}
+
+	hasProcesses := len(processes) > 0
+	if hasProcesses || hasProcessRoute {
+		if !hasDockerfile {
+			return "", "manifest declares processes but is missing a Dockerfile"
+		}
+		if hasServeRoute {
+			return "", "mixed process and serve routes are not supported yet"
+		}
 		return ShapeContainer, ""
 	}
-	return "", "manifest is missing a Dockerfile; container apps are the only shipped app shape"
+
+	if hasServeRoute || len(routes) > 0 {
+		return ShapeStatic, ""
+	}
+
+	if hasDockerfile {
+		return ShapeContainer, ""
+	}
+	return "", "manifest must declare at least one [processes.<name>] block or route"
 }
 
 func CheckManifest(root string, envName string) ([]string, []string, error) {
@@ -197,11 +224,6 @@ func CheckManifest(root string, envName string) ([]string, []string, error) {
 		errors = append(errors, "name is required")
 	} else if !AppRe.MatchString(manifest.Name) {
 		errors = append(errors, "name must match "+names.AppPattern)
-	}
-
-	_, shapeErr := detectShape(root)
-	if shapeErr != "" {
-		errors = append(errors, shapeErr)
 	}
 
 	if len(manifest.Env) == 0 {
@@ -238,13 +260,23 @@ func CheckManifest(root string, envName string) ([]string, []string, error) {
 			errors = append(errors, fmt.Sprintf("[env.%s].server must be an SSH target like deploy@example.com", selected))
 		}
 
-		validateEnvBlock(envBlock.Env, selected, &errors)
+		mergedVars := mergeVars(manifest.Vars, envBlock.Vars)
+		validateVarsBlock(mergedVars, selected, &errors)
 
-		mergedServices := mergeServices(manifest.Services, envBlock.Services)
-		validateServices(mergedServices, selected, &errors)
+		mergedProcesses := mergeProcesses(manifest.Processes, envBlock.Processes)
+		validateProcesses(mergedProcesses, &errors)
 
 		mergedRoutes := mergeRoutes(manifest.Routes, envBlock.Routes)
-		validateRoutes(mergedRoutes, mergedServices, selected, &errors)
+		validateRoutes(root, mergedRoutes, mergedProcesses, &errors)
+
+		mergedDeploy := mergeDeploy(manifest.Deploy, envBlock.Deploy)
+		shape, shapeErr := detectShape(root, mergedProcesses, mergedRoutes)
+		if shapeErr != "" {
+			errors = append(errors, shapeErr)
+		}
+		if shape == ShapeStatic && mergedDeploy.Release != "" {
+			errors = append(errors, "[deploy].release is only supported for container apps")
+		}
 	}
 
 	return errors, warnings, nil
@@ -268,34 +300,35 @@ func LoadAppContext(root string, envName string) (*AppContext, error) {
 		return nil, fmt.Errorf("env not found: %s", envName)
 	}
 
-	shape, _ := detectShape(root)
-	dockerfile := filepath.Join(root, "Dockerfile")
+	processes := mergeProcesses(manifest.Processes, envBlock.Processes)
+	routes := mergeRoutes(manifest.Routes, envBlock.Routes)
+	shape, _ := detectShape(root, processes, routes)
+	dockerfile := ""
+	if shape == ShapeContainer {
+		dockerfile = filepath.Join(root, "Dockerfile")
+	}
 
-	appRoot := fmt.Sprintf("/var/apps/%s/%s", manifest.Name, envName)
-
-	envVals, secretRefs := splitEnvBlock(envBlock.Env)
+	vars, secretRefs := splitVarsBlock(mergeVars(manifest.Vars, envBlock.Vars))
 
 	return &AppContext{
 		AppName:    manifest.Name,
 		EnvName:    envName,
 		Server:     envBlock.Server,
-		AppRoot:    appRoot,
+		AppRoot:    appRoot(manifest.Name, envName),
 		Shape:      shape,
 		Dockerfile: dockerfile,
-		Services:   mergeServices(manifest.Services, envBlock.Services),
-		Routes:     mergeRoutes(manifest.Routes, envBlock.Routes),
-		Env:        envVals,
+		Processes:  processes,
+		Routes:     routes,
+		Deploy:     mergeDeploy(manifest.Deploy, envBlock.Deploy),
+		Vars:       vars,
 		SecretRefs: secretRefs,
 	}, nil
 }
 
-// splitEnvBlock walks the validated [env.<env>.env] block and produces a
-// (literals, secretRefs) pair. Validation has already rejected non-strings
-// and malformed @secret: prefixes, so this only runs on a well-formed map.
-func splitEnvBlock(env map[string]any) (map[string]string, map[string]string) {
+func splitVarsBlock(vars map[string]any) (map[string]string, map[string]string) {
 	literals := make(map[string]string)
 	refs := make(map[string]string)
-	for k, v := range env {
+	for k, v := range vars {
 		s, ok := v.(string)
 		if !ok {
 			continue
@@ -312,14 +345,9 @@ func splitEnvBlock(env map[string]any) (map[string]string, map[string]string) {
 	return literals, refs
 }
 
-// validateEnvBlock enforces the [env.<env>.env] rules from ADR-0005:
-// values must be strings; non-string TOML types are rejected with a clear
-// fix-it hint; @secret:KEY whole-value references must have a valid env-var
-// key after the prefix; any other value starting with @secret: is rejected
-// as a reserved-prefix violation.
-func validateEnvBlock(env map[string]any, envName string, errors *[]string) {
-	for key, raw := range env {
-		label := fmt.Sprintf("[env.%s.env].%s", envName, key)
+func validateVarsBlock(vars map[string]any, envName string, errors *[]string) {
+	for key, raw := range vars {
+		label := fmt.Sprintf("[env.%s.vars].%s", envName, key)
 		if !EnvKeyRe.MatchString(key) {
 			*errors = append(*errors, fmt.Sprintf("%s key must match ^[A-Za-z_][A-Za-z0-9_]*$", label))
 			continue
@@ -344,10 +372,19 @@ func validateEnvBlock(env map[string]any, envName string, errors *[]string) {
 	}
 }
 
-// Merge helpers
+func mergeVars(base map[string]any, override map[string]any) map[string]any {
+	res := make(map[string]any)
+	for k, v := range base {
+		res[k] = v
+	}
+	for k, v := range override {
+		res[k] = v
+	}
+	return res
+}
 
-func mergeServices(base map[string]Service, override map[string]Service) map[string]Service {
-	res := make(map[string]Service)
+func mergeProcesses(base map[string]Process, override map[string]Process) map[string]Process {
+	res := make(map[string]Process)
 	for k, v := range base {
 		res[k] = v
 	}
@@ -363,34 +400,14 @@ func mergeServices(base map[string]Service, override map[string]Service) map[str
 		if v.Port != nil {
 			existing.Port = v.Port
 		}
-		if v.Healthcheck != "" {
-			existing.Healthcheck = v.Healthcheck
+		if v.Health != "" {
+			existing.Health = v.Health
 		}
-		if v.HealthcheckStatus != nil {
-			existing.HealthcheckStatus = v.HealthcheckStatus
+		if v.Resources.Memory != nil {
+			existing.Resources.Memory = v.Resources.Memory
 		}
-		if v.HealthcheckTimeout != nil {
-			existing.HealthcheckTimeout = v.HealthcheckTimeout
-		}
-		if v.Memory != nil {
-			existing.Memory = v.Memory
-		}
-		if v.CPUs != nil {
-			existing.CPUs = v.CPUs
-		}
-		if v.NetBindService != nil {
-			existing.NetBindService = v.NetBindService
-		}
-		if len(v.Tmpfs) > 0 {
-			// Env-level tmpfs fully replaces the base map rather than
-			// per-key merging — keeps the semantics simple ("the env
-			// decides scratch space") and avoids subtle "I declared
-			// /var/cache here but it survives from the base block" bugs.
-			merged := make(map[string]string, len(v.Tmpfs))
-			for k2, v2 := range v.Tmpfs {
-				merged[k2] = v2
-			}
-			existing.Tmpfs = merged
+		if v.Resources.CPUs != nil {
+			existing.Resources.CPUs = v.Resources.CPUs
 		}
 		res[k] = existing
 	}
@@ -411,14 +428,23 @@ func mergeRoutes(base map[string]Route, override map[string]Route) map[string]Ro
 		if v.Host != "" {
 			existing.Host = v.Host
 		}
-		if v.Type != "" {
-			existing.Type = v.Type
+		if v.Path != "" {
+			existing.Path = v.Path
 		}
-		if v.Service != "" {
-			existing.Service = v.Service
+		if v.Process != "" {
+			existing.Process = v.Process
+			existing.Serve = ""
+			existing.Redirect = ""
 		}
-		if v.To != "" {
-			existing.To = v.To
+		if v.Serve != "" {
+			existing.Serve = v.Serve
+			existing.Process = ""
+			existing.Redirect = ""
+		}
+		if v.Redirect != "" {
+			existing.Redirect = v.Redirect
+			existing.Process = ""
+			existing.Serve = ""
 		}
 		if v.TLS != "" {
 			existing.TLS = v.TLS
@@ -428,112 +454,55 @@ func mergeRoutes(base map[string]Route, override map[string]Route) map[string]Ro
 	return res
 }
 
-func validateServices(services map[string]Service, env string, errors *[]string) {
+func mergeDeploy(base DeployConfig, override DeployConfig) DeployConfig {
+	if override.Release != "" {
+		base.Release = override.Release
+	}
+	return base
+}
+
+func validateProcesses(processes map[string]Process, errors *[]string) {
 	ports := make(map[int]string)
+	reserved := map[string]bool{"data": true, "runtime": true, "static": true}
 
-	reserved := map[string]bool{"current": true, "releases": true, "shared": true}
-
-	for name, svc := range services {
-		if !ServiceRe.MatchString(name) {
-			*errors = append(*errors, fmt.Sprintf("invalid service name: %s", name))
+	for name, proc := range processes {
+		if !ProcessRe.MatchString(name) {
+			*errors = append(*errors, fmt.Sprintf("invalid process name: %s", name))
 		}
 		if reserved[name] {
-			*errors = append(*errors, fmt.Sprintf("reserved service name: %s", name))
+			*errors = append(*errors, fmt.Sprintf("reserved process name: %s", name))
 		}
-		// Command is optional for container apps (Dockerfile CMD covers it);
-		// per-service command overrides the image CMD (ADR-0005 Section 13).
-		_ = svc.Command
-		if svc.Port != nil {
-			port := *svc.Port
+		if proc.Port != nil {
+			port := *proc.Port
 			if port < 1 || port > 65535 {
-				*errors = append(*errors, fmt.Sprintf("[services.%s].port must be an integer in [1, 65535]", name))
+				*errors = append(*errors, fmt.Sprintf("[processes.%s].port must be an integer in [1, 65535]", name))
 			} else if existing, ok := ports[port]; ok {
-				*errors = append(*errors, fmt.Sprintf("[services.%s].port duplicates [services.%s].port", name, existing))
+				*errors = append(*errors, fmt.Sprintf("[processes.%s].port duplicates [processes.%s].port", name, existing))
 			} else {
 				ports[port] = name
 			}
-			if svc.Healthcheck == "" {
-				*errors = append(*errors, fmt.Sprintf("[services.%s].healthcheck is required when port is set", name))
+			if proc.Health == "" {
+				*errors = append(*errors, fmt.Sprintf("[processes.%s].health is required when port is set", name))
 			}
 		}
-		if svc.HealthcheckTimeout != nil && *svc.HealthcheckTimeout <= 0 {
-			*errors = append(*errors, fmt.Sprintf("[services.%s].healthcheck_timeout must be positive", name))
-		}
-		if svc.HealthcheckStatus != nil {
-			status := *svc.HealthcheckStatus
-			if status < 100 || status > 599 {
-				*errors = append(*errors, fmt.Sprintf("[services.%s].healthcheck_status must be an HTTP status code", name))
-			}
-		}
-		validateServiceResourceCaps(name, svc, errors)
-		validateServiceTmpfs(name, svc.Tmpfs, errors)
+		validateProcessResources(name, proc.Resources, errors)
 	}
 }
 
-// byteSizeRe matches the compact Podman size grammar we accept for
-// service memory and tmpfs limits: a positive integer followed by a
-// unit (k/m/g). Strict lowercase keeps the manifest unambiguous;
-// mixed-case or extra units (Ki, MiB, etc.) are rejected even if
-// Podman happens to accept them.
 var byteSizeRe = regexp.MustCompile(`^[1-9][0-9]*(k|m|g)$`)
 
-func validateServiceResourceCaps(serviceName string, svc Service, errors *[]string) {
-	if svc.Memory != nil && !byteSizeRe.MatchString(*svc.Memory) {
-		*errors = append(*errors, fmt.Sprintf("[services.%s].memory %q must match ^[1-9][0-9]*(k|m|g)$", serviceName, *svc.Memory))
+func validateProcessResources(processName string, res Resources, errors *[]string) {
+	if res.Memory != nil && !byteSizeRe.MatchString(*res.Memory) {
+		*errors = append(*errors, fmt.Sprintf("[processes.%s].resources.memory %q must match ^[1-9][0-9]*(k|m|g)$", processName, *res.Memory))
 	}
-	if svc.CPUs != nil && (*svc.CPUs <= 0 || math.IsNaN(*svc.CPUs) || math.IsInf(*svc.CPUs, 0)) {
-		*errors = append(*errors, fmt.Sprintf("[services.%s].cpus must be positive", serviceName))
-	}
-}
-
-// tmpfsReservedPaths refuses mounts that would either break the
-// container or shadow critical config the entrypoint relies on:
-//   - /                          rootfs over rootfs = broken container
-//   - /etc, /proc, /sys, /dev    hides /etc/passwd, /proc, /sys, /dev
-//   - /tmp                       reserved for the §7 security floor's
-//     always-on `--tmpfs /tmp:size=64m`;
-//     manifest can't override or duplicate
-var tmpfsReservedPaths = map[string]bool{
-	"/":     true,
-	"/etc":  true,
-	"/proc": true,
-	"/sys":  true,
-	"/dev":  true,
-	"/tmp":  true,
-}
-
-func validateServiceTmpfs(serviceName string, tmpfs map[string]string, errors *[]string) {
-	for path, size := range tmpfs {
-		label := fmt.Sprintf("[services.%s.tmpfs].%q", serviceName, path)
-		if !strings.HasPrefix(path, "/") {
-			*errors = append(*errors, label+" must be an absolute path")
-			continue
-		}
-		if strings.Contains(path, "..") {
-			*errors = append(*errors, label+` must not contain ".."`)
-			continue
-		}
-		// Reject trailing slashes so the rendered Podman flag is
-		// canonical (`/var/cache/nginx`, never `/var/cache/nginx/`)
-		// and the reserved-path check matches by literal equality.
-		if path != "/" && strings.HasSuffix(path, "/") {
-			*errors = append(*errors, label+" must not have a trailing slash")
-			continue
-		}
-		if tmpfsReservedPaths[path] {
-			*errors = append(*errors, fmt.Sprintf("[services.%s.tmpfs].%q is reserved and cannot be a tmpfs mount", serviceName, path))
-			continue
-		}
-		if !byteSizeRe.MatchString(size) {
-			*errors = append(*errors, fmt.Sprintf("[services.%s.tmpfs].%q size %q must match ^[1-9][0-9]*(k|m|g)$", serviceName, path, size))
-			continue
-		}
+	if res.CPUs != nil && (*res.CPUs <= 0 || math.IsNaN(*res.CPUs) || math.IsInf(*res.CPUs, 0)) {
+		*errors = append(*errors, fmt.Sprintf("[processes.%s].resources.cpus must be positive", processName))
 	}
 }
 
-func validateRoutes(routes map[string]Route, services map[string]Service, env string, errors *[]string) {
+func validateRoutes(root string, routes map[string]Route, processes map[string]Process, errors *[]string) {
 	for name, route := range routes {
-		if !ServiceRe.MatchString(name) {
+		if !ProcessRe.MatchString(name) {
 			*errors = append(*errors, fmt.Sprintf("invalid route name: %s", name))
 		}
 		if route.Host == "" {
@@ -541,28 +510,37 @@ func validateRoutes(routes map[string]Route, services map[string]Service, env st
 		} else if !ValidateHost(route.Host) {
 			*errors = append(*errors, fmt.Sprintf("[routes.%s].host is invalid", name))
 		}
+		validateRoutePath(name, route.Path, errors)
 
-		if route.Type == "" {
-			*errors = append(*errors, fmt.Sprintf("[routes.%s].type is required", name))
-		} else if route.Type != "proxy" && route.Type != "redirect" {
-			*errors = append(*errors, fmt.Sprintf("[routes.%s].type must be proxy or redirect", name))
+		targets := 0
+		if route.Process != "" {
+			targets++
+		}
+		if route.Serve != "" {
+			targets++
+		}
+		if route.Redirect != "" {
+			targets++
+		}
+		if targets != 1 {
+			*errors = append(*errors, fmt.Sprintf("[routes.%s] must set exactly one of process, serve, or redirect", name))
 		}
 
-		if route.Type == "proxy" {
-			if route.Service == "" {
-				*errors = append(*errors, fmt.Sprintf("[routes.%s].service is required for proxy routes", name))
-			} else if svc, ok := services[route.Service]; !ok {
-				*errors = append(*errors, fmt.Sprintf("[routes.%s].service references unknown service: %s", name, route.Service))
-			} else if svc.Port == nil {
-				*errors = append(*errors, fmt.Sprintf("[routes.%s].service must reference a service with a port", name))
+		if route.Process != "" {
+			if proc, ok := processes[route.Process]; !ok {
+				*errors = append(*errors, fmt.Sprintf("[routes.%s].process references unknown process: %s", name, route.Process))
+			} else if proc.Port == nil {
+				*errors = append(*errors, fmt.Sprintf("[routes.%s].process must reference a process with a port", name))
 			}
 		}
 
-		if route.Type == "redirect" {
-			if route.To == "" {
-				*errors = append(*errors, fmt.Sprintf("[routes.%s].to is required for redirect routes", name))
-			} else if !strings.HasPrefix(route.To, "http://") && !strings.HasPrefix(route.To, "https://") {
-				*errors = append(*errors, fmt.Sprintf("[routes.%s].to must start with http:// or https://", name))
+		if route.Serve != "" {
+			validateServeDir(root, name, route.Serve, errors)
+		}
+
+		if route.Redirect != "" {
+			if !strings.HasPrefix(route.Redirect, "http://") && !strings.HasPrefix(route.Redirect, "https://") {
+				*errors = append(*errors, fmt.Sprintf("[routes.%s].redirect must start with http:// or https://", name))
 			}
 		}
 
@@ -570,10 +548,51 @@ func validateRoutes(routes map[string]Route, services map[string]Service, env st
 		case "", "auto", "internal":
 			// OK
 		default:
-			// `off` has a clean Caddyfile shape (`http://host { ... }`)
-			// but is deferred until a real user asks. Reject loudly so
-			// a typo doesn't quietly downgrade an HTTPS route to HTTP.
 			*errors = append(*errors, fmt.Sprintf(`[routes.%s].tls must be "auto" or "internal"`, name))
 		}
+	}
+}
+
+func validateRoutePath(routeName, path string, errors *[]string) {
+	if path == "" {
+		return
+	}
+	label := fmt.Sprintf("[routes.%s].path", routeName)
+	if !strings.HasPrefix(path, "/") {
+		*errors = append(*errors, label+" must start with /")
+		return
+	}
+	if strings.Contains(path, "..") {
+		*errors = append(*errors, label+` must not contain ".."`)
+		return
+	}
+	if path != "/" && strings.HasSuffix(path, "/") {
+		*errors = append(*errors, label+" must not have a trailing slash")
+		return
+	}
+	if strings.ContainsAny(path, " \t\r\n") {
+		*errors = append(*errors, label+" must not contain whitespace")
+		return
+	}
+}
+
+func validateServeDir(root, routeName, dir string, errors *[]string) {
+	label := fmt.Sprintf("[routes.%s].serve", routeName)
+	if filepath.IsAbs(dir) {
+		*errors = append(*errors, label+" must be relative to the app root")
+		return
+	}
+	clean := filepath.Clean(dir)
+	if clean == "." || strings.HasPrefix(clean, "..") || strings.Contains(clean, string(filepath.Separator)+".."+string(filepath.Separator)) {
+		*errors = append(*errors, label+` must not contain ".."`)
+		return
+	}
+	info, err := os.Stat(filepath.Join(root, dir))
+	if err != nil {
+		*errors = append(*errors, fmt.Sprintf("%s directory %q does not exist", label, dir))
+		return
+	}
+	if !info.IsDir() {
+		*errors = append(*errors, fmt.Sprintf("%s %q must be a directory", label, dir))
 	}
 }

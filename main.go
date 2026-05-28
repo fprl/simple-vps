@@ -19,14 +19,14 @@ type cli struct {
 	Init     initCmd          `cmd:"" help:"Create a simple-vps.toml manifest and Dockerfile scaffold."`
 	Check    checkCmd         `cmd:"" help:"Validate an app manifest."`
 	Setup    setupCmd         `cmd:"" help:"Create the per-env Linux user, directories, and Podman network on the host."`
-	Deploy   deployCmd        `cmd:"" help:"Build the container image on the host and run the app's services."`
-	Status   statusCmd        `cmd:"" help:"Show running services for an environment."`
-	Restart  restartCmd       `cmd:"" help:"Restart services for an environment (bounces in place; same image)."`
+	Deploy   deployCmd        `cmd:"" help:"Build the container image on the host and run the app's processes."`
+	Status   statusCmd        `cmd:"" help:"Show running processes for an environment."`
+	Restart  restartCmd       `cmd:"" help:"Restart processes for an environment (bounces in place; same image)."`
 	Rollback rollbackCmd      `cmd:"" help:"Run an older local image release for an environment."`
 	Backup   backupCmd        `cmd:"" help:"Back up app data, manifest, and secrets."`
 	Restore  restoreCmd       `cmd:"" help:"Restore app data, manifest, and secrets from a backup."`
 	Destroy  destroyCmd       `cmd:"" help:"Destroy an app environment on the host."`
-	Logs     logsCmd          `cmd:"" help:"Tail logs for one service."`
+	Logs     logsCmd          `cmd:"" help:"Tail logs for one process."`
 	App      appCmd           `cmd:"" help:"Inspect apps on a host."`
 	Secret   secretCmd        `cmd:"" help:"Manage per-(app, env, key) secret values referenced from the manifest."`
 	SSH      sshCmd           `cmd:"ssh" help:"Open an SSH session to an app environment."`
@@ -99,14 +99,14 @@ func (c statusCmd) Run() error {
 }
 
 type logsCmd struct {
-	Env     string `arg:"" help:"Environment containing the service."`
-	Service string `arg:"" optional:"" help:"Service name. Optional when only one service runs."`
+	Env     string `arg:"" help:"Environment containing the process."`
+	Process string `arg:"" optional:"" help:"Process name. Optional when only one process runs."`
 	Follow  bool   `name:"follow" short:"f" help:"Stream new log lines."`
 	Tail    int    `name:"tail" default:"100" help:"How many trailing lines to show. Ignored in --follow mode."`
 }
 
 func (c logsCmd) Run() error {
-	client.CmdLogs(".", c.Env, c.Service, c.Follow, c.Tail)
+	client.CmdLogs(".", c.Env, c.Process, c.Follow, c.Tail)
 	return nil
 }
 
@@ -126,12 +126,12 @@ func (c appListCmd) Run() error {
 
 type restartCmd struct {
 	Env     string `arg:"" help:"Environment to restart."`
-	Service string `arg:"" optional:"" help:"Service to bounce. Omitted = all services."`
+	Process string `arg:"" optional:"" help:"Process to bounce. Omitted = all processes."`
 	JSON    bool   `name:"json" help:"Emit structured JSON instead of the text summary."`
 }
 
 func (c restartCmd) Run() error {
-	client.CmdRestart(".", c.Env, c.Service, c.JSON)
+	client.CmdRestart(".", c.Env, c.Process, c.JSON)
 	return nil
 }
 
@@ -206,18 +206,18 @@ func (c destroyCmd) Run() error {
 }
 
 type secretCmd struct {
-	Put  secretPutCmd  `cmd:"" help:"Read a secret value from stdin and store it on the host."`
+	Set  secretSetCmd  `cmd:"" help:"Read a secret value from stdin and store it on the host."`
 	List secretListCmd `cmd:"" help:"List secret keys for an environment (keys only; values are never printed)."`
 	Rm   secretRmCmd   `cmd:"rm" help:"Remove a secret key from an environment."`
 }
 
-type secretPutCmd struct {
+type secretSetCmd struct {
 	Env string `arg:"" help:"Environment to write the secret into."`
 	Key string `arg:"" help:"Env-var name (e.g., DATABASE_URL)."`
 }
 
-func (c secretPutCmd) Run() error {
-	client.CmdSecretPut(".", c.Env, c.Key)
+func (c secretSetCmd) Run() error {
+	client.CmdSecretSet(".", c.Env, c.Key)
 	return nil
 }
 

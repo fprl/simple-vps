@@ -1,9 +1,5 @@
-// Package caddy holds the single Caddyfile-quoting helper that the
-// helper-side `app apply` uses when rendering per-app fragments. The
-// pre-cutover render path (routes.json → simple-vps/routes.caddy →
-// `caddy validate` against a host binary) is gone; per-app routes now
-// live in /etc/caddy/conf.d/<app>-<env>.caddy, written directly by
-// `server app apply` and validated inside the Caddy container.
+// Package caddy holds Caddyfile helpers used when rendering generated
+// per-env fragments under /etc/caddy/conf.d/.
 package caddy
 
 import (

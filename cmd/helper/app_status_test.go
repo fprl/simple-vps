@@ -5,73 +5,72 @@ import (
 	"testing"
 )
 
-func TestContainersToServicesFiltersUnlabelledAndSorts(t *testing.T) {
-	// The fake `podman ps` filter accepts containers we don't own —
-	// the helper relies on the `service` label to know what's
-	// actually a managed simple-vps service. Anything without it
-	// gets dropped.
-	got := containersToServices([]containerEntry{
+func TestContainersToProcessesFiltersUnlabelledAndSorts(t *testing.T) {
+	// The fake `podman ps` filter accepts containers we don't own.
+	// The helper relies on the `simple-vps.process` label to know
+	// what's actually a managed simple-vps process.
+	got := containersToProcesses([]containerEntry{
 		{
-			Names: []string{"app-api-production-worker"},
+			Names: []string{"svps-a8f9b2-worker-abc1234"},
 			State: "running", Status: "Up 4 minutes",
-			Image:  "simple-vps/api-production:abc1234",
-			Labels: map[string]string{"app": "api", "env": "production", "service": "worker", "simple_vps_release": "abc1234"},
+			Image:  "simple-vps/svps-a8f9b2:abc1234",
+			Labels: map[string]string{"simple-vps.app": "api", "simple-vps.env": "production", "simple-vps.process": "worker", "simple-vps.release": "abc1234"},
 		},
 		{
 			Names:  []string{"random-thing"},
 			State:  "running",
-			Labels: map[string]string{"app": "api", "env": "production"}, // no `service`
+			Labels: map[string]string{"simple-vps.app": "api", "simple-vps.env": "production"},
 		},
 		{
-			Names: []string{"app-api-production-web"},
+			Names: []string{"svps-a8f9b2-web-abc1234"},
 			State: "running", Status: "Up 4 minutes",
-			Image:  "simple-vps/api-production:abc1234",
-			Labels: map[string]string{"app": "api", "env": "production", "service": "web", "simple_vps_release": "abc1234"},
+			Image:  "simple-vps/svps-a8f9b2:abc1234",
+			Labels: map[string]string{"simple-vps.app": "api", "simple-vps.env": "production", "simple-vps.process": "web", "simple-vps.release": "abc1234"},
 		},
 	})
 	if len(got) != 2 {
-		t.Fatalf("expected 2 services, got %d: %+v", len(got), got)
+		t.Fatalf("expected 2 processes, got %d: %+v", len(got), got)
 	}
-	// Sorted by service name.
-	if got[0].Service != "web" || got[1].Service != "worker" {
-		t.Fatalf("expected [web, worker] sorted, got [%s, %s]", got[0].Service, got[1].Service)
+	// Sorted by process name.
+	if got[0].Process != "web" || got[1].Process != "worker" {
+		t.Fatalf("expected [web, worker] sorted, got [%s, %s]", got[0].Process, got[1].Process)
 	}
-	if got[0].Container != "app-api-production-web" || got[0].Release != "abc1234" {
-		t.Fatalf("first service mapped wrong: %+v", got[0])
+	if got[0].Container != "svps-a8f9b2-web-abc1234" || got[0].Release != "abc1234" {
+		t.Fatalf("first process mapped wrong: %+v", got[0])
 	}
 }
 
 func TestContainersToAppEnvsGroupsAndSorts(t *testing.T) {
 	got := containersToAppEnvs([]containerEntry{
 		{
-			Names:  []string{"app-api-staging-web"},
+			Names:  []string{"svps-api-staging-web"},
 			State:  "running",
 			Status: "Up",
-			Labels: map[string]string{"app": "api", "env": "staging", "service": "web"},
+			Labels: map[string]string{"simple-vps.app": "api", "simple-vps.env": "staging", "simple-vps.process": "web"},
 		},
 		{
-			Names:  []string{"app-api-production-worker"},
+			Names:  []string{"svps-api-production-worker"},
 			State:  "running",
 			Status: "Up",
-			Labels: map[string]string{"app": "api", "env": "production", "service": "worker"},
+			Labels: map[string]string{"simple-vps.app": "api", "simple-vps.env": "production", "simple-vps.process": "worker"},
 		},
 		{
-			Names:  []string{"app-api-production-web"},
+			Names:  []string{"svps-api-production-web"},
 			State:  "running",
 			Status: "Up",
-			Labels: map[string]string{"app": "api", "env": "production", "service": "web"},
+			Labels: map[string]string{"simple-vps.app": "api", "simple-vps.env": "production", "simple-vps.process": "web"},
 		},
 		{
-			Names:  []string{"app-blog-production-web"},
+			Names:  []string{"svps-blog-production-web"},
 			State:  "running",
 			Status: "Up",
-			Labels: map[string]string{"app": "blog", "env": "production", "service": "web"},
+			Labels: map[string]string{"simple-vps.app": "blog", "simple-vps.env": "production", "simple-vps.process": "web"},
 		},
 		{
 			Names:  []string{"not-ours"},
 			State:  "running",
 			Status: "Up",
-			Labels: map[string]string{"app": "api", "env": "production"},
+			Labels: map[string]string{"simple-vps.app": "api", "simple-vps.env": "production"},
 		},
 	})
 
@@ -87,17 +86,17 @@ func TestContainersToAppEnvsGroupsAndSorts(t *testing.T) {
 	if got[2].App != "blog" || got[2].Env != "production" {
 		t.Fatalf("expected blog production third, got %+v", got[2])
 	}
-	if len(got[0].Services) != 2 || got[0].Services[0].Service != "web" || got[0].Services[1].Service != "worker" {
-		t.Fatalf("expected api production services sorted by name, got %+v", got[0].Services)
+	if len(got[0].Processes) != 2 || got[0].Processes[0].Process != "web" || got[0].Processes[1].Process != "worker" {
+		t.Fatalf("expected api production processes sorted by name, got %+v", got[0].Processes)
 	}
 }
 
 func TestRenderStatusTextEmpty(t *testing.T) {
-	out := renderStatusText("api", "production", nil)
+	out := renderStatusText("api", "production", nil, false)
 	if !strings.Contains(out, "api (production)") {
 		t.Fatalf("missing header:\n%s", out)
 	}
-	if !strings.Contains(out, "no services running") {
+	if !strings.Contains(out, "no processes running") {
 		t.Fatalf("missing empty-state hint:\n%s", out)
 	}
 	if !strings.Contains(out, "simple-vps deploy production") {
@@ -105,20 +104,30 @@ func TestRenderStatusTextEmpty(t *testing.T) {
 	}
 }
 
-func TestRenderStatusTextWithServices(t *testing.T) {
-	services := []serviceStatus{
-		{Service: "web", Container: "app-api-production-web", State: "running", Status: "Up 4 minutes", Release: "abc1234"},
-		{Service: "worker", Container: "app-api-production-worker", State: "exited", Status: "Exited (1) 2 minutes ago", Release: "abc1234"},
+func TestRenderStatusTextKnownEnvWithoutProcesses(t *testing.T) {
+	out := renderStatusText("site", "production", nil, true)
+	if !strings.Contains(out, "no processes running") {
+		t.Fatalf("missing empty process state:\n%s", out)
 	}
-	out := renderStatusText("api", "production", services)
+	if strings.Contains(out, "run `simple-vps deploy production`") {
+		t.Fatalf("known env should not print deploy hint:\n%s", out)
+	}
+}
+
+func TestRenderStatusTextWithProcesses(t *testing.T) {
+	processes := []processStatus{
+		{Process: "web", Container: "svps-a8f9b2-web-abc1234", State: "running", Status: "Up 4 minutes", Release: "abc1234"},
+		{Process: "worker", Container: "svps-a8f9b2-worker-abc1234", State: "exited", Status: "Exited (1) 2 minutes ago", Release: "abc1234"},
+	}
+	out := renderStatusText("api", "production", processes, true)
 	if !strings.Contains(out, "api (production)") {
 		t.Fatalf("missing header:\n%s", out)
 	}
 	if !strings.Contains(out, "web") || !strings.Contains(out, "running (Up 4 minutes)") || !strings.Contains(out, "release=abc1234") {
-		t.Fatalf("missing web service row:\n%s", out)
+		t.Fatalf("missing web process row:\n%s", out)
 	}
 	if !strings.Contains(out, "worker") || !strings.Contains(out, "exited (Exited (1) 2 minutes ago)") {
-		t.Fatalf("missing worker service row:\n%s", out)
+		t.Fatalf("missing worker process row:\n%s", out)
 	}
 }
 
@@ -134,8 +143,8 @@ func TestRenderAppListTextWithApps(t *testing.T) {
 		{
 			App: "api",
 			Env: "production",
-			Services: []serviceStatus{
-				{Service: "web", State: "running", Status: "Up 4 minutes", Release: "abc1234"},
+			Processes: []processStatus{
+				{Process: "web", State: "running", Status: "Up 4 minutes", Release: "abc1234"},
 			},
 		},
 	}
@@ -144,18 +153,43 @@ func TestRenderAppListTextWithApps(t *testing.T) {
 		t.Fatalf("missing app header:\n%s", out)
 	}
 	if !strings.Contains(out, "web") || !strings.Contains(out, "running (Up 4 minutes)") || !strings.Contains(out, "release=abc1234") {
-		t.Fatalf("missing service row:\n%s", out)
+		t.Fatalf("missing process row:\n%s", out)
 	}
 }
 
 func TestRenderStatusTextHandlesMissingReleaseLabel(t *testing.T) {
-	// Older containers from before the `simple_vps_release` label
-	// existed shouldn't crash the formatter.
-	services := []serviceStatus{
-		{Service: "web", Container: "x", State: "running"},
+	processes := []processStatus{
+		{Process: "web", Container: "x", State: "running"},
 	}
-	out := renderStatusText("api", "production", services)
+	out := renderStatusText("api", "production", processes, true)
 	if !strings.Contains(out, "release=?") {
 		t.Fatalf("expected `release=?` fallback for missing label:\n%s", out)
+	}
+}
+
+func TestMergeAppEnvsIncludesStaticOnlyIdentity(t *testing.T) {
+	got := mergeAppEnvs(
+		[]appEnvStatus{
+			{App: "site", Env: "production"},
+			{App: "api", Env: "staging"},
+		},
+		[]appEnvStatus{
+			{
+				App: "api",
+				Env: "production",
+				Processes: []processStatus{
+					{Process: "web", State: "running"},
+				},
+			},
+		},
+	)
+	if len(got) != 3 {
+		t.Fatalf("expected three app envs, got %+v", got)
+	}
+	if got[0].App != "api" || got[0].Env != "production" || len(got[0].Processes) != 1 {
+		t.Fatalf("expected process app first, got %+v", got)
+	}
+	if got[2].App != "site" || got[2].Env != "production" || len(got[2].Processes) != 0 {
+		t.Fatalf("expected static-only identity retained, got %+v", got)
 	}
 }

@@ -98,7 +98,7 @@ func (r *CommandRunner) RunSSH(server string, command string) (string, string, i
 }
 
 // RunSSHWithStdin pipes `stdin` to the remote command and captures
-// stdout/stderr/exit. Used by `simple-vps secret put` so the secret
+// stdout/stderr/exit. Used by `simple-vps secret set` so the secret
 // value never lands in argv, the host process table, or shell
 // history — it crosses the wire on the helper's stdin and goes
 // straight to disk on the other side.
@@ -250,7 +250,7 @@ func serverAppListCommand(jsonFlag bool) string {
 	return serverCommand("app", "list")
 }
 
-func serverAppLogsCommand(appName, envName, service string, follow bool, tail int) string {
+func serverAppLogsCommand(appName, envName, process string, follow bool, tail int) string {
 	args := []string{"app", "logs"}
 	if follow {
 		args = append(args, "--follow")
@@ -259,20 +259,20 @@ func serverAppLogsCommand(appName, envName, service string, follow bool, tail in
 		args = append(args, fmt.Sprintf("--tail=%d", tail))
 	}
 	args = append(args, appName, envName)
-	if service != "" {
-		args = append(args, service)
+	if process != "" {
+		args = append(args, process)
 	}
 	return serverCommand(args...)
 }
 
-func serverAppRestartCommand(appName, envName, service string, jsonFlag bool) string {
+func serverAppRestartCommand(appName, envName, process string, jsonFlag bool) string {
 	args := []string{"app", "restart"}
 	if jsonFlag {
 		args = append(args, "--json")
 	}
 	args = append(args, appName, envName)
-	if service != "" {
-		args = append(args, service)
+	if process != "" {
+		args = append(args, process)
 	}
 	return serverCommand(args...)
 }
@@ -329,8 +329,8 @@ func serverAppDestroyEnvCommand(appName, envName string, purge bool) string {
 	return serverCommand(args...)
 }
 
-func serverAppSecretPutCommand(appName, envName, key string) string {
-	return serverCommand("app", "secret", "put", appName, envName, key)
+func serverAppSecretSetCommand(appName, envName, key string) string {
+	return serverCommand("app", "secret", "set", appName, envName, key)
 }
 
 func serverAppSecretListCommand(appName, envName string, jsonFlag bool) string {
@@ -450,14 +450,13 @@ CMD ["bun", "run", "src/server.ts"]
 [env.production]
 server = "deploy@100.x.y.z"
 
-[services.web]
+[processes.web]
 port = 3000
-healthcheck = "/health"
+health = "/health"
 
 [routes.app]
 host = "app.example.com"
-type = "proxy"
-service = "web"
+process = "web"
 `, name)
 
 	if err := os.WriteFile(manifestPath, []byte(content), 0644); err != nil {
@@ -623,7 +622,7 @@ func CmdAppList(root string, explicitServer string, jsonFlag bool) {
 	fmt.Print(out)
 }
 
-func CmdRestart(root string, envName string, service string, jsonFlag bool) {
+func CmdRestart(root string, envName string, process string, jsonFlag bool) {
 	ctx, err := config.LoadAppContext(root, envName)
 	if err != nil {
 		utils.Die(err.Error(), 1)
@@ -637,7 +636,7 @@ func CmdRestart(root string, envName string, service string, jsonFlag bool) {
 	// Restart shares status's plumbing: helper does the work, prints
 	// the summary, we pipe its output through unchanged so `--json`
 	// is pipeable and the text mode keeps its line breaks.
-	out := runSSHChecked(runner, ctx.Server, serverAppRestartCommand(ctx.AppName, envName, service, jsonFlag), "restart failed")
+	out := runSSHChecked(runner, ctx.Server, serverAppRestartCommand(ctx.AppName, envName, process, jsonFlag), "restart failed")
 	fmt.Print(out)
 }
 
@@ -745,7 +744,7 @@ func validateDestroyConfirmation(appName, confirm string, yes bool) error {
 	return fmt.Errorf("destroy requires --confirm %s or --yes", appName)
 }
 
-func CmdLogs(root string, envName string, service string, follow bool, tail int) {
+func CmdLogs(root string, envName string, process string, follow bool, tail int) {
 	ctx, err := config.LoadAppContext(root, envName)
 	if err != nil {
 		utils.Die(err.Error(), 1)
@@ -759,7 +758,7 @@ func CmdLogs(root string, envName string, service string, follow bool, tail int)
 	// Follow mode needs interactive stdout/stderr passthrough so the
 	// user sees the stream as it arrives. Non-follow mode reads a
 	// bounded amount and prints once.
-	cmdStr := serverAppLogsCommand(ctx.AppName, envName, service, follow, tail)
+	cmdStr := serverAppLogsCommand(ctx.AppName, envName, process, follow, tail)
 	if follow {
 		if err := runner.RunSSHPassthrough(ctx.Server, cmdStr); err != nil {
 			utils.Die(err.Error(), 1)
@@ -786,7 +785,7 @@ func secretValueFromStdin() ([]byte, error) {
 	return data, nil
 }
 
-func CmdSecretPut(root string, envName string, key string) {
+func CmdSecretSet(root string, envName string, key string) {
 	ctx, err := config.LoadAppContext(root, envName)
 	if err != nil {
 		utils.Die(err.Error(), 1)
@@ -808,7 +807,7 @@ func CmdSecretPut(root string, envName string, key string) {
 	// Pipe the value over the helper's stdin — never argv, never a
 	// file on disk between hops. The helper writes it straight to
 	// /etc/simple-vps/secrets/<app>/<env>/<key>.
-	stdout, stderr, code, err := runner.RunSSHWithStdin(ctx.Server, serverAppSecretPutCommand(ctx.AppName, envName, key), value)
+	stdout, stderr, code, err := runner.RunSSHWithStdin(ctx.Server, serverAppSecretSetCommand(ctx.AppName, envName, key), value)
 	if err != nil || code != 0 {
 		detail := strings.TrimSpace(stderr)
 		if detail == "" {
@@ -817,7 +816,7 @@ func CmdSecretPut(root string, envName string, key string) {
 		if detail == "" {
 			detail = "no error detail"
 		}
-		utils.Die(fmt.Sprintf("secret put failed: %s", detail), 1)
+		utils.Die(fmt.Sprintf("secret set failed: %s", detail), 1)
 	}
 	// Don't echo stdout — it'd carry the helper's confirmation
 	// (which already names the key but not the value). Print our own.
@@ -936,10 +935,6 @@ func CmdDeploy(root string, envName string, dirty bool, rebuild bool, includeDot
 		utils.Die(err.Error(), 1)
 	}
 
-	if ctx.Shape != config.ShapeContainer {
-		utils.Die(fmt.Sprintf("deploy supports container apps only (got shape %q)", ctx.Shape), 1)
-	}
-
 	shaOut, _, code, _ := runCommand("git", []string{"rev-parse", "--short=12", "HEAD"}, root)
 	if code != 0 {
 		utils.Die("git rev-parse failed", 1)
@@ -1001,7 +996,7 @@ func CmdDeploy(root string, envName string, dirty bool, rebuild bool, includeDot
 		utils.Die(fmt.Sprintf("failed to upload manifest: %v", err), 1)
 	}
 
-	// 3. Helper builds the image, runs services, reloads Caddy.
+	// 3. Helper builds the image or snapshots static assets, then reloads Caddy.
 	applyCmd := serverAppApplyCommand(ctx.AppName, envName,
 		remoteDir+"/source.tar",
 		remoteDir+"/simple-vps.toml",

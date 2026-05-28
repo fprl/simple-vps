@@ -1,6 +1,7 @@
 package helper
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -42,15 +43,14 @@ func (c appSetupEnvCmd) Run() error {
 func (c appSetupEnvCmd) runLocked() {
 	user := identity.SystemUser(c.App, c.Env)
 	network := identity.Network(c.App, c.Env)
-	envRoot := identity.AppEnvRoot(c.App, c.Env)
-	shared := identity.SharedDir(c.App, c.Env)
-	appRoot := identity.AppRoot(c.App)
+	envRoot := identity.EnvRoot(c.App, c.Env)
+	dataDir := identity.DataDir(c.App, c.Env)
+	runtimeDir := identity.RuntimeDir(c.App, c.Env)
+	staticDir := identity.StaticDir(c.App, c.Env)
 
-	// 0. Make sure the shared deploy tmp dir exists with sticky +
-	// world-writable perms. The provisioner creates this at install
-	// time; setup-env ensures it for hosts that pre-date the
-	// provisioner change so a deploy on an upgraded box doesn't fail
-	// with "Permission denied" on the upload step.
+	// 0. Make sure the deploy tmp dir exists with sticky +
+	// world-writable perms. The client uploads tarballs and manifests
+	// here before handing them to the privileged helper.
 	deployTmp := host.DeployTmpDir()
 	if err := os.MkdirAll(deployTmp, 0755); err != nil {
 		utils.Die(fmt.Sprintf("mkdir %s: %v", deployTmp, err), 1)
@@ -70,8 +70,8 @@ func (c appSetupEnvCmd) runLocked() {
 	}
 
 	// 2. Grant the SUDO_USER (the deploy user) group membership on the
-	// per-env user so writes to /var/apps/<app>/<env>/shared from a
-	// deploy step land with the right ownership.
+	// per-env user so deploy-time writes to /data-compatible host paths
+	// land with the right ownership.
 	deployUser, err := host.DeployUserFromSudo()
 	if err != nil {
 		utils.Die(err.Error(), 1)
@@ -83,18 +83,33 @@ func (c appSetupEnvCmd) runLocked() {
 	}
 
 	// 3. Create the on-disk layout.
-	for _, dir := range []string{appRoot, envRoot, shared} {
+	for _, dir := range []string{envRoot, dataDir, runtimeDir, staticDir} {
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			utils.Die(err.Error(), 1)
 		}
 	}
-	// shared/ is group-writable so the deploy user can drop files for the
-	// container; sgid so new files inherit the group.
-	if _, err := utils.RunChecked("chown", []string{"-R", user + ":" + user, envRoot}, ""); err != nil {
+	if _, err := utils.RunChecked("chown", []string{"root:root", envRoot}, ""); err != nil {
 		utils.Die(fmt.Sprintf("chown %s: %v", envRoot, err), 1)
 	}
-	if _, err := utils.RunChecked("chmod", []string{"2775", shared}, ""); err != nil {
-		utils.Die(fmt.Sprintf("chmod 2775 %s: %v", shared, err), 1)
+	if _, err := utils.RunChecked("chmod", []string{"0755", envRoot}, ""); err != nil {
+		utils.Die(fmt.Sprintf("chmod 0755 %s: %v", envRoot, err), 1)
+	}
+	for _, dir := range []string{dataDir, staticDir} {
+		if _, err := utils.RunChecked("chown", []string{"-R", user + ":" + user, dir}, ""); err != nil {
+			utils.Die(fmt.Sprintf("chown %s: %v", dir, err), 1)
+		}
+		if _, err := utils.RunChecked("chmod", []string{"2775", dir}, ""); err != nil {
+			utils.Die(fmt.Sprintf("chmod 2775 %s: %v", dir, err), 1)
+		}
+	}
+	if _, err := utils.RunChecked("chown", []string{"root:" + user, runtimeDir}, ""); err != nil {
+		utils.Die(fmt.Sprintf("chown %s: %v", runtimeDir, err), 1)
+	}
+	if _, err := utils.RunChecked("chmod", []string{"0750", runtimeDir}, ""); err != nil {
+		utils.Die(fmt.Sprintf("chmod 0750 %s: %v", runtimeDir, err), 1)
+	}
+	if err := writeEnvIdentity(c.App, c.Env); err != nil {
+		utils.Die(err.Error(), 1)
 	}
 
 	// 4. Ensure the per-env Podman network exists. Containers join this
@@ -108,8 +123,7 @@ func (c appSetupEnvCmd) runLocked() {
 	fmt.Printf("App %s (%s) is ready at %s\n", c.App, c.Env, envRoot)
 }
 
-// appDestroyEnvCmd removes one env's containers, files, user, and
-// network. Removes the parent app dir only when this was the last env.
+// appDestroyEnvCmd removes one env's containers, files, user, and network.
 type appDestroyEnvCmd struct {
 	App   string `arg:"" help:"App name."`
 	Env   string `arg:"" help:"Env name."`
@@ -130,8 +144,7 @@ func (c appDestroyEnvCmd) runLocked() {
 	app, env := c.App, c.Env
 	user := identity.SystemUser(app, env)
 	network := identity.Network(app, env)
-	envRoot := identity.AppEnvRoot(app, env)
-	appRoot := identity.AppRoot(app)
+	envRoot := identity.EnvRoot(app, env)
 
 	// 1. Remove the Caddy fragment and reload first, so traffic stops
 	// routing here before the containers disappear. Restore the
@@ -147,7 +160,7 @@ func (c appDestroyEnvCmd) runLocked() {
 	if err != nil {
 		utils.Die(err.Error(), 1)
 	}
-	removedContainers := destroyContainerNames(containersToServices(containers))
+	removedContainers := destroyContainerNames(containersToProcesses(containers))
 	for _, name := range removedContainers {
 		_, _ = utils.RunChecked("podman", []string{"rm", "-f", name}, "")
 	}
@@ -184,11 +197,6 @@ func (c appDestroyEnvCmd) runLocked() {
 		}
 	}
 
-	// 6. If the parent app dir is now empty (last env destroyed), drop it.
-	if entries, err := os.ReadDir(appRoot); err == nil && len(entries) == 0 {
-		_ = os.Remove(appRoot)
-	}
-
 	fmt.Print(renderDestroyText(app, env, destroySummary{
 		Containers:    removedContainers,
 		CaddyFragment: caddyRemoved,
@@ -202,11 +210,11 @@ type destroySummary struct {
 	SecretsPurged bool
 }
 
-func destroyContainerNames(services []serviceStatus) []string {
-	names := make([]string, 0, len(services))
-	for _, svc := range services {
-		if svc.Container != "" {
-			names = append(names, svc.Container)
+func destroyContainerNames(processes []processStatus) []string {
+	names := make([]string, 0, len(processes))
+	for _, proc := range processes {
+		if proc.Container != "" {
+			names = append(names, proc.Container)
 		}
 	}
 	return names
@@ -262,4 +270,33 @@ func renderDestroyText(app, env string, summary destroySummary) string {
 func dirEmpty(path string) bool {
 	entries, err := os.ReadDir(path)
 	return err == nil && len(entries) == 0
+}
+
+type envIdentityFile struct {
+	Version int    `json:"version"`
+	App     string `json:"app"`
+	Env     string `json:"env"`
+	InfraID string `json:"infra_id"`
+}
+
+func writeEnvIdentity(app, env string) error {
+	path := identity.IdentityFile(app, env)
+	file := envIdentityFile{
+		Version: 1,
+		App:     app,
+		Env:     env,
+		InfraID: identity.InfraID(app, env),
+	}
+	data, err := json.MarshalIndent(file, "", "  ")
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		return fmt.Errorf("write env identity %s: %v", path, err)
+	}
+	if _, err := utils.RunChecked("chown", []string{"root:root", path}, ""); err != nil {
+		return fmt.Errorf("chown env identity: %v", err)
+	}
+	return nil
 }

@@ -1,13 +1,9 @@
-// Package identity centralizes the naming of per-(app, env) and
-// per-(app, env, service) artifacts: system users, Podman networks,
-// container names, image tags, and on-disk paths.
+// Package identity centralizes every host-side name derived from an
+// `(app, env)` pair.
 //
-// Per ADR-0005 cutover items 6-10 and ADR-0006 Cut 4, identifiers carry
-// both the app and env so prod and staging on the same VPS never collide
-// on user, network, paths, or image storage.
-//
-// ADR-0006 Cut 4 says simple-vps may internally hash identifiers when
-// they would exceed Linux limits (31-char usernames in particular).
+// Human-readable host paths use `/var/apps/<app>.<env>`. Linux, Podman,
+// DNS, and lock identifiers use a bounded derived infra ID so names stay
+// within platform limits without becoming reverse-parsed state.
 package identity
 
 import (
@@ -22,45 +18,44 @@ const (
 	dnsLabelLimit      = 63
 )
 
-// SystemUser is the Linux account that owns the per-env app data and
-// runs the container processes (via --user). Format: `app-<app>-<env>`.
+// InfraID is the deterministic bounded ID for one `(app, env)` pair.
+// It is stable before the env identity file exists, which lets setup
+// and locking use the same name as later lifecycle operations.
+func InfraID(app, env string) string {
+	return "svps-" + shortHash(app+"\x00"+env, 12)
+}
+
+// SystemUser is the Linux account that owns /data files and runs
+// container processes.
 func SystemUser(app, env string) string {
-	return boundedIdentityName("app", linuxUserNameLimit, app, env)
+	return boundedIdentityName(InfraID(app, env), linuxUserNameLimit)
 }
 
-// Network is the per-(app, env) Podman network used for intra-app
-// container-to-container DNS (e.g., a worker addressing the web service
-// by name). Caddy reaches app services over a separate shared
-// `ingress` network created at host install time.
+// Network is the per-(app, env) Podman network used for intra-app DNS.
 func Network(app, env string) string {
-	return fmt.Sprintf("app-%s-%s", app, env)
+	return boundedIdentityName(InfraID(app, env), dnsLabelLimit)
 }
 
-// ContainerName names the live container for a service.
-func ContainerName(app, env, service string) string {
-	return boundedIdentityName("app", dnsLabelLimit, app, env, service)
+// ContainerName names one versioned process container. Caddy points at
+// these names directly during the web handoff.
+func ContainerName(app, env, process, release string) string {
+	return boundedIdentityName(InfraID(app, env)+"-"+process+"-"+release, dnsLabelLimit)
 }
 
-func boundedIdentityName(prefix string, limit int, parts ...string) string {
-	full := prefix + "-" + strings.Join(parts, "-")
-	if len(full) <= limit {
-		return full
+func boundedIdentityName(base string, limit int) string {
+	if len(base) <= limit {
+		return base
 	}
-
-	hash := shortHash(strings.Join(parts, "\x00"), 8)
-	segmentBudget := limit - len(prefix) - len(hash) - 2
+	hash := shortHash(base, 8)
+	segmentBudget := limit - len(hash) - 1
 	if segmentBudget < 1 {
-		return prefix + "-" + hash
+		return hash[:limit]
 	}
-	base := strings.Join(parts, "-")
-	if len(base) > segmentBudget {
-		base = base[:segmentBudget]
+	prefix := strings.Trim(base[:segmentBudget], "-")
+	if prefix == "" {
+		prefix = "x"
 	}
-	base = strings.Trim(base, "-")
-	if base == "" {
-		base = "x"
-	}
-	return fmt.Sprintf("%s-%s-%s", prefix, base, hash)
+	return fmt.Sprintf("%s-%s", prefix, hash)
 }
 
 func shortHash(value string, chars int) string {
@@ -70,9 +65,9 @@ func shortHash(value string, chars int) string {
 }
 
 // ImageRepo is the local Podman image repo (without tag) for one
-// (app, env) pair. The full image reference is `ImageTag(app, env, sha)`.
+// `(app, env)` pair. The full image reference is `ImageTag(app, env, sha)`.
 func ImageRepo(app, env string) string {
-	return fmt.Sprintf("simple-vps/%s-%s", app, env)
+	return "simple-vps/" + InfraID(app, env)
 }
 
 // ImageTag is the full image reference for a deploy.
@@ -80,33 +75,37 @@ func ImageTag(app, env, sha string) string {
 	return fmt.Sprintf("%s:%s", ImageRepo(app, env), sha)
 }
 
-// AppRoot is the parent directory holding every env's data for one app.
-// Removed only when the last env of an app is destroyed (ADR-0005 §12).
-func AppRoot(app string) string {
-	return fmt.Sprintf("/var/apps/%s", app)
+// EnvRoot is the host root for one `(app, env)` lifecycle unit.
+func EnvRoot(app, env string) string {
+	return fmt.Sprintf("/var/apps/%s.%s", app, env)
 }
 
-// AppEnvRoot is the per-(app, env) root directory.
-func AppEnvRoot(app, env string) string {
-	return fmt.Sprintf("/var/apps/%s/%s", app, env)
+// DataDir is mounted into container apps as /data and is included in backups.
+func DataDir(app, env string) string {
+	return EnvRoot(app, env) + "/data"
 }
 
-// SharedDir is the per-(app, env) persistent directory bind-mounted
-// into the container. Holds the env file and any app state.
-func SharedDir(app, env string) string {
-	return AppEnvRoot(app, env) + "/shared"
+// RuntimeDir holds generated runtime config. It is not backed up as user data.
+func RuntimeDir(app, env string) string {
+	return EnvRoot(app, env) + "/runtime"
 }
 
-// EnvFile is the resolved runtime env file written into shared/ before
-// the container starts. Holds resolved secret values; mode 0600, owned
-// by SystemUser(app, env). Not in git, not in helper state.
+// EnvFile is the resolved runtime env file passed to Podman via --env-file.
 func EnvFile(app, env string) string {
-	return SharedDir(app, env) + "/.env"
+	return RuntimeDir(app, env) + "/.env"
 }
 
-// ManifestFile is the last manifest successfully applied for one
-// (app, env). Rollback uses it to recover the service and route shape
-// while selecting an older immutable image tag.
+// StaticDir is the root for static assets/releases.
+func StaticDir(app, env string) string {
+	return EnvRoot(app, env) + "/static"
+}
+
+// ManifestFile is the last manifest successfully applied for one `(app, env)`.
 func ManifestFile(app, env string) string {
-	return AppEnvRoot(app, env) + "/simple-vps.toml"
+	return EnvRoot(app, env) + "/simple-vps.toml"
+}
+
+// IdentityFile is the durable env identity anchor.
+func IdentityFile(app, env string) string {
+	return EnvRoot(app, env) + "/simple-vps.json"
 }

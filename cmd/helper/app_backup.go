@@ -120,7 +120,7 @@ type backupMetadata struct {
 	ID            string   `json:"id"`
 	CreatedAt     string   `json:"created_at"`
 	Release       string   `json:"release"`
-	Services      []string `json:"services"`
+	Processes     []string `json:"processes"`
 }
 
 type backupInfo struct {
@@ -141,11 +141,11 @@ func createBackup(app, env, dest string, now time.Time) (string, error) {
 	if _, err := os.Stat(manifestPath); err != nil {
 		return "", fmt.Errorf("applied manifest not found at %s; deploy once before backup", manifestPath)
 	}
-	services, err := podmanPSContainers(app, env)
+	containers, err := podmanPSContainers(app, env)
 	if err != nil {
 		return "", err
 	}
-	release, err := currentRelease(containersToServices(services))
+	release, err := currentRelease(containersToProcesses(containers))
 	if err != nil {
 		return "", err
 	}
@@ -166,7 +166,7 @@ func createBackup(app, env, dest string, now time.Time) (string, error) {
 			ID:            id,
 			CreatedAt:     now.Format(time.RFC3339),
 			Release:       release,
-			Services:      serviceNamesFromStatuses(containersToServices(services)),
+			Processes:     processNamesFromStatuses(containersToProcesses(containers)),
 		},
 		Secrets: readSecrets(app, env),
 	}
@@ -197,13 +197,13 @@ func restoreBackup(app, env, from, dir string, dryRun bool) (backupMetadata, err
 	if dryRun {
 		return meta, nil
 	}
-	envRoot := identity.AppEnvRoot(app, env)
-	shared := identity.SharedDir(app, env)
+	envRoot := identity.EnvRoot(app, env)
+	dataDir := identity.DataDir(app, env)
 	if err := os.MkdirAll(envRoot, 0755); err != nil {
 		return backupMetadata{}, err
 	}
-	_ = os.RemoveAll(shared)
-	if err := copyDir(filepath.Join(tmp, "shared"), shared); err != nil {
+	_ = os.RemoveAll(dataDir)
+	if err := copyDir(filepath.Join(tmp, "data"), dataDir); err != nil {
 		return backupMetadata{}, err
 	}
 	if err := copyFilePath(filepath.Join(tmp, "simple-vps.toml"), identity.ManifestFile(app, env), 0644); err != nil {
@@ -219,7 +219,7 @@ func restoreBackup(app, env, from, dir string, dryRun bool) (backupMetadata, err
 		return backupMetadata{}, err
 	}
 	defer cleanup()
-	resolved, err := resolveEnv(app, env, appCtx.Env, appCtx.SecretRefs)
+	resolved, err := resolveEnv(app, env, appCtx.Vars, appCtx.SecretRefs)
 	if err != nil {
 		return backupMetadata{}, err
 	}
@@ -234,12 +234,12 @@ func restoreBackup(app, env, from, dir string, dryRun bool) (backupMetadata, err
 		return backupMetadata{}, err
 	}
 	imageTag := identity.ImageTag(app, env, meta.Release)
-	for _, svcName := range sortedKeys(appCtx.Services) {
-		if err := startService(app, env, svcName, appCtx.Services[svcName], imageTag, userID, groupID); err != nil {
+	for _, procName := range sortedKeys(appCtx.Processes) {
+		if err := startProcess(app, env, procName, appCtx.Processes[procName], imageTag, userID, groupID, meta.Release); err != nil {
 			return backupMetadata{}, err
 		}
 	}
-	if err := writeAppCaddyfile(app, env, appCtx); err != nil {
+	if err := writeAppCaddyfile(app, env, appCtx, meta.Release); err != nil {
 		return backupMetadata{}, err
 	}
 	if _, err := utils.RunChecked("podman", []string{"exec", "caddy", "caddy", "validate", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"}, ""); err != nil {
@@ -268,7 +268,7 @@ func writeBackupTar(path, app, env, manifestPath string, payload backupPayload) 
 	if err := addFile(tw, manifestPath, "simple-vps.toml"); err != nil {
 		return err
 	}
-	return addDir(tw, identity.SharedDir(app, env), "shared")
+	return addDir(tw, identity.DataDir(app, env), "data")
 }
 
 func extractBackupTar(path, dest string) (backupPayload, error) {
@@ -500,10 +500,10 @@ func readSecrets(app, env string) map[string]string {
 	return out
 }
 
-func serviceNamesFromStatuses(services []serviceStatus) []string {
-	out := make([]string, 0, len(services))
-	for _, svc := range services {
-		out = append(out, svc.Service)
+func processNamesFromStatuses(processes []processStatus) []string {
+	out := make([]string, 0, len(processes))
+	for _, proc := range processes {
+		out = append(out, proc.Process)
 	}
 	sort.Strings(out)
 	return out

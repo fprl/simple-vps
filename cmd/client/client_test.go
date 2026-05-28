@@ -30,9 +30,9 @@ name = "api"
 [env.staging]
 server = "deploy@100.x.y.z"
 
-[services.web]
+[processes.web]
 port = 3000
-healthcheck = "/health"
+health = "/health"
 `)
 
 	server, err := readTargetServer(root, "")
@@ -56,9 +56,9 @@ server = "deploy@100.x.y.z"
 [env.staging]
 server = "deploy@100.x.y.z"
 
-[services.web]
+[processes.web]
 port = 3000
-healthcheck = "/health"
+health = "/health"
 `)
 
 	_, err := readTargetServer(root, "")

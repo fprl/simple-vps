@@ -5,13 +5,13 @@ import (
 	"testing"
 )
 
-func TestCurrentReleaseRejectsEmptyOrMixedServices(t *testing.T) {
-	if _, err := currentRelease(nil); err == nil || !strings.Contains(err.Error(), "no services running") {
-		t.Fatalf("expected empty-services error, got %v", err)
+func TestCurrentReleaseRejectsEmptyOrMixedProcesses(t *testing.T) {
+	if _, err := currentRelease(nil); err == nil || !strings.Contains(err.Error(), "no processes running") {
+		t.Fatalf("expected empty-processes error, got %v", err)
 	}
-	_, err := currentRelease([]serviceStatus{
-		{Service: "web", Release: "aaa"},
-		{Service: "worker", Release: "bbb"},
+	_, err := currentRelease([]processStatus{
+		{Process: "web", Release: "aaa"},
+		{Process: "worker", Release: "bbb"},
 	})
 	if err == nil || !strings.Contains(err.Error(), "different releases") {
 		t.Fatalf("expected mixed-release error, got %v", err)
@@ -58,16 +58,16 @@ func TestSelectRollbackReleaseErrors(t *testing.T) {
 
 func TestRenderRollbackText(t *testing.T) {
 	out := renderRollbackText(rollbackPayload{
-		App:      "api",
-		Env:      "production",
-		Previous: "new",
-		Release:  "old",
-		Services: []string{"web"},
+		App:       "api",
+		Env:       "production",
+		Previous:  "new",
+		Release:   "old",
+		Processes: []string{"web"},
 	})
 	if !strings.Contains(out, "Rolled back api (production) from new to old") {
 		t.Fatalf("missing rollback summary:\n%s", out)
 	}
 	if !strings.Contains(out, "web") || !strings.Contains(out, "running") {
-		t.Fatalf("missing service row:\n%s", out)
+		t.Fatalf("missing process row:\n%s", out)
 	}
 }

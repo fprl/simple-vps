@@ -14,7 +14,7 @@ import (
 
 // appRollbackCmd swaps the running containers for one (app, env) back to an
 // older local image tag. Container images are the release artifacts for
-// container apps; the last applied manifest supplies the service and route
+// container apps; the last applied manifest supplies the process and route
 // shape.
 type appRollbackCmd struct {
 	App     string `arg:"" help:"App name."`
@@ -38,7 +38,7 @@ func (c appRollbackCmd) runLocked() {
 	if err != nil {
 		utils.Die(err.Error(), 1)
 	}
-	current, err := currentRelease(containersToServices(containers))
+	current, err := currentRelease(containersToProcesses(containers))
 	if err != nil {
 		utils.Die(err.Error(), 1)
 	}
@@ -61,13 +61,16 @@ func (c appRollbackCmd) runLocked() {
 		utils.Die(err.Error(), 1)
 	}
 	imageTag := identity.ImageTag(c.App, c.Env, target.Release)
-	for _, svcName := range sortedKeys(app.Services) {
-		svc := app.Services[svcName]
-		if err := startService(c.App, c.Env, svcName, svc, imageTag, userID, groupID); err != nil {
+	for _, procName := range sortedKeys(app.Processes) {
+		proc := app.Processes[procName]
+		for _, old := range processContainers(containers, procName, target.Release) {
+			_, _ = utils.RunChecked("podman", []string{"rm", "-f", old}, "")
+		}
+		if err := startProcess(c.App, c.Env, procName, proc, imageTag, userID, groupID, target.Release); err != nil {
 			utils.Die(err.Error(), 1)
 		}
 	}
-	if err := writeAppCaddyfile(c.App, c.Env, app); err != nil {
+	if err := writeAppCaddyfile(c.App, c.Env, app, target.Release); err != nil {
 		utils.Die(err.Error(), 1)
 	}
 	if _, err := utils.RunChecked("podman", []string{"exec", "caddy", "caddy", "validate", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"}, ""); err != nil {
@@ -78,11 +81,11 @@ func (c appRollbackCmd) runLocked() {
 	}
 
 	result := rollbackPayload{
-		App:      c.App,
-		Env:      c.Env,
-		Previous: current,
-		Release:  target.Release,
-		Services: serviceNames(app.Services),
+		App:       c.App,
+		Env:       c.Env,
+		Previous:  current,
+		Release:   target.Release,
+		Processes: processNames(app.Processes),
 	}
 	if c.JSON {
 		buf, err := json.MarshalIndent(result, "", "  ")
@@ -96,11 +99,11 @@ func (c appRollbackCmd) runLocked() {
 }
 
 type rollbackPayload struct {
-	App      string   `json:"app"`
-	Env      string   `json:"env"`
-	Previous string   `json:"previous"`
-	Release  string   `json:"release"`
-	Services []string `json:"services"`
+	App       string   `json:"app"`
+	Env       string   `json:"env"`
+	Previous  string   `json:"previous"`
+	Release   string   `json:"release"`
+	Processes []string `json:"processes"`
 }
 
 type imageRelease struct {
@@ -134,10 +137,10 @@ func podmanImages(app, env string) ([]imageRelease, error) {
 		if e.Repository != repo {
 			continue
 		}
-		if e.Labels["app"] != app || e.Labels["env"] != env {
+		if e.Labels["simple-vps.app"] != app || e.Labels["simple-vps.env"] != env {
 			continue
 		}
-		release := e.Labels["simple_vps_release"]
+		release := e.Labels["simple-vps.release"]
 		if release == "" {
 			release = e.Tag
 		}
@@ -150,17 +153,17 @@ func podmanImages(app, env string) ([]imageRelease, error) {
 	return releases, nil
 }
 
-func currentRelease(services []serviceStatus) (string, error) {
-	if len(services) == 0 {
-		return "", fmt.Errorf("no services running; deploy before rollback")
+func currentRelease(processes []processStatus) (string, error) {
+	if len(processes) == 0 {
+		return "", fmt.Errorf("no processes running; deploy before rollback")
 	}
-	current := services[0].Release
+	current := processes[0].Release
 	if current == "" {
-		return "", fmt.Errorf("running services do not expose a release label; cannot choose rollback target")
+		return "", fmt.Errorf("running processes do not expose a release label; cannot choose rollback target")
 	}
-	for _, svc := range services[1:] {
-		if svc.Release != current {
-			return "", fmt.Errorf("running services are on different releases; pass an explicit release")
+	for _, proc := range processes[1:] {
+		if proc.Release != current {
+			return "", fmt.Errorf("running processes are on different releases; pass an explicit release")
 		}
 	}
 	return current, nil
@@ -225,15 +228,15 @@ func loadAppliedAppContext(app, env string) (*config.AppContext, func(), error) 
 	return ctx, cleanup, nil
 }
 
-func serviceNames(services map[string]config.Service) []string {
-	return sortedKeys(services)
+func processNames(processes map[string]config.Process) []string {
+	return sortedKeys(processes)
 }
 
 func renderRollbackText(payload rollbackPayload) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Rolled back %s (%s) from %s to %s\n", payload.App, payload.Env, payload.Previous, payload.Release)
-	for _, svc := range payload.Services {
-		fmt.Fprintf(&b, "  %-12s running\n", svc)
+	for _, proc := range payload.Processes {
+		fmt.Fprintf(&b, "  %-12s running\n", proc)
 	}
 	return b.String()
 }

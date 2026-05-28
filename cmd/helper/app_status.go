@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 
+	"github.com/fprl/simple-vps/internal/identity"
 	"github.com/fprl/simple-vps/internal/utils"
 )
 
@@ -29,9 +31,10 @@ func (c appStatusCmd) Run() error {
 	if err != nil {
 		utils.Die(err.Error(), 1)
 	}
-	services := containersToServices(out)
+	processes := containersToProcesses(out)
+	envKnown := envIdentityExists(c.App, c.Env)
 	if c.JSON {
-		payload := statusPayload{App: c.App, Env: c.Env, Services: services}
+		payload := statusPayload{App: c.App, Env: c.Env, Processes: processes}
 		buf, err := json.MarshalIndent(payload, "", "  ")
 		if err != nil {
 			utils.Die(err.Error(), 1)
@@ -39,13 +42,13 @@ func (c appStatusCmd) Run() error {
 		fmt.Println(string(buf))
 		return nil
 	}
-	fmt.Print(renderStatusText(c.App, c.Env, services))
+	fmt.Print(renderStatusText(c.App, c.Env, processes, envKnown))
 	return nil
 }
 
-// appListCmd inspects all Podman containers on the host and groups the
-// simple-vps-labelled ones by app/env. It replaces the old registry-backed
-// route/app readers: runtime labels are the source of truth.
+// appListCmd merges durable env identity anchors with live process labels.
+// Static-only apps have no containers, so the identity file is the source
+// for "this env exists"; process rows still come from Podman labels.
 type appListCmd struct {
 	JSON bool `name:"json" help:"Emit structured JSON instead of the text table."`
 }
@@ -55,7 +58,11 @@ func (c appListCmd) Run() error {
 	if err != nil {
 		utils.Die(err.Error(), 1)
 	}
-	apps := containersToAppEnvs(out)
+	identityApps, err := identityAppEnvs()
+	if err != nil {
+		utils.Die(err.Error(), 1)
+	}
+	apps := mergeAppEnvs(identityApps, containersToAppEnvs(out))
 	if c.JSON {
 		payload := appListPayload{Apps: apps}
 		buf, err := json.MarshalIndent(payload, "", "  ")
@@ -69,14 +76,14 @@ func (c appListCmd) Run() error {
 	return nil
 }
 
-// appLogsCmd shells `podman logs` for the requested service's
-// container. Service argument is optional only when the (app, env)
+// appLogsCmd shells `podman logs` for the requested process's
+// container. Process argument is optional only when the (app, env)
 // has exactly one container — otherwise it's ambiguous and we
 // refuse to guess.
 type appLogsCmd struct {
 	App     string `arg:"" help:"App name."`
 	Env     string `arg:"" help:"Env name."`
-	Service string `arg:"" optional:"" help:"Service name. Optional when only one service exists."`
+	Process string `arg:"" optional:"" help:"Process name. Optional when only one process exists."`
 	Follow  bool   `name:"follow" short:"f" help:"Stream new log lines (podman logs -f)."`
 	Tail    int    `name:"tail" default:"100" help:"How many trailing lines to show. Ignored in --follow mode."`
 }
@@ -85,7 +92,7 @@ func (c appLogsCmd) Run() error {
 	if err := validateAppEnv(c.App, c.Env); err != nil {
 		utils.Die(err.Error(), 1)
 	}
-	containerName, err := resolveLogContainer(c.App, c.Env, c.Service)
+	containerName, err := resolveLogContainer(c.App, c.Env, c.Process)
 	if err != nil {
 		utils.Die(err.Error(), 1)
 	}
@@ -110,9 +117,9 @@ func (c appLogsCmd) Run() error {
 // --- formatting / parsing ---
 
 type statusPayload struct {
-	App      string          `json:"app"`
-	Env      string          `json:"env"`
-	Services []serviceStatus `json:"services"`
+	App       string          `json:"app"`
+	Env       string          `json:"env"`
+	Processes []processStatus `json:"processes"`
 }
 
 type appListPayload struct {
@@ -120,13 +127,13 @@ type appListPayload struct {
 }
 
 type appEnvStatus struct {
-	App      string          `json:"app"`
-	Env      string          `json:"env"`
-	Services []serviceStatus `json:"services"`
+	App       string          `json:"app"`
+	Env       string          `json:"env"`
+	Processes []processStatus `json:"processes"`
 }
 
-type serviceStatus struct {
-	Service   string `json:"service"`
+type processStatus struct {
+	Process   string `json:"process"`
 	Container string `json:"container"`
 	State     string `json:"state"`
 	Image     string `json:"image,omitempty"`
@@ -146,30 +153,30 @@ type containerEntry struct {
 	Labels map[string]string `json:"Labels"`
 }
 
-func containersToServices(entries []containerEntry) []serviceStatus {
-	out := make([]serviceStatus, 0, len(entries))
+func containersToProcesses(entries []containerEntry) []processStatus {
+	out := make([]processStatus, 0, len(entries))
 	for _, e := range entries {
-		// `service` label is set by `server app apply` on every
+		// `simple-vps.process` label is set by `server app apply` on every
 		// container it starts. Anything without it isn't ours and
 		// shouldn't surface in app status.
-		svc := e.Labels["service"]
-		if svc == "" {
+		proc := e.Labels["simple-vps.process"]
+		if proc == "" || proc == "release" {
 			continue
 		}
 		name := ""
 		if len(e.Names) > 0 {
 			name = e.Names[0]
 		}
-		out = append(out, serviceStatus{
-			Service:   svc,
+		out = append(out, processStatus{
+			Process:   proc,
 			Container: name,
 			State:     e.State,
 			Image:     e.Image,
-			Release:   e.Labels["simple_vps_release"],
+			Release:   e.Labels["simple-vps.release"],
 			Status:    e.Status,
 		})
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Service < out[j].Service })
+	sort.Slice(out, func(i, j int) bool { return out[i].Process < out[j].Process })
 	return out
 }
 
@@ -180,10 +187,10 @@ func containersToAppEnvs(entries []containerEntry) []appEnvStatus {
 	}
 	grouped := map[key][]containerEntry{}
 	for _, e := range entries {
-		app := e.Labels["app"]
-		env := e.Labels["env"]
-		service := e.Labels["service"]
-		if app == "" || env == "" || service == "" {
+		app := e.Labels["simple-vps.app"]
+		env := e.Labels["simple-vps.env"]
+		process := e.Labels["simple-vps.process"]
+		if app == "" || env == "" || process == "" || process == "release" {
 			continue
 		}
 		k := key{app: app, env: env}
@@ -204,22 +211,55 @@ func containersToAppEnvs(entries []containerEntry) []appEnvStatus {
 	out := make([]appEnvStatus, 0, len(keys))
 	for _, k := range keys {
 		out = append(out, appEnvStatus{
-			App:      k.app,
-			Env:      k.env,
-			Services: containersToServices(grouped[k]),
+			App:       k.app,
+			Env:       k.env,
+			Processes: containersToProcesses(grouped[k]),
 		})
 	}
 	return out
 }
 
-func renderStatusText(app, env string, services []serviceStatus) string {
+func mergeAppEnvs(identityApps, processApps []appEnvStatus) []appEnvStatus {
+	type key struct {
+		app string
+		env string
+	}
+	grouped := map[key]appEnvStatus{}
+	for _, app := range identityApps {
+		grouped[key{app: app.App, env: app.Env}] = appEnvStatus{App: app.App, Env: app.Env}
+	}
+	for _, app := range processApps {
+		grouped[key{app: app.App, env: app.Env}] = app
+	}
+	keys := make([]key, 0, len(grouped))
+	for k := range grouped {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].app != keys[j].app {
+			return keys[i].app < keys[j].app
+		}
+		return keys[i].env < keys[j].env
+	})
+	out := make([]appEnvStatus, 0, len(keys))
+	for _, k := range keys {
+		out = append(out, grouped[k])
+	}
+	return out
+}
+
+func renderStatusText(app, env string, processes []processStatus, envKnown bool) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s (%s)\n", app, env)
-	if len(services) == 0 {
-		b.WriteString("  no services running — run `simple-vps deploy " + env + "`\n")
+	if len(processes) == 0 {
+		if envKnown {
+			b.WriteString("  no processes running\n")
+		} else {
+			b.WriteString("  no processes running — run `simple-vps deploy " + env + "`\n")
+		}
 		return b.String()
 	}
-	for _, s := range services {
+	for _, s := range processes {
 		release := s.Release
 		if release == "" {
 			release = "?"
@@ -228,7 +268,7 @@ func renderStatusText(app, env string, services []serviceStatus) string {
 		if s.Status != "" {
 			state = s.State + " (" + s.Status + ")"
 		}
-		fmt.Fprintf(&b, "  %-12s %s  release=%s\n", s.Service, state, release)
+		fmt.Fprintf(&b, "  %-12s %s  release=%s\n", s.Process, state, release)
 	}
 	return b.String()
 }
@@ -240,11 +280,11 @@ func renderAppListText(apps []appEnvStatus) string {
 	var b strings.Builder
 	for _, app := range apps {
 		fmt.Fprintf(&b, "%s (%s)\n", app.App, app.Env)
-		if len(app.Services) == 0 {
-			b.WriteString("  no services\n")
+		if len(app.Processes) == 0 {
+			b.WriteString("  no processes\n")
 			continue
 		}
-		for _, s := range app.Services {
+		for _, s := range app.Processes {
 			release := s.Release
 			if release == "" {
 				release = "?"
@@ -253,7 +293,7 @@ func renderAppListText(apps []appEnvStatus) string {
 			if s.Status != "" {
 				state = s.State + " (" + s.Status + ")"
 			}
-			fmt.Fprintf(&b, "  %-12s %s  release=%s\n", s.Service, state, release)
+			fmt.Fprintf(&b, "  %-12s %s  release=%s\n", s.Process, state, release)
 		}
 	}
 	return b.String()
@@ -265,8 +305,8 @@ func podmanPSContainers(app, env string) ([]containerEntry, error) {
 	// `--format json` returns a JSON array of containers matching
 	// the label filters server-side. Empty array if nothing matches.
 	cmd := exec.Command("podman", "ps", "-a",
-		"--filter", "label=app="+app,
-		"--filter", "label=env="+env,
+		"--filter", "label=simple-vps.app="+app,
+		"--filter", "label=simple-vps.env="+env,
 		"--format", "json",
 	)
 	out, err := cmd.Output()
@@ -297,29 +337,65 @@ func parsePodmanPSJSON(out []byte) ([]containerEntry, error) {
 	return entries, nil
 }
 
-func resolveLogContainer(app, env, service string) (string, error) {
+var envIdentityGlob = "/var/apps/*/simple-vps.json"
+
+func identityAppEnvs() ([]appEnvStatus, error) {
+	paths, err := filepath.Glob(envIdentityGlob)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]appEnvStatus, 0, len(paths))
+	for _, path := range paths {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("read %s: %v", path, err)
+		}
+		var file envIdentityFile
+		if err := json.Unmarshal(data, &file); err != nil {
+			return nil, fmt.Errorf("parse %s: %v", path, err)
+		}
+		if file.App == "" || file.Env == "" || file.InfraID != identity.InfraID(file.App, file.Env) {
+			return nil, fmt.Errorf("invalid env identity %s", path)
+		}
+		out = append(out, appEnvStatus{App: file.App, Env: file.Env})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].App != out[j].App {
+			return out[i].App < out[j].App
+		}
+		return out[i].Env < out[j].Env
+	})
+	return out, nil
+}
+
+func envIdentityExists(app, env string) bool {
+	_, err := os.Stat(identity.IdentityFile(app, env))
+	return err == nil
+}
+
+func resolveLogContainer(app, env, process string) (string, error) {
 	entries, err := podmanPSContainers(app, env)
 	if err != nil {
 		return "", err
 	}
-	services := containersToServices(entries)
-	if len(services) == 0 {
-		return "", fmt.Errorf("no services running for %s (%s)", app, env)
+	processes := containersToProcesses(entries)
+	if len(processes) == 0 {
+		return "", fmt.Errorf("no processes running for %s (%s)", app, env)
 	}
-	if service != "" {
-		for _, s := range services {
-			if s.Service == service {
+	if process != "" {
+		for _, s := range processes {
+			if s.Process == process {
 				return s.Container, nil
 			}
 		}
-		return "", fmt.Errorf("no service %q for %s (%s)", service, app, env)
+		return "", fmt.Errorf("no process %q for %s (%s)", process, app, env)
 	}
-	if len(services) > 1 {
+	if len(processes) > 1 {
 		var names []string
-		for _, s := range services {
-			names = append(names, s.Service)
+		for _, s := range processes {
+			names = append(names, s.Process)
 		}
-		return "", fmt.Errorf("multiple services running (%s); pass one as the service argument", strings.Join(names, ", "))
+		return "", fmt.Errorf("multiple processes running (%s); pass one as the process argument", strings.Join(names, ", "))
 	}
-	return services[0].Container, nil
+	return processes[0].Container, nil
 }

@@ -126,12 +126,12 @@ should reference them by name.
 
 Concretely:
 
-- `status` ships rich output (services, ports, routes, last deploy,
+- `status` ships rich output (processes, ports, routes, last deploy,
   partial-deploy states, recent journal lines). Not "deploy succeeded."
 - `logs` does sensible structured tailing. Not "here, run
   `journalctl -u ...` yourself."
 - Error messages are actionable: `secret "db_url" not set for prod;
-  run \`simple-vps secret put prod db_url\``. Not `missing reference`.
+  run \`simple-vps secret set prod db_url\``. Not `missing reference`.
 - "We will fix that in the dashboard" is not an allowed answer during
   implementation review.
 

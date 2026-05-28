@@ -45,6 +45,11 @@ design, not feature creep into the current shape. See
 - No built-in recurring scheduler. Framework schedulers (Sidekiq,
   Oban, BullMQ, Laravel scheduler) and host cron / systemd timers
   cover that surface today.
+- No multiple Dockerfiles/images per app. One app config builds one image;
+  multiple processes can run from that image.
+- No first-class database provisioning or Litestream orchestration. SQLite
+  and uploads belong under `/data`; managed external services remain outside
+  the v1 surface.
 - No sanctioned plugin system. Extension happens through the
   composable primitive.
 
@@ -61,18 +66,18 @@ implement it yet.
 simple-vps init                                       # scaffold simple-vps.toml + Dockerfile
 simple-vps check [env]                                # validate manifest
 simple-vps setup <env>                                # create per-env user, paths, Podman network
-simple-vps deploy <env> [--dirty] [--rebuild]         # build image on the host, run services, route via Caddy
-simple-vps status <env> [--json]                      # podman ps-sourced service table
+simple-vps deploy <env> [--dirty] [--rebuild]         # build image or publish static assets, route via Caddy
+simple-vps status <env> [--json]                      # runtime process table
 simple-vps app list [--server <ssh-target>] [--json]  # podman labels-sourced app/env list
-simple-vps restart <env> [service] [--json]           # bounce running services in place (same image)
+simple-vps restart <env> [process] [--json]           # bounce running processes in place (same image)
 simple-vps rollback <env> [release] [--json]          # run an older local image release
-simple-vps backup [--to=<destination>] <env>          # local tar backup of shared data, manifest, secrets, release metadata
+simple-vps backup [--to=<destination>] <env>          # local tar backup of data, manifest, secrets, release metadata
 simple-vps backup [--json] list <env>                 # list local backups
 simple-vps backup rm <env> <backup-id>                # remove one local backup
 simple-vps restore --from=<backup-id> [--dry-run] <env> # restore local backup and run saved image
 simple-vps destroy <env> --confirm <app> [--purge]    # tear down one environment; --yes for automation
-simple-vps logs <env> [service] [--follow] [--tail N] # podman logs against the labelled container
-simple-vps secret put <env> <KEY>                     # stdin-only write to /etc/simple-vps/secrets/<app>/<env>/<key>
+simple-vps logs <env> [process] [--follow] [--tail N] # podman logs against the labelled container
+simple-vps secret set <env> <KEY>                     # stdin-only write to /etc/simple-vps/secrets/<app>/<env>/<key>
 simple-vps secret list <env> [--json]                 # keys only, never values
 simple-vps secret rm <env> <KEY>                      # remove one key
 simple-vps ssh <env>                                  # SSH into the host
@@ -80,7 +85,7 @@ simple-vps ssh <env>                                  # SSH into the host
 
 `restart` uses `podman restart` — container config is preserved (same
 image, env, mounts, labels). To pick up manifest changes use
-`deploy`. Whole-env restart is rolling, one service at a time, and
+`deploy`. Whole-env restart is rolling, one process at a time, and
 fails fast if a container doesn't come back to `running`.
 
 `destroy` removes the running containers, per-env Caddy fragment,
@@ -89,7 +94,7 @@ kept by default; pass `--purge` to remove
 `/etc/simple-vps/secrets/<app>/<env>` too. To prevent accidental
 teardown, the client requires either `--confirm <app>` or `--yes`.
 
-`secret put` reads stdin only, never argv. `secret list` prints names
+`secret set` reads stdin only, never argv. `secret list` prints names
 only, never values. Writes are atomic via the privileged server API
 and whole-value `@secret:KEY` references resolve on the host during
 deploy. No auto-restart on secret change — re-deploy or restart
@@ -100,9 +105,9 @@ by a host-side file lock. `setup`, `deploy`, `restart`, `destroy`, and
 secret writes/removals cannot interleave against the same environment.
 Different environments can proceed independently.
 
-Non-secret env values live in `[env.<env>.env]` blocks in the manifest
-today. Secret values are referenced by whole-value `@secret:KEY`
-references and resolved on the host before deploy execution.
+Non-secret values live in `[vars]`, with env-specific overrides in
+`[env.<env>.vars]`. Secret values are referenced by whole-value
+`@secret:KEY` references and resolved on the host before deploy execution.
 
 Backup and restore are paired primitives. The bar is: fresh VPS, host
 bootstrap, one `restore`, app running again when the saved image is still
@@ -141,9 +146,9 @@ they map to the individual flags above.
 
 There is no client-side `route` verb. The helper-side `route list`
 reader pointed at a registry the new deploy flow does not populate
-and was removed together with the legacy `apps.json` / `routes.json`
-state files. Host app discovery is now `simple-vps app list`, sourced
-from Podman labels.
+and was removed together with `apps.json` / `routes.json`. Host app
+discovery is now `simple-vps app list`, sourced from env identity files
+and Podman labels.
 
 ## Internal CLI (server-side)
 
@@ -167,14 +172,14 @@ sudo simple-vps server app destroy-env [--purge] <app> <env>
 sudo simple-vps server app apply --tarball <path> --manifest <path> --sha <sha> <app> <env>
 sudo simple-vps server app list [--json]
 sudo simple-vps server app status [--json] <app> <env>
-sudo simple-vps server app restart [--json] <app> <env> [service]
+sudo simple-vps server app restart [--json] <app> <env> [process]
 sudo simple-vps server app rollback [--json] <app> <env> [release]
 sudo simple-vps server app backup [--to=<destination>] <app> <env>
 sudo simple-vps server app backup [--json] list <app> <env>
 sudo simple-vps server app backup rm <app> <env> <backup-id>
 sudo simple-vps server app backup --from=<backup-id> [--dry-run] restore <app> <env>
-sudo simple-vps server app logs [--follow] [--tail=N] <app> <env> [service]
-sudo simple-vps server app secret put <app> <env> <key>
+sudo simple-vps server app logs [--follow] [--tail=N] <app> <env> [process]
+sudo simple-vps server app secret set <app> <env> <key>
 sudo simple-vps server app secret list [--json] <app> <env>
 sudo simple-vps server app secret rm <app> <env> <key>
 
@@ -200,22 +205,80 @@ Schema, validation rules, env blocks, command rules, secret references, and
 backup config are owned by the Go config package and covered by the Go test
 suite.
 
-The manifest describes one container app. A `Dockerfile` must be present at
-the app repo root. The Dockerfile is the runtime contract; Node, Bun, Python,
-Ruby, Go, and other runtimes belong inside the image, not on the host.
+The manifest describes one app env shape. A container app has a `Dockerfile`
+at the app repo root. The Dockerfile is the build contract; Node, Bun,
+Python, Ruby, Go, and other runtimes belong inside the image, not on the
+host. A static-only app can omit the Dockerfile and use route-level
+`serve = "dist"` entries.
 
-Services are long-running containers from the app image. Service commands
-accept string form and array form; array form is recommended for commands
-with arguments because it avoids shell quoting.
+Processes are long-running containers from the app image. Each process can
+override the Dockerfile `CMD` with `command`, expose one internal `port`,
+and define an HTTP `health` path. Runtime limits are product-level resource
+knobs:
 
-Service-level hardening knobs map to the closed §7 Podman flag set:
-`memory = "512m"`, `cpus = 0.5`, `net_bind_service = true`, and
-`[services.<name>.tmpfs]` entries for additional writable scratch under a
-read-only rootfs.
+```toml
+[processes.web]
+command = "bun run src/server.ts"
+port = 3000
+health = "/health"
+resources = { memory = "512m", cpus = 0.5 }
+```
 
-Migrations are a deploy concern, not a separate verb. v1 users can run
-migrations from the image's startup wrapper (`migrate && serve`). A future
-ADR may add a `predeploy` hook.
+Routes live in one namespace. A route has exactly one target:
+
+```toml
+[routes.app]
+host = "api.example.com"
+process = "web"
+
+[routes.docs]
+host = "api.example.com"
+path = "/docs"
+serve = "docs-dist"
+
+[routes.old]
+host = "old.example.com"
+redirect = "https://api.example.com"
+```
+
+Non-secret runtime values are declared once in `[vars]` and overridden per
+env with `[env.<env>.vars]`. Whole-value `@secret:KEY` references resolve
+from the host secret store during deploy.
+
+```toml
+[vars]
+LOG_LEVEL = "info"
+DATABASE_PATH = "/data/app.db"
+DATABASE_URL = "@secret:DATABASE_URL"
+
+[env.staging.vars]
+LOG_LEVEL = "debug"
+```
+
+Deploy-time release commands are declared under `[deploy]`:
+
+```toml
+[deploy]
+release = "bun run migrate"
+```
+
+The release command runs from the built image with resolved vars/secrets and
+`/data` mounted before routed web processes move traffic.
+
+Container app data lives under `/data` inside the container. On the host,
+the env root is flat and scoped to `(app, env)`:
+
+```text
+/var/apps/<app>.<env>/
+  data/             # mounted as /data, included in backup/restore
+  runtime/.env      # generated runtime config, not user data
+  static/           # static assets/releases when used
+  simple-vps.toml   # applied manifest snapshot
+  simple-vps.json   # env identity anchor
+```
+
+See [ADR-0008](docs/adr/0008-manifest-v2-env-root-and-runtime-identity.md)
+for the manifest v2, env-root, and derived infra ID contract.
 
 ## Installation
 

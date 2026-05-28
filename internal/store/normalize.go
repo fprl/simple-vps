@@ -13,10 +13,6 @@ import (
 //     per-route app-name validation.
 //   - SystemUserRe is consumed by `internal/host` (the host-side
 //     primitives package) for SUDO_USER validation.
-//
-// ServiceRe and HeaderNameRe used to back the legacy route/service
-// normalizers; both went away with the apps.json/routes.json gut in
-// PR #39 and the regexes followed.
 var (
 	AppRe        = names.AppRe
 	SystemUserRe = names.SystemUserRe
