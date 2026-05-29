@@ -36,7 +36,7 @@ Run against a freshly rebuilt Ubuntu 24.04 or 26.04 VPS.
    ```bash
    tmp=$(mktemp -d /tmp/simple-vps-release-smoke-XXXXXX)
    cd "$tmp"
-   curl -fsSL https://raw.githubusercontent.com/fprl/simple-vps/main/install.sh -o install.sh
+   curl -fsSL "https://raw.githubusercontent.com/fprl/simple-vps/$VERSION/install.sh" -o install.sh
    chmod 0755 install.sh
    SIMPLE_VPS_VERSION="$VERSION" ./install.sh \
      --mode remote \
@@ -58,7 +58,7 @@ Run against a freshly rebuilt Ubuntu 24.04 or 26.04 VPS.
    curl -fsSL \
      -H "Authorization: Bearer $SIMPLE_VPS_RELEASE_TOKEN" \
      -H "Accept: application/vnd.github.raw" \
-     "https://api.github.com/repos/fprl/simple-vps/contents/install.sh?ref=main" \
+     "https://api.github.com/repos/fprl/simple-vps/contents/install.sh?ref=$VERSION" \
      -o install.sh
    ```
 

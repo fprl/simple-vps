@@ -6,6 +6,148 @@ live in [SPEC.md](../SPEC.md), [README.md](../README.md), and
 the exact commands tested at the time, including names that ADR-0008 later
 removed.
 
+## 2026-05-29 — v0.5.0-rc2 release asset smoke
+
+- **Host:** `128.140.3.159`
+- **OS:** Hetzner Ubuntu 26.04 LTS, `x86_64`
+- **Release tested:** `v0.5.0-rc2`
+- **Release commit:** `71ad9d442f319516a5f2a1c5d1c163011e778c9e`
+- **Smoke root:** `/tmp/simple-vps-rc2-release-smoke-SWQWUi`
+- **DNS/TLS:** `nip.io` hostnames with `tls = "internal"` and curl
+  `--resolve ... -k`
+
+### Release assets
+
+The GitHub release at
+`https://github.com/fprl/simple-vps/releases/tag/v0.5.0-rc2` contained:
+
+```text
+SHA256SUMS
+simple-vps-darwin-amd64
+simple-vps-darwin-arm64
+simple-vps-linux-amd64
+simple-vps-linux-arm64
+```
+
+The smoke downloaded `simple-vps-darwin-arm64` through the GitHub release API
+and verified it with `SHA256SUMS`:
+
+```text
+simple-vps-darwin-arm64: OK
+v0.5.0-rc2
+```
+
+### Host install from release assets
+
+The installer was fetched from the `v0.5.0-rc2` tag through the GitHub Contents
+API. It then downloaded both release assets needed for a macOS-to-Linux remote
+install:
+
+```text
+==> Downloading Simple VPS binary from https://github.com/fprl/simple-vps/releases/download/v0.5.0-rc2/simple-vps-darwin-arm64
+==> Downloading Simple VPS Linux helper binary from https://github.com/fprl/simple-vps/releases/download/v0.5.0-rc2/simple-vps-linux-amd64
+==> Apply 20260529T210617Z changed 1 operations
+==> Provisioning complete
+```
+
+Final host checks:
+
+- `host status --json` reported Caddy `active`, Podman `5.7.0`, and rsync
+  `3.4.1`.
+- `host doctor --json` returned `"healthy": true` with no findings.
+
+### App matrix
+
+1. `examples/hono-bun-api`
+
+   Temporary host: `rc2-hono.128.140.3.159.nip.io`.
+
+   Covered:
+
+   - `check --env production`
+   - `setup --env production`
+   - `secret set SMOKE_SECRET --env production`
+   - `deploy --env production`
+   - HTTPS `/health` -> `ok`
+   - HTTPS `/` -> JSON containing `"secret":"rc2-hono-secret"`
+   - `destroy --env production --confirm hono-api --purge`
+
+2. `examples/php-plain`
+
+   Temporary host: `rc2-php.128.140.3.159.nip.io`.
+
+   Covered:
+
+   - `check --env production`
+   - `setup --env production`
+   - `secret set APP_SECRET --env production`
+   - `deploy --env production`
+   - HTTPS `/health` -> `ok`
+   - HTTPS `/` -> JSON containing `"secret":"rc2-php-secret"`
+   - `destroy --env production --confirm php-plain --purge`
+
+3. `examples/astro-static`
+
+   Temporary host: `rc2-static.128.140.3.159.nip.io`.
+
+   Covered:
+
+   - static-only `check`, `setup`, and `deploy`
+   - HTTPS `/` -> `static-ok`
+   - `destroy --env production --confirm astro-site --purge`
+
+4. `examples/mixed-api-docs`
+
+   Temporary host: `rc2-mixed.128.140.3.159.nip.io`.
+
+   Covered:
+
+   - mixed container plus route-level `serve = "docs-dist"`
+   - HTTPS `/health` -> `ok`
+   - HTTPS `/docs` -> `docs-ok`
+   - `backup create --env production --json`
+   - deploy changed static bytes -> `docs-rc2-v2`
+   - `rollback --env production` -> `docs-ok`
+   - deploy v2 again
+   - `restore --from 20260529T210804Z-665102b184ef-s2303f800a74f --env
+     production` -> `docs-ok`
+   - `backup rm 20260529T210804Z-665102b184ef-s2303f800a74f --env
+     production`
+   - `destroy --env production --confirm mixed-app --purge`
+
+Final `app list --server deploy@128.140.3.159 --json` returned:
+
+```json
+{
+  "apps": []
+}
+```
+
+Final root cleanup showed:
+
+```text
+backups:
+containers:
+caddy
+apps-root:
+```
+
+### Harness issues
+
+- A first local download attempt saved the release binary as `simple-vps`, so
+  `SHA256SUMS` could not match the asset name. No VPS mutation had happened.
+- A second attempt launched the installer from the repo checkout, so host
+  install found the local `dist/simple-vps-linux-amd64` helper instead of
+  downloading the release helper. The smoke was restarted from a temp directory
+  to verify release-helper provenance.
+- The same second attempt ran under zsh and used a local variable named `path`,
+  which broke command lookup inside the shell harness. The partial Hono app was
+  destroyed before the final run.
+
+**Outcome:** pass. Published `v0.5.0-rc2` assets install the VPS, deploy all
+current example shapes, roll back and restore the mixed release, remove backups,
+destroy app envs, and leave the host clean.
+
 ## 2026-05-29 — PHP example real VPS smoke
 
 - **Host:** `128.140.3.159`
