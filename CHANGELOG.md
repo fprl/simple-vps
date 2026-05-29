@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## v0.5.0-rc2 - 2026-05-29
+
+### Added
+
+- Plain PHP example app with a Dockerfile-backed HTTP process, `/health`, a
+  secret reference, and `/data` path convention.
+- Real VPS smoke coverage for Hono/Bun, PHP, static-only, and mixed
+  container/static deploys on Hetzner Ubuntu 26.04.
+
 ### Changed
 
 - Documented the `v0.5.0-rc1` release installer smoke and private-repo
@@ -11,6 +20,10 @@
 - Public app commands now use required `--env`/`-e` flags instead of positional
   env arguments, accept `--config` for monorepos, and expose explicit
   `backup create/list/rm` subcommands.
+- Clarified that Postgres/Redis/object-storage provisioning is outside the v1
+  app primitive; use external/managed/manual services and pass URLs as secrets.
+- Updated release and smoke docs for `v0.5.0-rc2`, Ubuntu 24.04/26.04, and
+  the PHP example matrix.
 
 ## v0.5.0-rc1 - 2026-05-29
 
