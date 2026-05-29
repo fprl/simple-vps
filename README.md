@@ -55,6 +55,12 @@ make fake-vps-smoke
 make fake-vps-install-smoke
 ```
 
+Example apps live under `examples/`:
+
+- `examples/hono-bun-api` — Dockerfile-backed Bun/Hono API.
+- `examples/astro-static` — static-only `dist/` deploy.
+- `examples/mixed-api-docs` — container API plus host-served `/docs`.
+
 ## Install A VPS
 
 Download the installer and let it pick the right release binary for the
@@ -66,9 +72,10 @@ curl -fsSL https://raw.githubusercontent.com/fprl/simple-vps/main/install.sh \
 chmod 0755 install.sh
 ```
 
-The installer downloads the `v0.4.3` release asset that matches your platform
+The installer downloads the selected release asset that matches your platform
 and verifies it against `SHA256SUMS`. From macOS, remote install also downloads
-and verifies the matching Linux helper binary for the target VPS.
+and verifies the matching Linux helper binary for the target VPS. Set
+`SIMPLE_VPS_VERSION=vX.Y.Z` to pin a release.
 
 ```bash
 ./install.sh \
@@ -164,7 +171,8 @@ Build all release binaries:
 
 ```bash
 make clean
-make build-release VERSION=v0.4.3
+make build-release VERSION=v0.5.0-rc1
+(cd dist && shasum -a 256 simple-vps-* > SHA256SUMS)
 ```
 
 Artifacts land in `dist/`:
@@ -182,6 +190,7 @@ simple-vps-darwin-arm64
 - [CHANGELOG.md](CHANGELOG.md)
 - [docs/positioning.md](docs/positioning.md)
 - [docs/security-model.md](docs/security-model.md)
+- [docs/release-checklist.md](docs/release-checklist.md)
 - [docs/smoke-real-box.md](docs/smoke-real-box.md)
 - [docs/smoke-real-box-results.md](docs/smoke-real-box-results.md)
 - [docs/adr/0001-replace-ansible-with-bounded-go-provisioner.md](docs/adr/0001-replace-ansible-with-bounded-go-provisioner.md)

@@ -1,0 +1,8 @@
+name = "astro-site"
+
+[env.production]
+server = "deploy@example.com"
+
+[routes.site]
+host = "site.example.com"
+serve = "dist"

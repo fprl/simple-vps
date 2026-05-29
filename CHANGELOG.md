@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+No unreleased changes.
+
+## v0.5.0-rc1 - 2026-05-29
+
 ### Added
 
 - Manifest v2 static-only deploys with `serve = "dist"` routes, host-side
@@ -12,6 +16,8 @@
 - `[deploy].release` for deploy-time migration commands in container apps.
 - Flat env roots at `/var/apps/<app>.<env>/` with `data/`, `runtime/`, and
   `static/` directories plus a durable `simple-vps.json` identity anchor.
+- Example apps for container-only, static-only, and mixed container/static
+  deploys.
 
 ### Changed
 
@@ -28,6 +34,8 @@
   generated runtime files.
 - Static route deploys include ignored/generated `serve` directories in the
   uploaded artifact, and static bytes participate in release IDs.
+- Release-candidate checklist documents local, fake-VPS, release-build, and
+  real-VPS smoke steps.
 
 ### Removed
 
