@@ -22,22 +22,6 @@ func writeClientDockerfile(t *testing.T, root string) {
 	}
 }
 
-func TestParseHostFlagsAllowsJsonAroundSubcommand(t *testing.T) {
-	flags, err := parseHostFlags([]string{"--json", "doctor", "--server", "deploy@example.com"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !flags.json {
-		t.Fatal("expected json flag")
-	}
-	if flags.server != "deploy@example.com" {
-		t.Fatalf("unexpected server: %s", flags.server)
-	}
-	if got := strings.Join(flags.rest, " "); got != "doctor" {
-		t.Fatalf("unexpected rest: %q", got)
-	}
-}
-
 func TestDefaultAppNameUsesCurrentDirectoryBase(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "simple-vps-local-demo")
 	if err := os.Mkdir(root, 0755); err != nil {

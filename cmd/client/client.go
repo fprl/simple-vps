@@ -344,150 +344,6 @@ func serverAppSecretRmCommand(appName, envName, key string) string {
 	return serverCommand("app", "secret", "rm", appName, envName, key)
 }
 
-type hostFlags struct {
-	server string
-	json   bool
-	rest   []string
-}
-
-func parseHostFlags(args []string) (hostFlags, error) {
-	flags := hostFlags{}
-	var rest []string
-	for i := 0; i < len(args); i++ {
-		arg := args[i]
-		switch arg {
-		case "--json":
-			flags.json = true
-		case "--server":
-			if i+1 >= len(args) {
-				return hostFlags{}, errors.New("--server requires a value")
-			}
-			flags.server = args[i+1]
-			if !config.ValidateSshTarget(flags.server) {
-				return hostFlags{}, errors.New("--server must be an SSH target like deploy@example.com")
-			}
-			i++
-		default:
-			rest = append(rest, arg)
-		}
-	}
-	flags.rest = rest
-	return flags, nil
-}
-
-// CmdInit scaffolds a default Dockerfile + container-shaped manifest.
-func CmdInit(root string) {
-	manifestPath := filepath.Join(root, ManifestFile)
-	if _, err := os.Stat(manifestPath); err == nil {
-		utils.Die("simple-vps.toml already exists", 1)
-	}
-
-	name := defaultAppName(root)
-	packageJsonPath := filepath.Join(root, "package.json")
-	if data, err := os.ReadFile(packageJsonPath); err == nil {
-		var pkg struct {
-			Name string `json:"name"`
-		}
-		_ = json.Unmarshal(data, &pkg)
-		if pkg.Name != "" {
-			name = normalizeAppName(pkg.Name)
-		}
-	}
-
-	dockerfilePath := filepath.Join(root, "Dockerfile")
-	createdDockerfile := false
-	if _, err := os.Stat(dockerfilePath); os.IsNotExist(err) {
-		dockerfileBody := `# Edit to fit your app. The Dockerfile is the build contract;
-# language runtimes live in the image, not on the host.
-FROM oven/bun:1
-WORKDIR /app
-COPY package.json bun.lock* ./
-RUN bun install --frozen-lockfile --production
-COPY . .
-EXPOSE 3000
-CMD ["bun", "run", "src/server.ts"]
-`
-		if err := os.WriteFile(dockerfilePath, []byte(dockerfileBody), 0644); err != nil {
-			utils.Die(err.Error(), 1)
-		}
-		createdDockerfile = true
-	}
-
-	content := fmt.Sprintf(`name = "%s"
-
-[env.production]
-server = "deploy@100.x.y.z"
-
-[processes.web]
-port = 3000
-health = "/health"
-
-[routes.app]
-host = "app.example.com"
-process = "web"
-`, name)
-
-	if err := os.WriteFile(manifestPath, []byte(content), 0644); err != nil {
-		utils.Die(err.Error(), 1)
-	}
-	fmt.Printf("Created %s\n", ManifestFile)
-	if createdDockerfile {
-		fmt.Println("Created Dockerfile")
-	}
-	fmt.Println("Next:")
-	fmt.Printf("1. edit %s and Dockerfile\n", ManifestFile)
-	fmt.Println("2. simple-vps setup --env production")
-	fmt.Println("3. simple-vps deploy --env production")
-}
-
-func defaultAppName(root string) string {
-	abs, err := filepath.Abs(root)
-	if err == nil {
-		root = abs
-	}
-	return normalizeAppName(filepath.Base(root))
-}
-
-func normalizeAppName(value string) string {
-	value = strings.TrimSpace(strings.ToLower(value))
-	if idx := strings.LastIndex(value, "/"); idx >= 0 {
-		value = value[idx+1:]
-	}
-
-	var b strings.Builder
-	prevDash := false
-	for _, r := range value {
-		valid := (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9')
-		if valid {
-			b.WriteRune(r)
-			prevDash = false
-			continue
-		}
-		if !prevDash {
-			b.WriteByte('-')
-			prevDash = true
-		}
-	}
-
-	candidate := strings.Trim(b.String(), "-")
-	if candidate == "" {
-		candidate = "app"
-	}
-	if candidate[0] < 'a' || candidate[0] > 'z' {
-		candidate = "app-" + candidate
-	}
-	if len(candidate) > 41 {
-		candidate = strings.Trim(candidate[:41], "-")
-	}
-	if len(candidate) < 2 {
-		candidate += "p"
-	}
-	if !names.AppRe.MatchString(candidate) {
-		return "app"
-	}
-	return candidate
-}
-
 func CmdCheck(root string, envName string) {
 	errors, warnings, err := config.CheckManifest(root, envName)
 	if err != nil {
@@ -871,23 +727,7 @@ func envKeyValid(key string) error {
 	return nil
 }
 
-func CmdHost(args []string) {
-	sub := "status"
-
-	flags, err := parseHostFlags(args)
-	if err != nil {
-		utils.Die(err.Error(), 1)
-	}
-	rest := flags.rest
-	if len(rest) > 0 {
-		sub = rest[0]
-	}
-
-	if len(rest) > 1 || (sub != "status" && sub != "doctor") {
-		utils.Die("host requires subcommand: status, doctor", 1)
-	}
-
-	server := flags.server
+func CmdHostStatus(server string, jsonFlag bool) {
 	if server == "" {
 		utils.Die("--server is required", 1)
 	}
@@ -901,27 +741,40 @@ func CmdHost(args []string) {
 	}
 	defer runner.Close()
 
-	if sub == "status" {
-		out := runSSHChecked(runner, server, serverStatusCommand(flags.json), "failed to read server status")
-		fmt.Print(out)
-	} else {
-		stdout, stderr, code, err := runner.RunSSH(server, serverDoctorCommand(flags.json))
-		if err != nil || code != 0 {
-			if flags.json && json.Valid([]byte(stdout)) {
-				fmt.Print(stdout)
-				os.Exit(1)
-			}
-			detail := strings.TrimSpace(stderr)
-			if detail == "" {
-				detail = strings.TrimSpace(stdout)
-			}
-			if detail != "" {
-				utils.Die(fmt.Sprintf("failed to run doctor: %s", detail), 1)
-			}
-			utils.Die("failed to run doctor", 1)
-		}
-		fmt.Print(stdout)
+	out := runSSHChecked(runner, server, serverStatusCommand(jsonFlag), "failed to read server status")
+	fmt.Print(out)
+}
+
+func CmdHostDoctor(server string, jsonFlag bool) {
+	if server == "" {
+		utils.Die("--server is required", 1)
 	}
+	if !config.ValidateSshTarget(server) {
+		utils.Die("--server must be an SSH target like deploy@example.com", 1)
+	}
+
+	runner, err := NewCommandRunner()
+	if err != nil {
+		utils.Die(err.Error(), 1)
+	}
+	defer runner.Close()
+
+	stdout, stderr, code, err := runner.RunSSH(server, serverDoctorCommand(jsonFlag))
+	if err != nil || code != 0 {
+		if jsonFlag && json.Valid([]byte(stdout)) {
+			fmt.Print(stdout)
+			os.Exit(1)
+		}
+		detail := strings.TrimSpace(stderr)
+		if detail == "" {
+			detail = strings.TrimSpace(stdout)
+		}
+		if detail != "" {
+			utils.Die(fmt.Sprintf("failed to run doctor: %s", detail), 1)
+		}
+		utils.Die("failed to run doctor", 1)
+	}
+	fmt.Print(stdout)
 }
 
 func CmdDeploy(root string, envName string, dirty bool, rebuild bool, includeDotenv bool) {

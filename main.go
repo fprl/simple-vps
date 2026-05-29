@@ -15,7 +15,7 @@ import (
 // purpose; host mutation goes through the privileged helper and runtime
 // truth comes from manifest snapshots, identity files, and Podman labels.
 type cli struct {
-	Init     initCmd          `cmd:"" help:"Create a simple-vps.toml manifest and Dockerfile scaffold."`
+	Init     initCmd          `cmd:"" help:"Create a simple-vps.toml manifest and starter files."`
 	Check    checkCmd         `cmd:"" help:"Validate an app manifest."`
 	Setup    setupCmd         `cmd:"" help:"Create the per-env Linux user, directories, and Podman network on the host."`
 	Deploy   deployCmd        `cmd:"" help:"Build the container image on the host and run the app's processes."`
@@ -57,7 +57,14 @@ func appRoot(configPath string) (string, error) {
 }
 
 type initCmd struct {
-	Config string `name:"config" type:"path" default:"simple-vps.toml" help:"Path to simple-vps.toml."`
+	Config   string `name:"config" type:"path" default:"simple-vps.toml" help:"Path to simple-vps.toml."`
+	Template string `name:"template" enum:"container,static,php,hono" default:"container" help:"Scaffold template."`
+	Name     string `name:"name" help:"App name. Defaults to package.json name or directory name."`
+	Env      string `name:"env" short:"e" default:"production" help:"Environment block to create."`
+	Server   string `name:"server" default:"deploy@example.com" help:"SSH target for the env."`
+	Host     string `name:"host" help:"Route host. Defaults to <app>.example.com."`
+	TLS      string `name:"tls" enum:"auto,internal" default:"auto" help:"Route TLS mode."`
+	Port     int    `name:"port" help:"Internal process port for container templates."`
 }
 
 func (c initCmd) Run() error {
@@ -65,7 +72,15 @@ func (c initCmd) Run() error {
 	if err != nil {
 		return err
 	}
-	client.CmdInit(root)
+	client.CmdInit(root, client.InitOptions{
+		Template: c.Template,
+		Name:     c.Name,
+		Env:      c.Env,
+		Server:   c.Server,
+		Host:     c.Host,
+		TLS:      c.TLS,
+		Port:     c.Port,
+	})
 	return nil
 }
 
@@ -354,14 +369,7 @@ type hostStatusCmd struct {
 }
 
 func (c hostStatusCmd) Run() error {
-	args := []string{"status"}
-	if c.JSON {
-		args = append(args, "--json")
-	}
-	if c.Server != "" {
-		args = append(args, "--server", c.Server)
-	}
-	client.CmdHost(args)
+	client.CmdHostStatus(c.Server, c.JSON)
 	return nil
 }
 
@@ -371,14 +379,7 @@ type hostDoctorCmd struct {
 }
 
 func (c hostDoctorCmd) Run() error {
-	args := []string{"doctor"}
-	if c.JSON {
-		args = append(args, "--json")
-	}
-	if c.Server != "" {
-		args = append(args, "--server", c.Server)
-	}
-	client.CmdHost(args)
+	client.CmdHostDoctor(c.Server, c.JSON)
 	return nil
 }
 

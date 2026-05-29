@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Added
+
+- `simple-vps init` now scaffolds deployable `container`, `static`, `php`, and
+  `hono` templates with explicit `--name`, `--server`, `--host`, and `--port`
+  knobs.
+
 ## v0.5.0-rc2 - 2026-05-29
 
 ### Added

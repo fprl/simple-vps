@@ -204,8 +204,8 @@ scheduler.
 
 - The public CLI changes before stable v1. This is intentional.
 - Tests and docs must move to `--env` / `--config` before DX work.
-- `simple-vps init` remains unfinished DX until this contract is implemented
-  and verified.
+- `simple-vps init` is DX on top of this contract; it scaffolds only the
+  current `--env` / `--config` manifest shape.
 - Shell scripts and smoke docs may keep historical commands only where they are
   explicitly historical evidence.
 

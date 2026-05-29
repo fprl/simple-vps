@@ -25,6 +25,12 @@ make build VERSION="$VERSION"
 (cd examples/php-plain && ../../dist/simple-vps check --env production)
 (cd examples/astro-static && ../../dist/simple-vps check --env production)
 (cd examples/mixed-api-docs && ../../dist/simple-vps check --env production)
+tmp=$(mktemp -d /tmp/simple-vps-init-check-XXXXXX)
+./dist/simple-vps init --config "$tmp/simple-vps.toml" --template php --name init-php --server deploy@example.com --host init-php.example.com
+./dist/simple-vps check --config "$tmp/simple-vps.toml" --env production
+
+# Optional local container build coverage when Podman is available:
+SIMPLE_VPS_TEST_INIT_BUILDS=1 go test ./cmd/client -run TestRunInitGeneratedContainerTemplatesBuildWhenRequested
 ```
 
 ## Real VPS Smoke

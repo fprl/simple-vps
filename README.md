@@ -78,6 +78,27 @@ release with `SIMPLE_VPS_VERSION=vX.Y.Z`, or point at a custom binary with
 
 ## Deploy An App
 
+For a new project, scaffold a small deployable shape:
+
+```bash
+simple-vps init --template php \
+  --name api \
+  --server deploy@example.com \
+  --host api.example.com
+```
+
+Templates:
+
+- `container` - minimal Python HTTP container.
+- `static` - `dist/` static route, no Dockerfile.
+- `php` - plain PHP HTTP container.
+- `hono` - Bun/Hono HTTP container.
+
+`init` never overwrites existing app files. If a `Dockerfile` already exists,
+it creates the manifest and leaves the Dockerfile alone. Use
+`--tls internal` for private DNS or disposable smoke hosts; omit it for normal
+public Let's Encrypt routes.
+
 `simple-vps.toml`:
 
 ```toml

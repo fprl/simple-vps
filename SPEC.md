@@ -67,7 +67,7 @@ relative to that manifest's directory.
 ### App lifecycle — shipping today
 
 ```bash
-simple-vps init                                       # scaffold simple-vps.toml + Dockerfile
+simple-vps init [--config <path>] [--template container|static|php|hono] [--name <app>] [--env <env>] [--server <ssh-target>] [--host <host>] [--tls auto|internal] [--port <port>] # scaffold simple-vps.toml plus starter files
 simple-vps check [--env <env>]                        # validate manifest, all envs by default
 simple-vps setup --env <env>                          # create per-env user, paths, Podman network
 simple-vps deploy --env <env> [--dirty] [--rebuild]   # build image or publish static assets, route via Caddy
