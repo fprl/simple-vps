@@ -327,11 +327,14 @@ The script finds, downloads, or builds a Go binary, then execs
 
 ```text
 # on a fresh box, ssh'd as root:
-curl -fsSL https://raw.githubusercontent.com/fprl/simple-vps/main/install.sh | bash \
+VERSION=v0.5.0-rc3
+curl -fsSL "https://raw.githubusercontent.com/fprl/simple-vps/$VERSION/install.sh" | \
+  SIMPLE_VPS_VERSION="$VERSION" bash \
     --deploy-ssh-public-key-file ~/.ssh/simple-vps-deploy.pub
 
 # or from a laptop, against a fresh box:
-./install.sh --mode remote --host <ip> --bootstrap-user root \
+SIMPLE_VPS_VERSION="$VERSION" ./install.sh \
+    --mode remote --host <ip> --bootstrap-user root \
     --ssh-key ~/.ssh/id_ed25519 \
     --operator-ssh-public-key-file ~/.ssh/id_ed25519.pub \
     --deploy-ssh-public-key-file ~/.ssh/simple-vps-deploy.pub

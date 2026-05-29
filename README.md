@@ -39,13 +39,35 @@ Example apps live under `examples/`:
 - `examples/astro-static` - static-only `dist/` deploy.
 - `examples/mixed-api-docs` - container API plus host-served `/docs`.
 
+For the fresh-VPS-to-first-app path, use
+[docs/getting-started.md](docs/getting-started.md).
+
+## Install The CLI
+
+Download the release asset for your laptop/CI machine and put it on `PATH`.
+Release artifacts are named by OS and CPU architecture:
+
+```text
+simple-vps-linux-amd64
+simple-vps-linux-arm64
+simple-vps-darwin-amd64
+simple-vps-darwin-arm64
+```
+
+See [docs/getting-started.md](docs/getting-started.md) for copy-paste install
+commands with checksum verification.
+
 ## Install A VPS
 
-Download the installer and let it pick the right release binary for the
-machine running the installer:
+`install.sh` is the host installer entrypoint. It finds, builds, or downloads a
+matching `simple-vps` binary, then runs `simple-vps host install`. It does not
+install the local CLI onto your laptop.
+
+Download the installer from the same release you are installing:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/fprl/simple-vps/main/install.sh \
+VERSION=v0.5.0-rc3
+curl -fsSL "https://raw.githubusercontent.com/fprl/simple-vps/$VERSION/install.sh" \
   -o install.sh
 chmod 0755 install.sh
 ```
@@ -56,12 +78,12 @@ and verifies the matching Linux helper binary for the target VPS. Set
 `SIMPLE_VPS_VERSION=vX.Y.Z` to pin a release.
 
 ```bash
-./install.sh \
+SIMPLE_VPS_VERSION="$VERSION" ./install.sh \
   --mode remote \
   --host <vps-ip> \
   --bootstrap-user root \
-  --ssh-key ~/.ssh/hetzner \
-  --operator-ssh-public-key-file ~/.ssh/hetzner.pub \
+  --ssh-key ~/.ssh/<root-key> \
+  --operator-ssh-public-key-file ~/.ssh/<root-key>.pub \
   --deploy-ssh-public-key-file ~/.ssh/simple-vps-deploy.pub \
   --ingress public \
   --admin public-ssh \
@@ -110,7 +132,6 @@ server = "deploy@example.com"
 [vars]
 LOG_LEVEL = "info"
 DATABASE_PATH = "/data/app.db"
-DATABASE_URL = "@secret:DATABASE_URL"
 
 [deploy]
 release = "bun run migrate"
@@ -205,6 +226,7 @@ scripts/release-smoke.sh --version v0.5.0-rc3 --host <ip>
 - [SPEC.md](SPEC.md)
 - [CHANGELOG.md](CHANGELOG.md)
 - [docs/positioning.md](docs/positioning.md)
+- [docs/getting-started.md](docs/getting-started.md)
 - [docs/security-model.md](docs/security-model.md)
 - [docs/release-checklist.md](docs/release-checklist.md)
 - [docs/smoke-real-box.md](docs/smoke-real-box.md)

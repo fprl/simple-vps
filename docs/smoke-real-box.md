@@ -1,5 +1,14 @@
 # Real-box smoke runbook
 
+For release-candidate validation, use the scripted smoke first:
+
+```sh
+scripts/release-smoke.sh --version v0.5.0-rc3 --host <IP>
+```
+
+This runbook is the lower-level debugging path when the scripted smoke fails
+or when you need to inspect the host between steps.
+
 The fake-VPS smoke (`make fake-vps-smoke`, `make fake-vps-install-smoke`)
 proves simple-vps's internal shape is consistent against fake Podman
 and fake Caddy. This runbook drives the same path against a real
