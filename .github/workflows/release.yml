@@ -1,0 +1,92 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22.x'
+      - name: Build release assets
+        run: make clean build-release VERSION="${GITHUB_REF_NAME}"
+      - name: Write release notes
+        run: |
+          notes=/tmp/release-notes.md
+          awk -v tag="${GITHUB_REF_NAME}" '
+            /^## / {
+              if (seen) {
+                exit
+              }
+              if ($2 == tag) {
+                seen = 1
+                next
+              }
+            }
+            seen {
+              print
+            }
+          ' CHANGELOG.md > "$notes"
+          if ! grep -q '[^[:space:]]' "$notes"; then
+            printf '%s\n' "${GITHUB_REF_NAME}" > "$notes"
+          fi
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          gh api "repos/$REPO/releases?per_page=100" > /tmp/releases.json
+          python3 - "$TAG" /tmp/releases.json <<'PY' > /tmp/stale-release-ids
+          import json
+          import sys
+
+          tag = sys.argv[1]
+          with open(sys.argv[2], "r", encoding="utf-8") as f:
+              releases = json.load(f)
+          for release in releases:
+              if release.get("tag_name") == tag and "/tag/untagged-" in release.get("html_url", ""):
+                  print(release["id"])
+          PY
+          while read -r release_id; do
+            if [[ -n "$release_id" ]]; then
+              gh api -X DELETE "repos/$REPO/releases/$release_id"
+            fi
+          done < /tmp/stale-release-ids
+
+          release_args=()
+          if [[ "$TAG" == *-* ]]; then
+            release_args+=(--prerelease)
+          else
+            release_args+=(--latest)
+          fi
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" \
+              --title "$TAG" \
+              --notes-file /tmp/release-notes.md \
+              "${release_args[@]}"
+          else
+            gh release create "$TAG" \
+              --title "$TAG" \
+              --notes-file /tmp/release-notes.md \
+              "${release_args[@]}"
+          fi
+
+          gh release upload "$TAG" \
+            dist/simple-vps-linux-amd64 \
+            dist/simple-vps-linux-arm64 \
+            dist/simple-vps-darwin-amd64 \
+            dist/simple-vps-darwin-arm64 \
+            dist/SHA256SUMS \
+            --clobber

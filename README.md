@@ -1,53 +1,30 @@
 # Simple VPS
 
-Simple VPS is one Go CLI for deploying containerized apps to a single hardened
-Ubuntu VPS. It is built for solo developers and small teams who want the host
-hardening, Caddy routing, Podman runtime, secrets, and deploy workflow handled
-without running a dashboard or control plane.
+Simple VPS is a tiny VPS runtime: point a repo at a Ubuntu box, get Dockerfile
+builds, Podman containers, Caddy TLS routing, secrets, backup/restore, and
+rollback without bringing Kubernetes or a hosted PaaS into the picture.
 
-```text
-fresh Ubuntu VPS  ->  install.sh         ->  hardened box
-your app repo     ->  simple-vps deploy  ->  live app
-```
+## Current Shape
 
-## What Ships Now
+- Ubuntu 24.04 host install/converge with one Go binary.
+- Podman container deploys from a required `Dockerfile`.
+- Static-only deploys with route-level `serve = "dist"`.
+- Mixed container/static deploys: a Dockerfile-backed process can share one
+  release with static route assets served directly by Caddy.
+- Explicit envs. Mutating commands require an env argument.
+- App/env host roots at `/var/apps/<app>.<env>/`.
+- Deterministic derived infra IDs for users, networks, containers, routes, and
+  locks.
+- Runtime env files under `runtime/.env`; durable app data under `data/`.
+- Secrets stored on the host and injected with `--env-file`.
+- Web deploys start the next versioned container, health-check it, reload Caddy,
+  then remove the old container.
+- Backups include `data/`, active static release assets, applied manifest
+  snapshots, and secrets.
+- Rollback restores an older local image/static release plus the manifest
+  snapshot that produced it.
 
-- Host install/converge for Ubuntu 24.04.
-- Caddy running in a container, with per-app route fragments.
-- Podman image builds on the VPS from your app's Dockerfile.
-- Static route assets served directly by Caddy, including mixed
-  container + static apps.
-- Per-env Linux users, directories, networks, and mutation locks.
-- Manifest env values and host-side `@secret:KEY` resolution.
-- `status`, `app list`, `logs`, `restart`, `rollback`, `backup/restore`,
-  `destroy`, and JSON read surfaces.
-- Fake-VPS smoke tests and a real Ubuntu 24.04 VPS smoke runbook.
-
-Not shipped yet: remote backup destinations (S3/restic) and portable encrypted
-secret bundles. See [SPEC.md](SPEC.md).
-
-## Start Here
-
-Build the Go CLI locally:
-
-```bash
-make build
-./dist/simple-vps --help
-./dist/simple-vps version
-```
-
-Try the local scaffold/check flow without touching this checkout:
-
-```bash
-demo=$(mktemp -d /tmp/simple-vps-demo-XXXXXX)
-cd "$demo"
-
-/path/to/simple-vps/dist/simple-vps init
-/path/to/simple-vps/dist/simple-vps check production
-cat simple-vps.toml
-```
-
-Run the main checks:
+## Quick Check
 
 ```bash
 make test
@@ -57,14 +34,14 @@ make fake-vps-install-smoke
 
 Example apps live under `examples/`:
 
-- `examples/hono-bun-api` — Dockerfile-backed Bun/Hono API.
-- `examples/astro-static` — static-only `dist/` deploy.
-- `examples/mixed-api-docs` — container API plus host-served `/docs`.
+- `examples/hono-bun-api` - Dockerfile-backed Bun/Hono API.
+- `examples/astro-static` - static-only `dist/` deploy.
+- `examples/mixed-api-docs` - container API plus host-served `/docs`.
 
 ## Install A VPS
 
 Download the installer and let it pick the right release binary for the
-current OS/architecture:
+machine running the installer:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/fprl/simple-vps/main/install.sh \
@@ -80,68 +57,52 @@ and verifies the matching Linux helper binary for the target VPS. Set
 ```bash
 ./install.sh \
   --mode remote \
-  --host 203.0.113.10 \
+  --host <vps-ip> \
   --bootstrap-user root \
-  --ssh-key ~/.ssh/id_ed25519 \
-  --operator-ssh-public-key-file ~/.ssh/id_ed25519.pub \
+  --ssh-key ~/.ssh/hetzner \
+  --operator-ssh-public-key-file ~/.ssh/hetzner.pub \
   --deploy-ssh-public-key-file ~/.ssh/simple-vps-deploy.pub \
   --ingress public \
   --admin public-ssh \
   --yes
 ```
 
-Litestream is opt-in host tooling, not part of the v1 app contract. Pass
-`--litestream` only if you want the pinned binary installed on the VPS.
-
 If the release assets are private, set `SIMPLE_VPS_RELEASE_TOKEN`, `GH_TOKEN`,
-or `GITHUB_TOKEN` before running the installer.
+or `GITHUB_TOKEN`. For local development, run `make build` first and the
+installer will use `dist/simple-vps` instead of downloading a release.
 
-The root `install.sh` is a thin bootstrap that finds, builds, or downloads a
-local `simple-vps` binary and then runs `simple-vps host install`. Override the
+To install from a source checkout instead of a release, run `make build`, pin a
 release with `SIMPLE_VPS_VERSION=vX.Y.Z`, or point at a custom binary with
 `SIMPLE_VPS_BINARY_URL`.
 
-After install, verify the host:
-
-```bash
-SIMPLE_VPS_SSH_KEY="$(cat ~/.ssh/simple-vps-deploy)" \
-SIMPLE_VPS_KNOWN_HOSTS="$(ssh-keyscan -t ed25519 -H 203.0.113.10 2>/dev/null)" \
-  ./dist/simple-vps host status --json --server deploy@203.0.113.10
-
-SIMPLE_VPS_SSH_KEY="$(cat ~/.ssh/simple-vps-deploy)" \
-SIMPLE_VPS_KNOWN_HOSTS="$(ssh-keyscan -t ed25519 -H 203.0.113.10 2>/dev/null)" \
-  ./dist/simple-vps host doctor --json --server deploy@203.0.113.10
-```
-
 ## Deploy An App
 
-In an app repo:
-
-```bash
-simple-vps init
-# edit simple-vps.toml: set [env.production].server and route host
-simple-vps check production
-
-simple-vps setup production
-simple-vps deploy production
-# or: simple-vps deploy production --rebuild
-simple-vps status --json production
-simple-vps rollback production
-simple-vps backup production
-simple-vps restore --from <backup-id> production
-simple-vps app list --json
-simple-vps logs production
-# if production was removed from local simple-vps.toml:
-simple-vps destroy production --app my-app --server deploy@example.com --confirm my-app
-```
-
-Each deploy stores a release manifest snapshot on the host. Rollback uses that
-snapshot, so old images/static assets come back with the route and process
-shape that produced them.
-
-Static routes use the same manifest:
+`simple-vps.toml`:
 
 ```toml
+name = "api"
+
+[env.production]
+server = "deploy@example.com"
+
+[vars]
+LOG_LEVEL = "info"
+DATABASE_PATH = "/data/app.db"
+DATABASE_URL = "@secret:DATABASE_URL"
+
+[deploy]
+release = "bun run migrate"
+
+[processes.web]
+command = "bun run src/server.ts"
+port = 3000
+health = "/health"
+resources = { memory = "512m", cpus = 0.5 }
+
+[processes.worker]
+command = "bun run worker"
+resources = { memory = "1g", cpus = 1 }
+
 [routes.app]
 host = "api.example.com"
 process = "web"
@@ -150,6 +111,28 @@ process = "web"
 host = "api.example.com"
 path = "/docs"
 serve = "docs-dist"
+
+[routes.old]
+host = "old.example.com"
+redirect = "https://api.example.com"
+
+[env.staging]
+server = "deploy@staging.example.com"
+
+[env.staging.vars]
+LOG_LEVEL = "debug"
+
+[env.staging.routes.app]
+host = "staging-api.example.com"
+```
+
+Then:
+
+```bash
+simple-vps check production
+simple-vps setup production
+simple-vps deploy production
+simple-vps status production
 ```
 
 The `serve` directory is uploaded into the same release as the container image,
@@ -172,7 +155,6 @@ Build all release binaries:
 ```bash
 make clean
 make build-release VERSION=v0.5.0-rc1
-(cd dist && shasum -a 256 simple-vps-* > SHA256SUMS)
 ```
 
 Artifacts land in `dist/`:
@@ -195,3 +177,9 @@ simple-vps-darwin-arm64
 - [docs/smoke-real-box-results.md](docs/smoke-real-box-results.md)
 - [docs/adr/0001-replace-ansible-with-bounded-go-provisioner.md](docs/adr/0001-replace-ansible-with-bounded-go-provisioner.md)
 - [docs/adr/0002-state-file-layout.md](docs/adr/0002-state-file-layout.md)
+- [docs/adr/0003-host-installation-and-access-presets.md](docs/adr/0003-host-installation-and-access-presets.md)
+- [docs/adr/0004-non-apt-release-artifact-verification.md](docs/adr/0004-non-apt-release-artifact-verification.md)
+- [docs/adr/0005-container-runtime-via-required-dockerfile.md](docs/adr/0005-container-runtime-via-required-dockerfile.md)
+- [docs/adr/0006-cuts-and-composability-commitments.md](docs/adr/0006-cuts-and-composability-commitments.md)
+- [docs/adr/0007-backup-restore-primitive.md](docs/adr/0007-backup-restore-primitive.md)
+- [docs/adr/0008-manifest-v2-env-root-and-runtime-identity.md](docs/adr/0008-manifest-v2-env-root-and-runtime-identity.md)

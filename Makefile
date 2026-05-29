@@ -1,4 +1,4 @@
-.PHONY: test go-test go-build go-vet shell-test fake-vps-smoke fake-vps-install-smoke build build-linux build-darwin build-release clean
+.PHONY: test go-test go-build go-vet shell-test fake-vps-smoke fake-vps-install-smoke build build-linux build-darwin checksum build-release clean
 
 GO ?= go
 DIST_DIR ?= dist
@@ -53,7 +53,10 @@ build-darwin:
 	CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 $(GO) build -trimpath -ldflags="-s -w $(VERSION_LDFLAGS)" -o $(DIST_DIR)/simple-vps-darwin-amd64 .
 	CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 $(GO) build -trimpath -ldflags="-s -w $(VERSION_LDFLAGS)" -o $(DIST_DIR)/simple-vps-darwin-arm64 .
 
-build-release: build-linux build-darwin
+checksum:
+	cd $(DIST_DIR) && if command -v sha256sum >/dev/null 2>&1; then sha256sum simple-vps-* > SHA256SUMS; else shasum -a 256 simple-vps-* > SHA256SUMS; fi
+
+build-release: build-linux build-darwin checksum
 
 clean:
 	rm -rf $(DIST_DIR)

@@ -11,7 +11,6 @@ make test
 make fake-vps-smoke
 make fake-vps-install-smoke
 make build-release VERSION=v0.5.0-rc1
-(cd dist && shasum -a 256 simple-vps-* > SHA256SUMS)
 ```
 
 ## Example Manifest Checks
@@ -81,16 +80,11 @@ Run against a freshly rebuilt Ubuntu 24.04 VPS.
 ```bash
 git tag -a v0.5.0-rc1 -m "v0.5.0-rc1"
 git push origin v0.5.0-rc1
-gh release create v0.5.0-rc1 \
-  --title "v0.5.0-rc1" \
-  --notes-file CHANGELOG.md \
-  dist/simple-vps-linux-amd64 \
-  dist/simple-vps-linux-arm64 \
-  dist/simple-vps-darwin-amd64 \
-  dist/simple-vps-darwin-arm64 \
-  dist/SHA256SUMS \
-  --prerelease
 ```
+
+The `Release` GitHub Actions workflow builds the release assets, generates
+`SHA256SUMS`, creates or updates the GitHub release, and uploads the assets with
+`--clobber`.
 
 After publishing, run the real VPS smoke again from a temp directory with
 `SIMPLE_VPS_VERSION=v0.5.0-rc1`.
