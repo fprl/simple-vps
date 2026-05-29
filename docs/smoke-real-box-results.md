@@ -1966,3 +1966,89 @@ app list --json -> {"apps":[]}
 Issue encountered: an earlier harness attempt wrote the smoke log inside the
 temporary app repository. `deploy` correctly rejected that dirty worktree.
 Rerunning with logs outside the app directory passed.
+
+## 2026-05-29 — `v0.5.0-rc3` Release Artifact Smoke
+
+VPS: Hetzner Ubuntu 24.04 at `128.140.3.159`.
+
+Purpose: verify the published `v0.5.0-rc3` release includes
+`simple-vps init` and can install, initialize, deploy, route, and destroy a
+fresh app without using the source checkout binary.
+
+Release asset check:
+
+- GitHub Release workflow completed successfully.
+- Release page contained all five assets:
+  - `SHA256SUMS`
+  - `simple-vps-darwin-amd64`
+  - `simple-vps-darwin-arm64`
+  - `simple-vps-linux-amd64`
+  - `simple-vps-linux-arm64`
+- Downloaded `simple-vps-darwin-arm64` through the GitHub Release Asset API and
+  verified it against `SHA256SUMS`.
+- `simple-vps version` printed `v0.5.0-rc3`.
+
+Host install was run from the published installer at tag `v0.5.0-rc3`:
+
+```sh
+SIMPLE_VPS_VERSION=v0.5.0-rc3 SIMPLE_VPS_RELEASE_TOKEN=<token> ./install.sh \
+  --mode remote \
+  --host 128.140.3.159 \
+  --bootstrap-user root \
+  --ssh-key ~/.ssh/hetzner \
+  --operator-ssh-public-key-file ~/.ssh/hetzner.pub \
+  --deploy-ssh-public-key-file ~/.ssh/simple-vps-deploy.pub \
+  --ingress public \
+  --admin public-ssh \
+  --yes
+```
+
+The installer downloaded:
+
+```text
+simple-vps-darwin-arm64
+simple-vps-linux-amd64
+```
+
+Then a fresh PHP app was generated and deployed from the release binary:
+
+```sh
+simple-vps init \
+  --template php \
+  --name init-php-rc3 \
+  --server deploy@128.140.3.159 \
+  --host init-php-rc3.128.140.3.159.nip.io \
+  --tls internal
+git init
+git add .
+git commit -m "init php rc3 smoke"
+simple-vps check --env production
+simple-vps setup --env production
+simple-vps deploy --env production
+curl -ksS --resolve init-php-rc3.128.140.3.159.nip.io:443:128.140.3.159 \
+  https://init-php-rc3.128.140.3.159.nip.io/health
+curl -ksS --resolve init-php-rc3.128.140.3.159.nip.io:443:128.140.3.159 \
+  https://init-php-rc3.128.140.3.159.nip.io/
+simple-vps destroy --env production --confirm init-php-rc3 --purge
+simple-vps app list --server deploy@128.140.3.159 --json
+```
+
+Result:
+
+```text
+Deployed init-php-rc3 (production) at c7f5c9d5067e
+/health -> ok
+/       -> {"app":"init-php-rc3","status":"running","database_path":"/data/app.sqlite"}
+Destroyed init-php-rc3 (production)
+app list --json -> {"apps":[]}
+```
+
+Issues encountered:
+
+- The installer downloads the local client binary into a temp dir and cleans it
+  up at exit. The smoke harness initially assumed `./simple-vps` would remain
+  beside `install.sh`; it does not. The app smoke then downloaded the published
+  client asset explicitly and verified its checksum.
+- Direct `github.com/.../releases/download/...` asset URLs returned `404` under
+  token auth for this private repo path. Downloading through the GitHub Release
+  Asset API with `Accept: application/octet-stream` worked.
