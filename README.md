@@ -182,7 +182,7 @@ Build all release binaries:
 
 ```bash
 make clean
-make build-release VERSION=v0.5.0-rc2
+make build-release VERSION=v0.5.0-rc3
 ```
 
 Artifacts land in `dist/`:
