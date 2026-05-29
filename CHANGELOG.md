@@ -6,6 +6,7 @@
 
 - Documented the `v0.5.0-rc1` release installer smoke and private-repo
   installer fetch path.
+- Added a primitive-freeze review brief for external feedback before DX work.
 
 ## v0.5.0-rc1 - 2026-05-29
 
