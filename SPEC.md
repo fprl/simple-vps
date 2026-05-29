@@ -70,7 +70,7 @@ simple-vps deploy <env> [--dirty] [--rebuild]         # build image or publish s
 simple-vps status <env> [--json]                      # runtime process table
 simple-vps app list [--server <ssh-target>] [--json]  # env identity + podman labels app/env list
 simple-vps restart <env> [process] [--json]           # bounce running processes in place (same image)
-simple-vps rollback <env> [release] [--json]          # run an older local image release
+simple-vps rollback <env> [release] [--json]          # run an older image or static release
 simple-vps backup [--to=<destination>] <env>          # local tar backup of data/static assets, manifest, secrets, release metadata
 simple-vps backup [--json] list <env>                 # list local backups
 simple-vps backup rm <env> <backup-id>                # remove one local backup
@@ -212,6 +212,10 @@ at the app repo root. The Dockerfile is the build contract; Node, Bun,
 Python, Ruby, Go, and other runtimes belong inside the image, not on the
 host. A static-only app can omit the Dockerfile and use route-level
 `serve = "dist"` entries.
+
+Mixed container plus static routes are intentionally out of v1. A manifest
+with both process routes and `serve` routes fails validation until deploy can
+snapshot image and static assets as one coherent release.
 
 Processes are long-running containers from the app image. Each process can
 override the Dockerfile `CMD` with `command`, expose one internal `port`,

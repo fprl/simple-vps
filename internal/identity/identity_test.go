@@ -30,6 +30,9 @@ func TestDataRuntimeStaticAndManifestPaths(t *testing.T) {
 	if got := IdentityFile("api", "production"); got != "/var/apps/api.production/simple-vps.json" {
 		t.Fatalf("IdentityFile = %q", got)
 	}
+	if got, want := CaddyFragmentFile("api", "production"), "/etc/caddy/conf.d/simple-vps-"+InfraID("api", "production")+".caddy"; got != want {
+		t.Fatalf("CaddyFragmentFile = %q, want %q", got, want)
+	}
 }
 
 func TestInfraIDIsDeterministicAndBounded(t *testing.T) {

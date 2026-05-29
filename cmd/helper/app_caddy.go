@@ -13,7 +13,7 @@ import (
 )
 
 func caddyfilePath(app, env string) string {
-	return fmt.Sprintf("/etc/caddy/conf.d/simple-vps-%s-%s.caddy", app, env)
+	return identity.CaddyFragmentFile(app, env)
 }
 
 func renderAppCaddyfile(app, env string, ctx *config.AppContext, release string) (string, error) {

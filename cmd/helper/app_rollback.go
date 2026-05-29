@@ -19,7 +19,7 @@ import (
 type appRollbackCmd struct {
 	App     string `arg:"" help:"App name."`
 	Env     string `arg:"" help:"Env name."`
-	Release string `arg:"" optional:"" help:"Release tag to run. Omitted = previous local image."`
+	Release string `arg:"" optional:"" help:"Release to run. Omitted = previous local release."`
 	JSON    bool   `name:"json" help:"Emit structured JSON instead of the text summary."`
 }
 
@@ -34,61 +34,22 @@ func (c appRollbackCmd) Run() error {
 }
 
 func (c appRollbackCmd) runLocked() {
-	containers, err := podmanPSContainers(c.App, c.Env)
-	if err != nil {
-		utils.Die(err.Error(), 1)
-	}
-	current, err := currentRelease(containersToProcesses(containers))
-	if err != nil {
-		utils.Die(err.Error(), 1)
-	}
-	images, err := podmanImages(c.App, c.Env)
-	if err != nil {
-		utils.Die(err.Error(), 1)
-	}
-	target, err := selectRollbackRelease(images, current, c.Release)
-	if err != nil {
-		utils.Die(err.Error(), 1)
-	}
 	app, cleanup, err := loadAppliedAppContext(c.App, c.Env)
 	if err != nil {
 		utils.Die(err.Error(), 1)
 	}
 	defer cleanup()
-	if app.Shape != config.ShapeContainer {
-		utils.Die(fmt.Sprintf("rollback currently supports container apps only (got shape %q)", app.Shape), 1)
+	var result rollbackPayload
+	switch app.Shape {
+	case config.ShapeContainer:
+		result, err = c.rollbackContainer(app)
+	case config.ShapeStatic:
+		result, err = c.rollbackStatic(app)
+	default:
+		err = fmt.Errorf("unsupported app shape %q", app.Shape)
 	}
-
-	userID, groupID, err := hostUserIDs(identity.SystemUser(c.App, c.Env))
 	if err != nil {
 		utils.Die(err.Error(), 1)
-	}
-	imageTag := identity.ImageTag(c.App, c.Env, target.Release)
-	for _, procName := range sortedKeys(app.Processes) {
-		proc := app.Processes[procName]
-		for _, old := range processContainers(containers, procName, target.Release) {
-			_, _ = utils.RunChecked("podman", []string{"rm", "-f", old}, "")
-		}
-		if err := startProcess(c.App, c.Env, procName, proc, imageTag, userID, groupID, target.Release); err != nil {
-			utils.Die(err.Error(), 1)
-		}
-	}
-	if err := writeAppCaddyfile(c.App, c.Env, app, target.Release); err != nil {
-		utils.Die(err.Error(), 1)
-	}
-	if _, err := utils.RunChecked("podman", []string{"exec", "caddy", "caddy", "validate", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"}, ""); err != nil {
-		utils.Die(fmt.Sprintf("caddy validate after rollback: %v", err), 1)
-	}
-	if _, err := utils.RunChecked("podman", []string{"exec", "caddy", "caddy", "reload", "--config", "/etc/caddy/Caddyfile"}, ""); err != nil {
-		utils.Die(fmt.Sprintf("caddy reload after rollback: %v", err), 1)
-	}
-
-	result := rollbackPayload{
-		App:       c.App,
-		Env:       c.Env,
-		Previous:  current,
-		Release:   target.Release,
-		Processes: processNames(app.Processes),
 	}
 	if c.JSON {
 		buf, err := json.MarshalIndent(result, "", "  ")
@@ -99,6 +60,103 @@ func (c appRollbackCmd) runLocked() {
 		return
 	}
 	fmt.Print(renderRollbackText(result))
+}
+
+func (c appRollbackCmd) rollbackContainer(app *config.AppContext) (rollbackPayload, error) {
+	containers, err := podmanPSContainers(c.App, c.Env)
+	if err != nil {
+		return rollbackPayload{}, err
+	}
+	current, err := currentRelease(containersToProcesses(containers))
+	if err != nil {
+		return rollbackPayload{}, err
+	}
+	images, err := podmanImages(c.App, c.Env)
+	if err != nil {
+		return rollbackPayload{}, err
+	}
+	target, err := selectRollbackRelease(images, current, c.Release)
+	if err != nil {
+		return rollbackPayload{}, err
+	}
+	userID, groupID, err := hostUserIDs(identity.SystemUser(c.App, c.Env))
+	if err != nil {
+		return rollbackPayload{}, err
+	}
+	imageTag := identity.ImageTag(c.App, c.Env, target.Release)
+	for _, procName := range sortedKeys(app.Processes) {
+		proc := app.Processes[procName]
+		for _, old := range processContainers(containers, procName, target.Release) {
+			_, _ = utils.RunChecked("podman", []string{"rm", "-f", old}, "")
+		}
+		if err := startProcess(c.App, c.Env, procName, proc, imageTag, userID, groupID, target.Release); err != nil {
+			return rollbackPayload{}, err
+		}
+	}
+	if err := writeAppCaddyfile(c.App, c.Env, app, target.Release); err != nil {
+		return rollbackPayload{}, err
+	}
+	if _, err := utils.RunChecked("podman", []string{"exec", "caddy", "caddy", "validate", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"}, ""); err != nil {
+		return rollbackPayload{}, fmt.Errorf("caddy validate after rollback: %v", err)
+	}
+	if _, err := utils.RunChecked("podman", []string{"exec", "caddy", "caddy", "reload", "--config", "/etc/caddy/Caddyfile"}, ""); err != nil {
+		return rollbackPayload{}, fmt.Errorf("caddy reload after rollback: %v", err)
+	}
+
+	return rollbackPayload{
+		App:       c.App,
+		Env:       c.Env,
+		Previous:  current,
+		Release:   target.Release,
+		Processes: processNames(app.Processes),
+	}, nil
+}
+
+func (c appRollbackCmd) rollbackStatic(app *config.AppContext) (rollbackPayload, error) {
+	current, err := currentStaticRelease(c.App, c.Env)
+	if err != nil {
+		return rollbackPayload{}, err
+	}
+	releases, err := staticReleases(c.App, c.Env)
+	if err != nil {
+		return rollbackPayload{}, err
+	}
+	target, err := selectRollbackRelease(releases, current, c.Release)
+	if err != nil {
+		return rollbackPayload{}, err
+	}
+
+	staticSnapshot, err := snapshotStaticCurrent(c.App, c.Env)
+	if err != nil {
+		return rollbackPayload{}, err
+	}
+	caddyPath := caddyfilePath(c.App, c.Env)
+	prevFragment, prevExisted, err := snapshotCaddyFragment(caddyPath)
+	if err != nil {
+		return rollbackPayload{}, fmt.Errorf("snapshot existing fragment: %v", err)
+	}
+	if err := activateStaticRelease(c.App, c.Env, target.Release); err != nil {
+		return rollbackPayload{}, err
+	}
+	if err := writeAppCaddyfile(c.App, c.Env, app, target.Release); err != nil {
+		_ = restoreStaticCurrent(c.App, c.Env, staticSnapshot)
+		_ = restoreCaddyFragment(caddyPath, prevFragment, prevExisted)
+		return rollbackPayload{}, err
+	}
+	if _, err := utils.RunChecked("podman", []string{"exec", "caddy", "caddy", "validate", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"}, ""); err != nil {
+		_ = restoreStaticCurrent(c.App, c.Env, staticSnapshot)
+		if restoreErr := restoreCaddyFragment(caddyPath, prevFragment, prevExisted); restoreErr != nil {
+			return rollbackPayload{}, fmt.Errorf("caddy validate rejected the rollback fragment AND restore failed (manual fix required at %s): %v (restore: %v)", caddyPath, err, restoreErr)
+		}
+		return rollbackPayload{}, fmt.Errorf("caddy validate after rollback: %v", err)
+	}
+	if _, err := utils.RunChecked("podman", []string{"exec", "caddy", "caddy", "reload", "--config", "/etc/caddy/Caddyfile"}, ""); err != nil {
+		_ = restoreStaticCurrent(c.App, c.Env, staticSnapshot)
+		_ = restoreCaddyFragment(caddyPath, prevFragment, prevExisted)
+		return rollbackPayload{}, fmt.Errorf("caddy reload after rollback: %v", err)
+	}
+
+	return rollbackPayload{App: c.App, Env: c.Env, Previous: current, Release: target.Release}, nil
 }
 
 type rollbackPayload struct {

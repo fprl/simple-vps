@@ -188,9 +188,14 @@ directly; nginx is not involved. Static backups include the active static
 release assets so restore can bring a static-only app back without
 containers.
 
-Mixed container plus static routes are useful, but may be deferred until
-the static release metadata is clean. The public shape already reserves
-`serve = "dist"` in the unified route namespace.
+Static rollback moves `static/current` back to a previous static release,
+validates Caddy, and reloads ingress.
+
+Mixed container plus static routes are useful, but are explicitly out of
+v1. A manifest with both process routes and `serve` routes is rejected
+until deploy can snapshot image and static assets as one coherent release.
+The public shape already reserves `serve = "dist"` in the unified route
+namespace.
 
 ## Consequences
 

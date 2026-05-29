@@ -11,10 +11,8 @@ import (
 )
 
 // Public CLI surface. The post-cutover lifecycle is minimal on
-// purpose; verbs that depended on the legacy systemd-unit /
-// releases/<sha> / per-app env file model are removed and will be
-// reintroduced against the new container/podman flow as that work
-// lands.
+// purpose; host mutation goes through the privileged helper and runtime
+// truth comes from manifest snapshots, identity files, and Podman labels.
 type cli struct {
 	Init     initCmd          `cmd:"" help:"Create a simple-vps.toml manifest and Dockerfile scaffold."`
 	Check    checkCmd         `cmd:"" help:"Validate an app manifest."`
@@ -22,7 +20,7 @@ type cli struct {
 	Deploy   deployCmd        `cmd:"" help:"Build the container image on the host and run the app's processes."`
 	Status   statusCmd        `cmd:"" help:"Show running processes for an environment."`
 	Restart  restartCmd       `cmd:"" help:"Restart processes for an environment (bounces in place; same image)."`
-	Rollback rollbackCmd      `cmd:"" help:"Run an older local image release for an environment."`
+	Rollback rollbackCmd      `cmd:"" help:"Run an older image or static release for an environment."`
 	Backup   backupCmd        `cmd:"" help:"Back up app data, manifest, and secrets."`
 	Restore  restoreCmd       `cmd:"" help:"Restore app data, manifest, and secrets from a backup."`
 	Destroy  destroyCmd       `cmd:"" help:"Destroy an app environment on the host."`
@@ -137,7 +135,7 @@ func (c restartCmd) Run() error {
 
 type rollbackCmd struct {
 	Env     string `arg:"" help:"Environment to roll back."`
-	Release string `arg:"" optional:"" help:"Release to run. Omitted = previous local image."`
+	Release string `arg:"" optional:"" help:"Release to run. Omitted = previous local release."`
 	JSON    bool   `name:"json" help:"Emit structured JSON instead of the text summary."`
 }
 

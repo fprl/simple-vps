@@ -109,3 +109,8 @@ func ManifestFile(app, env string) string {
 func IdentityFile(app, env string) string {
 	return EnvRoot(app, env) + "/simple-vps.json"
 }
+
+// CaddyFragmentFile is the generated ingress fragment for one `(app, env)`.
+func CaddyFragmentFile(app, env string) string {
+	return "/etc/caddy/conf.d/simple-vps-" + InfraID(app, env) + ".caddy"
+}

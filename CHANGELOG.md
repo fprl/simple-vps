@@ -6,7 +6,7 @@
 
 - Manifest v2 static-only deploys with `serve = "dist"` routes, host-side
   static releases, Caddy file serving, `app list` visibility, backup, destroy,
-  and restore coverage.
+  restore, and rollback coverage.
 - `[deploy].release` for deploy-time migration commands in container apps.
 - Flat env roots at `/var/apps/<app>.<env>/` with `data/`, `runtime/`, and
   `static/` directories plus a durable `simple-vps.json` identity anchor.
@@ -16,7 +16,8 @@
 - Public manifest shape now uses `[processes.*]`, `[vars]`,
   `[env.<name>.vars]`, route `process = "web"`, and `health = "/health"`.
 - Runtime identity now uses deterministic derived infra IDs for Linux users,
-  Podman networks, containers, and locks while keeping host paths readable.
+  Podman networks, containers, Caddy fragments, and locks while keeping host
+  paths readable.
 - Web process deploys start versioned containers, verify health, reload Caddy
   to the next container, then remove the old container.
 - Secrets are written with `simple-vps secret set`; runtime env files now live

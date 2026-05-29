@@ -1,0 +1,209 @@
+package helper
+
+import (
+	"fmt"
+	"os"
+	"os/exec"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/fprl/simple-vps/internal/config"
+	"github.com/fprl/simple-vps/internal/identity"
+	"github.com/fprl/simple-vps/internal/utils"
+)
+
+func podmanBuildArgs(app, env, imageTag, release, dockerfile, ctxDir string, rebuild bool) []string {
+	args := []string{"build"}
+	if rebuild {
+		args = append(args, "--no-cache", "--pull=always")
+	}
+	args = append(args,
+		"-t", imageTag,
+		"--label", "simple-vps.app="+app,
+		"--label", "simple-vps.env="+env,
+		"--label", "simple-vps.infra_id="+identity.InfraID(app, env),
+		"--label", "simple-vps.release="+release,
+		"-f", dockerfile,
+		ctxDir,
+	)
+	return args
+}
+
+// hostUserIDs looks up the uid:gid for the per-env Linux account. We
+// pass these numerically to podman so `--user` doesn't try to resolve
+// the name inside the container image.
+func hostUserIDs(name string) (string, string, error) {
+	uidOut, err := utils.RunChecked("id", []string{"-u", name}, "")
+	if err != nil {
+		return "", "", fmt.Errorf("looking up uid for %s: %v", name, err)
+	}
+	gidOut, err := utils.RunChecked("id", []string{"-g", name}, "")
+	if err != nil {
+		return "", "", fmt.Errorf("looking up gid for %s: %v", name, err)
+	}
+	uid := strings.TrimSpace(string(uidOut))
+	gid := strings.TrimSpace(string(gidOut))
+	if uid == "" || gid == "" {
+		return "", "", fmt.Errorf("empty id output for %s", name)
+	}
+	return uid, gid, nil
+}
+
+// buildPodmanRunArgs is the pure-function core of startProcess:
+// produces the `podman run` argv for one process. Extracted so it can
+// be unit-tested without shelling out.
+//
+// The initial hardening subset from ADR-0005 §7 is always present:
+// per-env Linux user, --cap-drop=ALL, --security-opt no-new-privileges,
+// --pids-limit, --read-only with a default 64 MiB tmpfs at /tmp.
+// No --publish: Caddy reaches the process over the shared `ingress`
+// network by container DNS. Manifest-declared memory and CPU limits
+// render to the closed set of runtime flags.
+func buildPodmanRunArgs(app, env, processName string, proc config.Process, imageTag, userID, groupID, release string, envFileExists bool) []string {
+	containerName := identity.ContainerName(app, env, processName, release)
+	dataDir := identity.DataDir(app, env)
+	appNet := identity.Network(app, env)
+	envFile := identity.EnvFile(app, env)
+
+	args := []string{
+		"run", "-d",
+		"--name", containerName,
+		"--restart", "unless-stopped",
+		"--user", userID + ":" + groupID,
+		"--cap-drop", "ALL",
+		"--security-opt", "no-new-privileges",
+		"--pids-limit", "512",
+		"--read-only",
+		// mode=1777 (sticky world-writable) so the per-env container
+		// user (--user above) can actually write here. Without it,
+		// the tmpfs is owned by root and the unprivileged container
+		// process fails with EACCES.
+		"--tmpfs", "/tmp:size=64m,mode=1777",
+		"--network", appNet,
+		"--network", "ingress",
+		"-v", dataDir + ":/data:Z",
+		"--label", "simple-vps.app=" + app,
+		"--label", "simple-vps.env=" + env,
+		"--label", "simple-vps.process=" + processName,
+		"--label", "simple-vps.infra_id=" + identity.InfraID(app, env),
+		"--label", "simple-vps.release=" + release,
+	}
+	if proc.Resources.Memory != nil {
+		args = append(args, "--memory", *proc.Resources.Memory)
+	}
+	if proc.Resources.CPUs != nil {
+		args = append(args, "--cpus", strconv.FormatFloat(*proc.Resources.CPUs, 'f', -1, 64))
+	}
+	if envFileExists {
+		args = append(args, "--env-file", envFile)
+	}
+	args = append(args, imageTag)
+	if proc.Command != "" {
+		// Override the image CMD via /bin/sh -c so users can write the
+		// command as a single string (ADR-0005 §13).
+		args = append(args, "/bin/sh", "-c", proc.Command)
+	}
+	return args
+}
+
+func startProcess(app, env, processName string, proc config.Process, imageTag, userID, groupID, release string) error {
+	containerName := identity.ContainerName(app, env, processName, release)
+	envFile := identity.EnvFile(app, env)
+
+	_, _ = utils.RunChecked("podman", []string{"rm", "-f", containerName}, "")
+
+	envFileExists := false
+	if _, err := os.Stat(envFile); err == nil {
+		envFileExists = true
+	}
+	args := buildPodmanRunArgs(app, env, processName, proc, imageTag, userID, groupID, release, envFileExists)
+
+	if _, err := utils.RunChecked("podman", args, ""); err != nil {
+		return fmt.Errorf("podman run %s: %v", containerName, err)
+	}
+
+	if proc.Port != nil && proc.Health != "" {
+		if err := waitHealthy(containerName, *proc.Port, proc.Health, 30*time.Second); err != nil {
+			// Surface logs on failure so the user can see why.
+			out, _ := exec.Command("podman", "logs", "--tail", "50", containerName).CombinedOutput()
+			os.Stderr.Write(out)
+			return fmt.Errorf("health check failed for %s: %v", processName, err)
+		}
+	}
+	return nil
+}
+
+// waitHealthy probes the app container's health path via Caddy on the
+// shared `ingress` network. The helper itself runs on the host and is
+// not a member of `ingress`, so it can't talk to the app container's
+// DNS name directly. The Caddy container is on `ingress` by design and
+// ships busybox `wget` — exec the probe inside it.
+func waitHealthy(containerName string, port int, path string, timeout time.Duration) error {
+	url := fmt.Sprintf("http://%s:%d%s", containerName, port, path)
+	deadline := time.Now().Add(timeout)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		cmd := exec.Command("podman", "exec", "caddy", "wget", "-q", "-O", "-", "--timeout=2", url)
+		out, err := cmd.CombinedOutput()
+		if err == nil {
+			return nil
+		}
+		detail := strings.TrimSpace(string(out))
+		if detail == "" {
+			detail = err.Error()
+		}
+		lastErr = fmt.Errorf("%s: %s", url, detail)
+		time.Sleep(500 * time.Millisecond)
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("timed out after %s", timeout)
+	}
+	return lastErr
+}
+
+func runReleaseCommand(app, env, command, imageTag, userID, groupID, release string) error {
+	name := identity.ContainerName(app, env, "release", release)
+	_, _ = utils.RunChecked("podman", []string{"rm", "-f", name}, "")
+	args := []string{
+		"run", "--rm",
+		"--name", name,
+		"--user", userID + ":" + groupID,
+		"--cap-drop", "ALL",
+		"--security-opt", "no-new-privileges",
+		"--pids-limit", "512",
+		"--network", identity.Network(app, env),
+		"-v", identity.DataDir(app, env) + ":/data:Z",
+		"--label", "simple-vps.app=" + app,
+		"--label", "simple-vps.env=" + env,
+		"--label", "simple-vps.process=release",
+		"--label", "simple-vps.infra_id=" + identity.InfraID(app, env),
+		"--label", "simple-vps.release=" + release,
+	}
+	if _, err := os.Stat(identity.EnvFile(app, env)); err == nil {
+		args = append(args, "--env-file", identity.EnvFile(app, env))
+	}
+	args = append(args, imageTag, "/bin/sh", "-c", command)
+	if _, err := utils.RunChecked("podman", args, ""); err != nil {
+		return fmt.Errorf("release command failed: %v", err)
+	}
+	return nil
+}
+
+func processContainers(entries []containerEntry, processName, excludeRelease string) []string {
+	var names []string
+	for _, e := range entries {
+		if e.Labels["simple-vps.process"] != processName {
+			continue
+		}
+		if excludeRelease != "" && e.Labels["simple-vps.release"] == excludeRelease {
+			continue
+		}
+		if len(e.Names) > 0 {
+			names = append(names, e.Names[0])
+		}
+	}
+	sort.Strings(names)
+	return names
+}

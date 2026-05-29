@@ -1,8 +1,11 @@
 package helper
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestCurrentReleaseRejectsEmptyOrMixedProcesses(t *testing.T) {
@@ -53,6 +56,31 @@ func TestSelectRollbackReleaseErrors(t *testing.T) {
 	_, err = selectRollbackRelease([]imageRelease{{Release: "new"}}, "new", "new")
 	if err == nil || !strings.Contains(err.Error(), "already running") {
 		t.Fatalf("expected already running error, got %v", err)
+	}
+}
+
+func TestStaticReleasesAtOrdersNewestFirst(t *testing.T) {
+	root := t.TempDir()
+	old := filepath.Join(root, "old")
+	new := filepath.Join(root, "new")
+	if err := os.Mkdir(old, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(new, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(old, time.Unix(100, 0), time.Unix(100, 0)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(new, time.Unix(200, 0), time.Unix(200, 0)); err != nil {
+		t.Fatal(err)
+	}
+	got, err := staticReleasesAt(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].Release != "new" || got[1].Release != "old" {
+		t.Fatalf("unexpected static release order: %+v", got)
 	}
 }
 

@@ -44,7 +44,7 @@ func TestContainerSmoke(t *testing.T) {
 	env.waitForSSH(t)
 
 	t.Run("container app reaches setup + deploy + caddy proxy", env.testContainerAppLifecycle)
-	t.Run("rollback runs an older local image release", env.testRollback)
+	t.Run("container rollback runs an older image release", env.testRollback)
 	t.Run("backup and restore round-trip app state", env.testBackupRestore)
 	t.Run("concurrent deploys of the same app env serialize", env.testConcurrentDeploys)
 	t.Run("static-only app deploys and restores without containers", env.testStaticOnlyAppLifecycle)
@@ -118,7 +118,7 @@ EOF`)
 
 	// 5. Caddy fragment should reverse-proxy via container DNS, not
 	// 127.0.0.1.
-	fragment := e.ssh(t, "cat /etc/caddy/conf.d/simple-vps-api-production.caddy")
+	fragment := e.ssh(t, "cat "+identity.CaddyFragmentFile("api", "production"))
 	assertContains(t, fragment, `"api.example.com" {`)
 	assertContains(t, fragment, "reverse_proxy http://"+webContainer+":3000")
 	if strings.Contains(fragment, "127.0.0.1") {
@@ -138,7 +138,7 @@ EOF`)
 	// fragment (no churn from non-deterministic upstreams or ports).
 	firstFragment := fragment
 	e.simpleVPS(t, app, nil, "deploy", "production")
-	secondFragment := e.ssh(t, "cat /etc/caddy/conf.d/simple-vps-api-production.caddy")
+	secondFragment := e.ssh(t, "cat "+identity.CaddyFragmentFile("api", "production"))
 	if firstFragment != secondFragment {
 		t.Fatalf("expected stable fragment across deploys, got:\nfirst:\n%s\nsecond:\n%s", firstFragment, secondFragment)
 	}
@@ -275,6 +275,7 @@ func (e *smokeEnv) testStaticOnlyAppLifecycle(t *testing.T) {
 	mustMkdir(t, app)
 	writeStaticFixture(t, app)
 	e.commitFixture(t, app)
+	oldRelease := gitRelease(t, e, app)
 
 	e.simpleVPS(t, app, nil, "setup", "production")
 	e.simpleVPS(t, app, nil, "deploy", "production")
@@ -306,6 +307,31 @@ func (e *smokeEnv) testStaticOnlyAppLifecycle(t *testing.T) {
 		t.Fatalf("app list --json missing static-only site env:\n%+v", listPayload.Apps)
 	}
 
+	e.assertRemoteBody(t, "curl -fsS -H 'Host: static.example.com' http://127.0.0.1/", "static-ok")
+
+	mustWrite(t, filepath.Join(app, "dist", "index.html"), "static-v2")
+	e.commitFixture(t, app)
+	newRelease := gitRelease(t, e, app)
+	if newRelease == oldRelease {
+		t.Fatal("expected static fixture commit to produce a new release")
+	}
+	e.simpleVPS(t, app, nil, "deploy", "production")
+	e.assertRemoteBody(t, "curl -fsS -H 'Host: static.example.com' http://127.0.0.1/", "static-v2")
+
+	rawRollback := e.simpleVPS(t, app, nil, "rollback", "--json", "production")
+	var rollback struct {
+		App       string   `json:"app"`
+		Env       string   `json:"env"`
+		Previous  string   `json:"previous"`
+		Release   string   `json:"release"`
+		Processes []string `json:"processes"`
+	}
+	if err := json.Unmarshal([]byte(rawRollback), &rollback); err != nil {
+		t.Fatalf("static rollback --json output not parseable as JSON: %v\nraw:\n%s", err, rawRollback)
+	}
+	if rollback.App != "site" || rollback.Env != "production" || rollback.Previous != newRelease || rollback.Release != oldRelease || len(rollback.Processes) != 0 {
+		t.Fatalf("unexpected static rollback payload: %+v", rollback)
+	}
 	e.assertRemoteBody(t, "curl -fsS -H 'Host: static.example.com' http://127.0.0.1/", "static-ok")
 
 	e.simpleVPS(t, app, nil, "backup", "production")
@@ -642,7 +668,7 @@ func (e *smokeEnv) testDestroy(t *testing.T) {
 
 	e.dockerExec(t, "test ! -e /run/fake-podman/containers/"+currentContainer+".labels")
 	e.dockerExec(t, "test ! -e /run/fake-podman/networks/"+identity.Network("api", "production"))
-	e.dockerExec(t, "test ! -e /etc/caddy/conf.d/simple-vps-api-production.caddy")
+	e.dockerExec(t, "test ! -e "+identity.CaddyFragmentFile("api", "production"))
 	e.dockerExec(t, "test ! -e "+identity.EnvRoot("api", "production"))
 	e.dockerExec(t, "test ! -e /etc/simple-vps/secrets/api/production")
 	e.dockerExec(t, "! getent passwd "+identity.SystemUser("api", "production")+" >/dev/null")

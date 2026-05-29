@@ -555,22 +555,6 @@ func processNamesFromStatuses(processes []processStatus) []string {
 	return out
 }
 
-func currentStaticRelease(app, env string) (string, error) {
-	current := filepath.Join(identity.StaticDir(app, env), "current")
-	target, err := os.Readlink(current)
-	if err != nil {
-		return "", fmt.Errorf("static current release not found; deploy before backup")
-	}
-	release := filepath.Base(target)
-	if release == "." || release == string(os.PathSeparator) || release == "" {
-		return "", fmt.Errorf("static current release target is invalid: %s", target)
-	}
-	if _, err := os.Stat(filepath.Join(identity.StaticDir(app, env), "releases", release)); err != nil {
-		return "", fmt.Errorf("static release %s not found: %v", release, err)
-	}
-	return release, nil
-}
-
 func ensureRestoreLayout(app, env string) error {
 	user := identity.SystemUser(app, env)
 	envRoot := identity.EnvRoot(app, env)
