@@ -6,6 +6,157 @@ live in [SPEC.md](../SPEC.md), [README.md](../README.md), and
 the exact commands tested at the time, including names that ADR-0008 later
 removed.
 
+## 2026-05-29 — current main real VPS primitive smoke
+
+- **Host:** `128.140.3.159`
+- **OS:** Hetzner Ubuntu 26.04 LTS, `x86_64`
+- **Commit tested:** `a57fa78`
+- **Version tested:** `v0.5.0-rc1-6-ga57fa78`
+- **Build:** `make clean build build-linux`
+- **Smoke root:** `/tmp/simple-vps-main-real-smoke-nYhG3m`
+- **DNS/TLS:** `nip.io` hostnames with `tls = "internal"` and curl
+  `--resolve ... -k`
+
+### Host converge
+
+Remote install was run with the current local client and Linux helper:
+
+```sh
+./dist/simple-vps host install \
+  --mode remote \
+  --host 128.140.3.159 \
+  --bootstrap-user root \
+  --ssh-key ~/.ssh/hetzner \
+  --operator-ssh-public-key-file ~/.ssh/hetzner.pub \
+  --deploy-ssh-public-key-file ~/.ssh/simple-vps-deploy.pub \
+  --timezone UTC \
+  --locale en_US.UTF-8 \
+  --ingress public \
+  --admin public-ssh \
+  --no-tailscale \
+  --no-cloudflare-tunnel \
+  --no-litestream \
+  --yes
+```
+
+Initial converge copied the current helper and reported:
+
+```text
+==> Apply 20260529T191749Z changed 1 operations
+==> Provisioning complete
+```
+
+After the smoke, the same install command was run again and reported:
+
+```text
+==> Apply 20260529T193817Z changed 0 operations
+==> Provisioning complete
+```
+
+Final host checks:
+
+- `host status --json` reported Caddy `active`, Podman `5.7.0`, and rsync
+  `3.4.1`.
+- `host doctor --json` returned `"healthy": true` with no findings.
+- `app list --server deploy@128.140.3.159 --json` returned `{"apps":[]}`.
+
+### App matrix
+
+1. `examples/hono-bun-api`
+
+   Temporary host: `hono-main.128.140.3.159.nip.io`.
+
+   Covered:
+
+   - `check --env production`
+   - `setup --env production`
+   - `secret set smoke_key --env production`
+   - `secret set throwaway_key --env production`
+   - `secret list --env production --json`
+   - `secret rm throwaway_key --env production`
+   - `deploy --env production`
+   - HTTPS `/health` -> `ok`
+   - HTTPS `/` -> JSON with `"version":"v1"` and
+     `"secret":"real-secret-v1"`
+   - `status --env production --json` showed `web` running in
+     `svps-1feb7330b1d6-web-931a3a75e1a1`
+   - `logs web --env production --tail 20`
+   - `restart web --env production`
+   - `backup create --env production --json`
+   - deploy v2 -> `"version":"v2"`
+   - `rollback --env production` -> `"version":"v1"`
+   - deploy v2 again
+   - `restore --from 20260529T193307Z-931a3a75e1a1 --env production`
+     -> `"version":"v1"`
+   - `backup rm 20260529T193307Z-931a3a75e1a1 --env production`
+
+2. `examples/astro-static`
+
+   Temporary host: `static-main.128.140.3.159.nip.io`.
+
+   Covered:
+
+   - static-only `check`, `setup`, and `deploy`
+   - HTTPS `/` -> `static-ok`
+   - deploy changed static bytes -> `static-v2`
+   - `rollback --env production` -> `static-ok`
+
+3. `examples/mixed-api-docs`
+
+   Temporary host: `mixed-main.128.140.3.159.nip.io`.
+
+   Covered:
+
+   - mixed container plus route-level `serve = "docs-dist"`
+   - HTTPS `/health` -> `ok`
+   - HTTPS `/docs` -> `docs-ok`
+   - HTTPS `/docs-v2` -> `api-ok`, proving `/docs` does not match the
+     sibling segment `/docs-v2`
+   - `backup create --env production --json`
+   - deploy changed static bytes -> `docs-v2-ok`
+   - `rollback --env production` -> `docs-ok`
+   - deploy v2 again
+   - `restore --from <mixed-backup-id> --env production` -> `docs-ok`
+   - `backup list --env production --json`
+   - `backup rm <mixed-backup-id> --env production`
+
+Before destroy, `app list --json` showed all three envs:
+
+```text
+astro-site production
+hono-api production
+mixed-app production
+```
+
+Then all three were destroyed with `--purge`. Final root cleanup showed:
+
+```text
+backups:
+containers:
+caddy
+apps-root:
+```
+
+### Issues found
+
+- The Hono example Dockerfile copied `bun.lock*`, but the example does not ship
+  a lockfile. The real Podman build would depend on wildcard behavior, so the
+  example was changed to copy only `package.json`.
+- The first temporary harness rewrite treated `@` as Perl interpolation and
+  generated `deploy.140.3.159` instead of `deploy@128.140.3.159`. No remote
+  app was created.
+- The second temporary harness wrote a command prefix into stdout before JSON,
+  which made `jq` fail on `secret list --json`. The partial env was destroyed.
+- The third temporary harness asserted `.secrets` instead of the real
+  `secret list --json` contract, `.keys`. The partial env was destroyed.
+- A stale backup tar from an older `mixreal` smoke existed on the disposable
+  VPS. It was removed directly as root after this smoke, and the final cleanup
+  snapshot had no backup tarballs.
+
+**Outcome:** pass. Current `main` deploys, serves, restarts, backs up, rolls
+back, restores, lists, destroys, and idempotently reconverges the real VPS
+using the frozen v1 CLI contract.
+
 ## 2026-05-29 — v0.5.0-rc1 release installer and mixed-route smoke
 
 - **Host:** `128.140.3.159`
