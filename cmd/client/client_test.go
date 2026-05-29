@@ -22,52 +22,6 @@ func writeClientDockerfile(t *testing.T, root string) {
 	}
 }
 
-func TestReadTargetServerUsesSingleManifestEnv(t *testing.T) {
-	root := t.TempDir()
-	writeClientDockerfile(t, root)
-	writeClientManifest(t, root, `
-name = "api"
-
-[env.staging]
-server = "deploy@100.x.y.z"
-
-[processes.web]
-port = 3000
-health = "/health"
-`)
-
-	server, err := readTargetServer(root, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if server != "deploy@100.x.y.z" {
-		t.Fatalf("unexpected server: %s", server)
-	}
-}
-
-func TestReadTargetServerRejectsMultipleManifestEnvs(t *testing.T) {
-	root := t.TempDir()
-	writeClientDockerfile(t, root)
-	writeClientManifest(t, root, `
-name = "api"
-
-[env.production]
-server = "deploy@100.x.y.z"
-
-[env.staging]
-server = "deploy@100.x.y.z"
-
-[processes.web]
-port = 3000
-health = "/health"
-`)
-
-	_, err := readTargetServer(root, "")
-	if err == nil || !strings.Contains(err.Error(), "exactly one env") {
-		t.Fatalf("expected exactly-one-env error, got %v", err)
-	}
-}
-
 func TestParseServerFlagRejectsSshOptions(t *testing.T) {
 	_, _, err := parseServerFlag([]string{"--server", "-oProxyCommand=sh"})
 	if err == nil || !strings.Contains(err.Error(), "SSH target") {
@@ -263,12 +217,17 @@ func TestServerAppBackupCommands(t *testing.T) {
 	}{
 		{
 			name: "create",
-			got:  serverAppBackupCommand("api", "production", ""),
+			got:  serverAppBackupCommand("api", "production", "", false),
 			want: "sudo simple-vps server app backup api production",
 		},
 		{
+			name: "create json",
+			got:  serverAppBackupCommand("api", "production", "", true),
+			want: "sudo simple-vps server app backup --json api production",
+		},
+		{
 			name: "create to",
-			got:  serverAppBackupCommand("api", "production", "/tmp/backups"),
+			got:  serverAppBackupCommand("api", "production", "/tmp/backups", false),
 			want: "sudo simple-vps server app backup --to /tmp/backups api production",
 		},
 		{

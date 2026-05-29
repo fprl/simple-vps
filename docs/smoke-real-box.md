@@ -163,7 +163,7 @@ cd /tmp/simple-vps-smoke-app
 
 SIMPLE_VPS_SSH_KEY="$(cat /tmp/simple-vps-smoke-keys/deploy)" \
 SIMPLE_VPS_KNOWN_HOSTS="$(ssh-keyscan -t ed25519 -H <IP> 2>/dev/null)" \
-  /path/to/simple-vps/dist/simple-vps setup production
+  /path/to/simple-vps/dist/simple-vps setup --env production
 
 # Verify on the box (over SSH as root):
 #   test -d /var/apps/hello.production/data
@@ -173,15 +173,15 @@ SIMPLE_VPS_KNOWN_HOSTS="$(ssh-keyscan -t ed25519 -H <IP> 2>/dev/null)" \
 printf 'smoke-secret-value' | \
 SIMPLE_VPS_SSH_KEY="$(cat /tmp/simple-vps-smoke-keys/deploy)" \
 SIMPLE_VPS_KNOWN_HOSTS="$(ssh-keyscan -t ed25519 -H <IP> 2>/dev/null)" \
-  /path/to/simple-vps/dist/simple-vps secret set production smoke_key
+  /path/to/simple-vps/dist/simple-vps secret set smoke_key --env production
 
 SIMPLE_VPS_SSH_KEY="$(cat /tmp/simple-vps-smoke-keys/deploy)" \
 SIMPLE_VPS_KNOWN_HOSTS="$(ssh-keyscan -t ed25519 -H <IP> 2>/dev/null)" \
-  /path/to/simple-vps/dist/simple-vps secret list --json production | jq .
+  /path/to/simple-vps/dist/simple-vps secret list --json --env production | jq .
 
 SIMPLE_VPS_SSH_KEY="$(cat /tmp/simple-vps-smoke-keys/deploy)" \
 SIMPLE_VPS_KNOWN_HOSTS="$(ssh-keyscan -t ed25519 -H <IP> 2>/dev/null)" \
-  /path/to/simple-vps/dist/simple-vps deploy production
+  /path/to/simple-vps/dist/simple-vps deploy --env production
 ```
 
 Expected last line: `Deployed hello (production) at <sha>`. If the
@@ -194,11 +194,11 @@ Verify the app read surface:
 ```sh
 SIMPLE_VPS_SSH_KEY="$(cat /tmp/simple-vps-smoke-keys/deploy)" \
 SIMPLE_VPS_KNOWN_HOSTS="$(ssh-keyscan -t ed25519 -H <IP> 2>/dev/null)" \
-  /path/to/simple-vps/dist/simple-vps status --json production | jq .
+  /path/to/simple-vps/dist/simple-vps status --json --env production | jq .
 
 SIMPLE_VPS_SSH_KEY="$(cat /tmp/simple-vps-smoke-keys/deploy)" \
 SIMPLE_VPS_KNOWN_HOSTS="$(ssh-keyscan -t ed25519 -H <IP> 2>/dev/null)" \
-  /path/to/simple-vps/dist/simple-vps logs production web | tail -20
+  /path/to/simple-vps/dist/simple-vps logs web --env production | tail -20
 ```
 
 The fixture sets `tls = "internal"`, so the Caddy fragment lands as:
@@ -255,11 +255,11 @@ If you're reusing the box, use the public teardown path:
 ```sh
 SIMPLE_VPS_SSH_KEY="$(cat /tmp/simple-vps-smoke-keys/deploy)" \
 SIMPLE_VPS_KNOWN_HOSTS="$(ssh-keyscan -t ed25519 -H <IP> 2>/dev/null)" \
-  /path/to/simple-vps/dist/simple-vps destroy production --confirm hello --purge
+  /path/to/simple-vps/dist/simple-vps destroy --env production --confirm hello --purge
 
 SIMPLE_VPS_SSH_KEY="$(cat /tmp/simple-vps-smoke-keys/deploy)" \
 SIMPLE_VPS_KNOWN_HOSTS="$(ssh-keyscan -t ed25519 -H <IP> 2>/dev/null)" \
-  /path/to/simple-vps/dist/simple-vps status --json production | jq .
+  /path/to/simple-vps/dist/simple-vps status --json --env production | jq .
 ```
 
 Expected destroy output names the removed container, removed route, and

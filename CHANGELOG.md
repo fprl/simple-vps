@@ -6,9 +6,11 @@
 
 - Documented the `v0.5.0-rc1` release installer smoke and private-repo
   installer fetch path.
-- Added a primitive-freeze review brief for external feedback before DX work.
-- Added the current public CLI surface and app-vs-env command model question to
-  the primitive-freeze review brief.
+- Replaced the temporary primitive-freeze review brief with ADR-0009, locking
+  the v1 CLI and primitive contract.
+- Public app commands now use required `--env`/`-e` flags instead of positional
+  env arguments, accept `--config` for monorepos, and expose explicit
+  `backup create/list/rm` subcommands.
 
 ## v0.5.0-rc1 - 2026-05-29
 

@@ -8,9 +8,9 @@ Before deploying, edit `simple-vps.toml`:
 - set both route hosts
 
 ```bash
-simple-vps check production
-simple-vps setup production
-simple-vps deploy production
+simple-vps check --env production
+simple-vps setup --env production
+simple-vps deploy --env production
 curl https://mixed.example.com/health
 curl https://mixed.example.com/docs
 ```

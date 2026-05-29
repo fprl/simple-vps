@@ -16,9 +16,9 @@ make build-release VERSION=v0.5.0-rc1
 ## Example Manifest Checks
 
 ```bash
-(cd examples/hono-bun-api && ../../dist/simple-vps check production)
-(cd examples/astro-static && ../../dist/simple-vps check production)
-(cd examples/mixed-api-docs && ../../dist/simple-vps check production)
+(cd examples/hono-bun-api && ../../dist/simple-vps check --env production)
+(cd examples/astro-static && ../../dist/simple-vps check --env production)
+(cd examples/mixed-api-docs && ../../dist/simple-vps check --env production)
 ```
 
 ## Real VPS Smoke
@@ -77,13 +77,13 @@ Run against a freshly rebuilt Ubuntu 24.04 VPS.
 4. For the mixed app, verify:
 
    ```bash
-   simple-vps deploy production
+   simple-vps deploy --env production
    curl -k --resolve <host>:443:<ip> https://<host>/health
    curl -k --resolve <host>:443:<ip> https://<host>/docs
-   simple-vps rollback production
-   simple-vps backup production
-   simple-vps restore --from <backup-id> production
-   simple-vps destroy production --confirm <app> --purge
+   simple-vps rollback --env production
+   simple-vps backup create --env production
+   simple-vps restore --from <backup-id> --env production
+   simple-vps destroy --env production --confirm <app> --purge
    simple-vps app list --json --server deploy@<ip>
    ```
 

@@ -219,6 +219,31 @@ func TestRenderAppCaddyfileStaticPathUsesHandlePath(t *testing.T) {
 	}
 }
 
+func TestRenderAppCaddyfileOrdersLongestPathFirst(t *testing.T) {
+	port := 3000
+	ctx := &config.AppContext{
+		Processes: map[string]config.Process{"web": {Port: &port}},
+		Routes: map[string]config.Route{
+			"root": {Host: "example.com", Process: "web"},
+			"docs": {Host: "example.com", Path: "/docs", Process: "web"},
+			"api":  {Host: "example.com", Path: "/docs/api", Process: "web"},
+		},
+	}
+	got, err := renderAppCaddyfile("api", "production", ctx, "abc123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	apiIdx := strings.Index(got, "handle /docs/api {")
+	docsIdx := strings.Index(got, "handle /docs {")
+	rootIdx := strings.Index(got, "\thandle {")
+	if apiIdx < 0 || docsIdx < 0 || rootIdx < 0 {
+		t.Fatalf("missing expected handle blocks:\n%s", got)
+	}
+	if !(apiIdx < docsIdx && docsIdx < rootIdx) {
+		t.Fatalf("expected longest paths before shorter paths:\n%s", got)
+	}
+}
+
 func TestRenderAppCaddyfileMixedRoutesUseOneRelease(t *testing.T) {
 	port := 3000
 	ctx := &config.AppContext{

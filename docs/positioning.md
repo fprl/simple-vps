@@ -131,7 +131,7 @@ Concretely:
 - `logs` does sensible structured tailing. Not "here, run
   `journalctl -u ...` yourself."
 - Error messages are actionable: `secret "db_url" not set for prod;
-  run \`simple-vps secret set prod db_url\``. Not `missing reference`.
+  run \`simple-vps secret set db_url --env prod\``. Not `missing reference`.
 - "We will fix that in the dashboard" is not an allowed answer during
   implementation review.
 

@@ -56,33 +56,35 @@ design, not feature creep into the current shape. See
 
 ## Public CLI
 
-The user-facing surface. `simple-vps --help` lists exactly the verbs
-under **Shipping today**. Anything under **Planned** is the durable
-contract this product is being built toward, but the binary does not
-implement it yet.
+The user-facing surface. `simple-vps --help` lists exactly these verbs.
+The CLI is repo-centric: app commands infer the app from `simple-vps.toml`.
+Env-scoped app commands require `--env` / `-e`; positional env aliases are
+not supported. App commands that read a manifest accept
+`--config path/to/simple-vps.toml`. Relative paths inside the manifest resolve
+relative to that manifest's directory.
 
 ### App lifecycle — shipping today
 
 ```bash
 simple-vps init                                       # scaffold simple-vps.toml + Dockerfile
-simple-vps check [env]                                # validate manifest
-simple-vps setup <env>                                # create per-env user, paths, Podman network
-simple-vps deploy <env> [--dirty] [--rebuild]         # build image or publish static assets, route via Caddy
-simple-vps status <env> [--json]                      # runtime process table
-simple-vps app list [--server <ssh-target>] [--json]  # env identity + podman labels app/env list
-simple-vps restart <env> [process] [--json]           # bounce running processes in place (same image)
-simple-vps rollback <env> [release] [--json]          # run an older image or static release
-simple-vps backup [--to=<destination>] <env>          # local tar backup of data/static assets, manifest, secrets, release metadata
-simple-vps backup [--json] list <env>                 # list local backups
-simple-vps backup rm <env> <backup-id>                # remove one local backup
-simple-vps restore --from=<backup-id> [--dry-run] <env> # restore local backup and run saved image
-simple-vps destroy <env> --confirm <app> [--purge]    # tear down one environment; --yes for automation
-simple-vps destroy <env> --app <app> --server <ssh-target> --confirm <app> [--purge] # destroy env removed from local TOML
-simple-vps logs <env> [process] [--follow] [--tail N] # podman logs against the labelled container
-simple-vps secret set <env> <KEY>                     # stdin-only write to /etc/simple-vps/secrets/<app>/<env>/<key>
-simple-vps secret list <env> [--json]                 # keys only, never values
-simple-vps secret rm <env> <KEY>                      # remove one key
-simple-vps ssh <env>                                  # SSH into the host
+simple-vps check [--env <env>]                        # validate manifest, all envs by default
+simple-vps setup --env <env>                          # create per-env user, paths, Podman network
+simple-vps deploy --env <env> [--dirty] [--rebuild]   # build image or publish static assets, route via Caddy
+simple-vps status --env <env> [--json]                # runtime process table
+simple-vps app list --server <ssh-target> [--json]    # env identity + podman labels app/env list
+simple-vps restart [process] --env <env>              # bounce running processes in place (same image)
+simple-vps rollback [release] --env <env>             # run an older image or static release
+simple-vps backup create --env <env> [--to <path>] [--json] # local tar backup of data/static assets, manifest, secrets, release metadata
+simple-vps backup list --env <env> [--json]           # list local backups
+simple-vps backup rm <backup-id> --env <env>          # remove one local backup
+simple-vps restore --from=<backup-id|path> --env <env> [--dry-run] # restore local backup and run saved image
+simple-vps destroy --env <env> --confirm <app> [--purge] # tear down one environment; --yes for automation
+simple-vps destroy --env <env> --app <app> --server <ssh-target> --confirm <app> [--purge] # destroy env removed from local TOML
+simple-vps logs [process] --env <env> [--follow] [--tail N] # podman logs against the labelled container
+simple-vps secret set <KEY> --env <env>               # stdin-only write to /etc/simple-vps/secrets/<app>/<env>/<key>
+simple-vps secret list --env <env> [--json]           # keys only, never values
+simple-vps secret rm <KEY> --env <env>                # remove one key
+simple-vps ssh --env <env>                            # SSH into the host
 ```
 
 `restart` uses `podman restart` — container config is preserved (same
@@ -121,12 +123,13 @@ bootstrap, one `restore`, app running again when the saved image is still
 available locally. The shipped destination driver is local filesystem
 (`file://` or a plain host path); S3/restic destination drivers and encrypted
 portable secret bundles remain future scope. See ADR-0007.
+ADR-0009 locks the current CLI grammar and primitive contract.
 
 ### Host operations — shipping today
 
 ```bash
-simple-vps host status [--server <ssh-target>] [--json]
-simple-vps host doctor [--server <ssh-target>] [--json]
+simple-vps host status --server <ssh-target> [--json]
+simple-vps host doctor --server <ssh-target> [--json]
 simple-vps host install [install options]
 simple-vps host install --ingress public|cloudflare|private
 simple-vps host install --admin public-ssh|tailscale
@@ -181,7 +184,7 @@ sudo simple-vps server app list [--json]
 sudo simple-vps server app status [--json] <app> <env>
 sudo simple-vps server app restart [--json] <app> <env> [process]
 sudo simple-vps server app rollback [--json] <app> <env> [release]
-sudo simple-vps server app backup [--to=<destination>] <app> <env>
+sudo simple-vps server app backup [--json] [--to=<destination>] <app> <env>
 sudo simple-vps server app backup [--json] list <app> <env>
 sudo simple-vps server app backup rm <app> <env> <backup-id>
 sudo simple-vps server app backup --from=<backup-id> [--dry-run] restore <app> <env>

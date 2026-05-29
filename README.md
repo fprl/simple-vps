@@ -129,10 +129,10 @@ host = "staging-api.example.com"
 Then:
 
 ```bash
-simple-vps check production
-simple-vps setup production
-simple-vps deploy production
-simple-vps status production
+simple-vps check --env production
+simple-vps setup --env production
+simple-vps deploy --env production
+simple-vps status --env production
 ```
 
 The `serve` directory is uploaded into the same release as the container image,
@@ -141,11 +141,17 @@ so rollback and restore move the web process and static files together.
 That works for static-only apps and for container apps that also proxy a
 process route.
 
+In monorepos, point commands at a manifest explicitly:
+
+```bash
+simple-vps deploy --config apps/api/simple-vps.toml --env production
+```
+
 Secrets are stored on the host and referenced from the manifest:
 
 ```bash
-printf '%s' "$DATABASE_URL" | simple-vps secret set production DATABASE_URL
-simple-vps secret list --json production
+printf '%s' "$DATABASE_URL" | simple-vps secret set DATABASE_URL --env production
+simple-vps secret list --json --env production
 ```
 
 ## Release Builds

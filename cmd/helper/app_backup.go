@@ -22,7 +22,7 @@ type appBackupCmd struct {
 	To     string   `name:"to" help:"Destination directory. Supports plain paths and file:// URLs."`
 	From   string   `name:"from" help:"Backup ID or path for restore. Supports plain paths and file:// URLs."`
 	Dir    string   `name:"dir" help:"Backup directory for ID lookup. Supports plain paths and file:// URLs."`
-	JSON   bool     `name:"json" help:"Emit structured JSON for list."`
+	JSON   bool     `name:"json" help:"Emit structured JSON for create and list."`
 	DryRun bool     `name:"dry-run" help:"Show what would be restored without writing."`
 }
 
@@ -43,6 +43,22 @@ func (c appBackupCmd) Run() error {
 			path, err := createBackup(app, env, c.To, time.Now().UTC())
 			if err != nil {
 				utils.Die(err.Error(), 1)
+			}
+			if c.JSON {
+				item, err := backupInfoForPath(path)
+				if err != nil {
+					utils.Die(err.Error(), 1)
+				}
+				buf, err := json.MarshalIndent(struct {
+					App    string     `json:"app"`
+					Env    string     `json:"env"`
+					Backup backupInfo `json:"backup"`
+				}{App: app, Env: env, Backup: item}, "", "  ")
+				if err != nil {
+					utils.Die(err.Error(), 1)
+				}
+				fmt.Println(string(buf))
+				return
 			}
 			fmt.Printf("Created backup %s\n", path)
 		})
@@ -599,14 +615,28 @@ func listBackups(app, env, dir string) ([]backupInfo, error) {
 			return nil, err
 		}
 		item := backupInfo{ID: strings.TrimSuffix(entry.Name(), ".tar"), Path: path, Size: info.Size()}
-		if payload, err := readBackupMetadata(path); err == nil {
-			item.CreatedAt = payload.CreatedAt
-			item.Release = payload.Release
-		}
+		addBackupMetadata(path, &item)
 		out = append(out, item)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID > out[j].ID })
 	return out, nil
+}
+
+func backupInfoForPath(path string) (backupInfo, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return backupInfo{}, err
+	}
+	item := backupInfo{ID: strings.TrimSuffix(filepath.Base(path), ".tar"), Path: path, Size: info.Size()}
+	addBackupMetadata(path, &item)
+	return item, nil
+}
+
+func addBackupMetadata(path string, item *backupInfo) {
+	if payload, err := readBackupMetadata(path); err == nil {
+		item.CreatedAt = payload.CreatedAt
+		item.Release = payload.Release
+	}
 }
 
 func readBackupMetadata(path string) (backupMetadata, error) {

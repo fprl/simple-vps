@@ -292,8 +292,11 @@ func serverAppRollbackCommand(appName, envName, release string, jsonFlag bool) s
 	return serverCommand(args...)
 }
 
-func serverAppBackupCommand(appName, envName, dest string) string {
+func serverAppBackupCommand(appName, envName, dest string, jsonFlag bool) string {
 	args := []string{"app", "backup"}
+	if jsonFlag {
+		args = append(args, "--json")
+	}
 	if dest != "" {
 		args = append(args, "--to", dest)
 	}
@@ -386,30 +389,6 @@ func parseHostFlags(args []string) (hostFlags, error) {
 	return flags, nil
 }
 
-func readTargetServer(root string, explicitServer string) (string, error) {
-	if explicitServer != "" {
-		return explicitServer, nil
-	}
-	manifest, err := config.ReadManifest(root)
-	if err != nil {
-		return "", err
-	}
-	checkErrors, _, err := config.CheckManifest(root, "")
-	if err != nil {
-		return "", err
-	}
-	if len(checkErrors) > 0 {
-		return "", fmt.Errorf("%s", strings.Join(checkErrors, "\n"))
-	}
-	if len(manifest.Env) != 1 {
-		return "", errors.New("command requires exactly one env in simple-vps.toml")
-	}
-	for _, env := range manifest.Env {
-		return env.Server, nil
-	}
-	return "", errors.New("at least one [env.<name>] block is required")
-}
-
 // CmdInit scaffolds a default Dockerfile + container-shaped manifest.
 func CmdInit(root string) {
 	manifestPath := filepath.Join(root, ManifestFile)
@@ -471,8 +450,8 @@ process = "web"
 	}
 	fmt.Println("Next:")
 	fmt.Printf("1. edit %s and Dockerfile\n", ManifestFile)
-	fmt.Println("2. simple-vps setup production")
-	fmt.Println("3. simple-vps deploy production")
+	fmt.Println("2. simple-vps setup --env production")
+	fmt.Println("3. simple-vps deploy --env production")
 }
 
 func defaultAppName(root string) string {
@@ -610,10 +589,12 @@ func CmdStatus(root string, envName string, jsonFlag bool) {
 	fmt.Print(out)
 }
 
-func CmdAppList(root string, explicitServer string, jsonFlag bool) {
-	server, err := readTargetServer(root, explicitServer)
-	if err != nil {
-		utils.Die(err.Error(), 1)
+func CmdAppList(server string, jsonFlag bool) {
+	if server == "" {
+		utils.Die("--server is required", 1)
+	}
+	if !config.ValidateSshTarget(server) {
+		utils.Die("--server must be an SSH target like deploy@example.com", 1)
 	}
 	runner, err := NewCommandRunner()
 	if err != nil {
@@ -625,7 +606,7 @@ func CmdAppList(root string, explicitServer string, jsonFlag bool) {
 	fmt.Print(out)
 }
 
-func CmdRestart(root string, envName string, process string, jsonFlag bool) {
+func CmdRestart(root string, envName string, process string) {
 	ctx, err := config.LoadAppContext(root, envName)
 	if err != nil {
 		utils.Die(err.Error(), 1)
@@ -636,14 +617,13 @@ func CmdRestart(root string, envName string, process string, jsonFlag bool) {
 	}
 	defer runner.Close()
 
-	// Restart shares status's plumbing: helper does the work, prints
-	// the summary, we pipe its output through unchanged so `--json`
-	// is pipeable and the text mode keeps its line breaks.
-	out := runSSHChecked(runner, ctx.Server, serverAppRestartCommand(ctx.AppName, envName, process, jsonFlag), "restart failed")
+	// Restart shares status's plumbing: helper does the work and prints
+	// the summary, so pass its text output through unchanged.
+	out := runSSHChecked(runner, ctx.Server, serverAppRestartCommand(ctx.AppName, envName, process, false), "restart failed")
 	fmt.Print(out)
 }
 
-func CmdRollback(root string, envName string, release string, jsonFlag bool) {
+func CmdRollback(root string, envName string, release string) {
 	ctx, err := config.LoadAppContext(root, envName)
 	if err != nil {
 		utils.Die(err.Error(), 1)
@@ -654,11 +634,11 @@ func CmdRollback(root string, envName string, release string, jsonFlag bool) {
 	}
 	defer runner.Close()
 
-	out := runSSHChecked(runner, ctx.Server, serverAppRollbackCommand(ctx.AppName, envName, release, jsonFlag), "rollback failed")
+	out := runSSHChecked(runner, ctx.Server, serverAppRollbackCommand(ctx.AppName, envName, release, false), "rollback failed")
 	fmt.Print(out)
 }
 
-func CmdBackup(root string, envName string, dest string) {
+func CmdBackup(root string, envName string, dest string, jsonFlag bool) {
 	ctx, err := config.LoadAppContext(root, envName)
 	if err != nil {
 		utils.Die(err.Error(), 1)
@@ -669,7 +649,7 @@ func CmdBackup(root string, envName string, dest string) {
 	}
 	defer runner.Close()
 
-	out := runSSHChecked(runner, ctx.Server, serverAppBackupCommand(ctx.AppName, envName, dest), "backup failed")
+	out := runSSHChecked(runner, ctx.Server, serverAppBackupCommand(ctx.AppName, envName, dest, jsonFlag), "backup failed")
 	fmt.Print(out)
 }
 
@@ -846,7 +826,7 @@ func CmdSecretSet(root string, envName string, key string) {
 	}
 	// Don't echo stdout — it'd carry the helper's confirmation
 	// (which already names the key but not the value). Print our own.
-	fmt.Printf("Stored secret %s for %s (%s). Run `simple-vps deploy %s` to apply.\n", key, ctx.AppName, envName, envName)
+	fmt.Printf("Stored secret %s for %s (%s). Run `simple-vps deploy --env %s` to apply.\n", key, ctx.AppName, envName, envName)
 }
 
 func CmdSecretList(root string, envName string, jsonFlag bool) {
@@ -921,9 +901,12 @@ func CmdHost(args []string) {
 		utils.Die("host requires subcommand: status, doctor", 1)
 	}
 
-	server, err := readTargetServer(".", flags.server)
-	if err != nil {
-		utils.Die(err.Error(), 1)
+	server := flags.server
+	if server == "" {
+		utils.Die("--server is required", 1)
+	}
+	if !config.ValidateSshTarget(server) {
+		utils.Die("--server must be an SSH target like deploy@example.com", 1)
 	}
 
 	runner, err := NewCommandRunner()

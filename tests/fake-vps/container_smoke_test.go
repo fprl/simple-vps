@@ -16,10 +16,10 @@ import (
 // TestContainerSmoke exercises the new container-deploy lifecycle (ADR-0005
 // + ADR-0006 Cut 2) end-to-end against the fake-vps fixture:
 //
-//   - `simple-vps setup production` calls `server app setup-env`, which
+//   - `simple-vps setup --env production` calls `server app setup-env`, which
 //     creates the per-env Linux user, on-disk layout under
 //     /var/apps/<app>.<env>/, and the per-(app, env) Podman network.
-//   - `simple-vps deploy production` tars the working tree, uploads the
+//   - `simple-vps deploy --env production` tars the working tree, uploads the
 //     manifest, calls `server app apply`, which runs `podman build` +
 //     `podman run` (§7 hardening subset) without any host-port
 //     publish — the app container joins both the per-(app, env) network
@@ -79,7 +79,7 @@ EOF`)
 	e.dockerExec(t, "podman run -d --name caddy --network ingress --publish 80:80 -v /etc/caddy:/etc/caddy:Z docker.io/library/caddy:2-alpine")
 
 	// 1. Setup creates the per-env user, paths, and per-(app, env) network.
-	e.simpleVPS(t, app, nil, "setup", "production")
+	e.simpleVPS(t, app, nil, "setup", "--env", "production")
 
 	e.ssh(t, "getent passwd "+identity.SystemUser("api", "production")+" >/dev/null")
 	e.ssh(t, "test -d "+identity.DataDir("api", "production"))
@@ -92,7 +92,7 @@ EOF`)
 	}
 
 	// 2. Deploy on a clean tree.
-	e.simpleVPS(t, app, nil, "deploy", "production")
+	e.simpleVPS(t, app, nil, "deploy", "--env", "production")
 	release := gitRelease(t, e, app)
 	webContainer := identity.ContainerName("api", "production", "web", release)
 	releaseManifest := e.ssh(t, "cat "+identity.ReleaseManifestFile("api", "production", release))
@@ -146,7 +146,7 @@ EOF`)
 	// 8. A second deploy on the same source must produce a byte-identical
 	// fragment (no churn from non-deterministic upstreams or ports).
 	firstFragment := fragment
-	e.simpleVPS(t, app, nil, "deploy", "production")
+	e.simpleVPS(t, app, nil, "deploy", "--env", "production")
 	secondFragment := e.ssh(t, "cat "+identity.CaddyFragmentFile("api", "production"))
 	if firstFragment != secondFragment {
 		t.Fatalf("expected stable fragment across deploys, got:\nfirst:\n%s\nsecond:\n%s", firstFragment, secondFragment)
@@ -154,7 +154,7 @@ EOF`)
 
 	// 9. Explicit rebuild refreshes mutable base images and bypasses
 	// Podman's build cache.
-	e.simpleVPS(t, app, nil, "deploy", "production", "--rebuild")
+	e.simpleVPS(t, app, nil, "deploy", "--env", "production", "--rebuild")
 	commandsLog = e.ssh(t, "cat /run/fake-podman/commands.log")
 	assertContains(t, commandsLog, "podman build --no-cache --pull=always")
 }
@@ -163,8 +163,20 @@ func (e *smokeEnv) testBackupRestore(t *testing.T) {
 	app := filepath.Join(e.tmp, "container-api")
 	e.dockerExec(t, "printf 'durable-state' > "+identity.DataDir("api", "production")+"/data.txt")
 
-	e.simpleVPS(t, app, nil, "backup", "production")
-	rawList := e.simpleVPS(t, app, nil, "backup", "--json", "list", "production")
+	rawCreate := e.simpleVPS(t, app, nil, "backup", "create", "--json", "--env", "production")
+	var created struct {
+		Backup struct {
+			ID      string `json:"id"`
+			Release string `json:"release"`
+		} `json:"backup"`
+	}
+	if err := json.Unmarshal([]byte(rawCreate), &created); err != nil {
+		t.Fatalf("backup create --json output not parseable as JSON: %v\nraw:\n%s", err, rawCreate)
+	}
+	if created.Backup.ID == "" {
+		t.Fatalf("expected created backup id, got %+v", created.Backup)
+	}
+	rawList := e.simpleVPS(t, app, nil, "backup", "list", "--json", "--env", "production")
 	var list struct {
 		Backups []struct {
 			ID      string `json:"id"`
@@ -177,8 +189,8 @@ func (e *smokeEnv) testBackupRestore(t *testing.T) {
 	if len(list.Backups) == 0 || list.Backups[0].ID == "" {
 		t.Fatalf("expected at least one backup, got %+v", list.Backups)
 	}
-	backupID := list.Backups[0].ID
-	backupRelease := list.Backups[0].Release
+	backupID := created.Backup.ID
+	backupRelease := created.Backup.Release
 
 	mustWrite(t, filepath.Join(app, "README.md"), "post-backup release\n")
 	e.commitFixture(t, app)
@@ -186,21 +198,21 @@ func (e *smokeEnv) testBackupRestore(t *testing.T) {
 	if newRelease == backupRelease {
 		t.Fatal("expected fixture commit to produce a new release")
 	}
-	e.simpleVPS(t, app, nil, "deploy", "production")
+	e.simpleVPS(t, app, nil, "deploy", "--env", "production")
 	newContainer := identity.ContainerName("api", "production", "web", newRelease)
 	e.dockerExec(t, "test -f /run/fake-podman/containers/"+newContainer+".labels")
 
-	e.simpleVPS(t, app, nil, "restore", "--from", backupID, "production")
+	e.simpleVPS(t, app, nil, "restore", "--from", backupID, "--env", "production")
 	e.dockerExec(t, "test ! -f /run/fake-podman/containers/"+newContainer+".labels")
-	statusJSON := e.simpleVPS(t, app, nil, "status", "--json", "production")
+	statusJSON := e.simpleVPS(t, app, nil, "status", "--json", "--env", "production")
 	assertContains(t, statusJSON, `"release": "`+backupRelease+`"`)
 
-	e.simpleVPS(t, app, nil, "destroy", "production", "--yes")
+	e.simpleVPS(t, app, nil, "destroy", "--env", "production", "--yes")
 	if exists := e.run(t, e.repoRoot, nil, "docker", "exec", e.container, "bash", "-c", "test -e "+identity.DataDir("api", "production")+"/data.txt"); exists.err == nil {
 		t.Fatal("destroy should remove data before restore")
 	}
 
-	e.simpleVPS(t, app, nil, "restore", "--from", backupID, "production")
+	e.simpleVPS(t, app, nil, "restore", "--from", backupID, "--env", "production")
 	got := strings.TrimSpace(e.dockerExec(t, "cat "+identity.DataDir("api", "production")+"/data.txt"))
 	if got != "durable-state" {
 		t.Fatalf("restored data = %q, want durable-state", got)
@@ -213,7 +225,7 @@ func (e *smokeEnv) testBackupRestore(t *testing.T) {
 	if dataStat != "2775 "+identity.SystemUser("api", "production") {
 		t.Fatalf("restored data ownership = %q, want `2775 %s`", dataStat, identity.SystemUser("api", "production"))
 	}
-	status := e.simpleVPS(t, app, nil, "status", "production")
+	status := e.simpleVPS(t, app, nil, "status", "--env", "production")
 	assertContains(t, status, "web")
 	assertContains(t, status, "running")
 	e.assertRemoteBody(t, "curl -fsS -H 'Host: api.example.com' http://127.0.0.1/health", "ok")
@@ -239,29 +251,15 @@ func (e *smokeEnv) testRollback(t *testing.T) {
 	if newRelease == oldRelease {
 		t.Fatal("expected fixture commit to produce a new release")
 	}
-	e.simpleVPS(t, app, nil, "deploy", "production")
+	e.simpleVPS(t, app, nil, "deploy", "--env", "production")
 	newFragment := e.ssh(t, "cat "+identity.CaddyFragmentFile("api", "production"))
 	assertContains(t, newFragment, ":"+"3333")
 
-	rawJSON := e.simpleVPS(t, app, nil, "rollback", "--json", "production")
-	var payload struct {
-		App       string   `json:"app"`
-		Env       string   `json:"env"`
-		Previous  string   `json:"previous"`
-		Release   string   `json:"release"`
-		Processes []string `json:"processes"`
-	}
-	if err := json.Unmarshal([]byte(rawJSON), &payload); err != nil {
-		t.Fatalf("rollback --json output not parseable as JSON: %v\nraw:\n%s", err, rawJSON)
-	}
-	if payload.App != "api" || payload.Env != "production" || payload.Previous != newRelease || payload.Release != oldRelease {
-		t.Fatalf("unexpected rollback payload: %+v", payload)
-	}
-	if len(payload.Processes) != 1 || payload.Processes[0] != "web" {
-		t.Fatalf("expected rollback to restart web process, got %+v", payload.Processes)
-	}
+	rollbackText := e.simpleVPS(t, app, nil, "rollback", "--env", "production")
+	assertContains(t, rollbackText, "Rolled back api (production) from "+newRelease+" to "+oldRelease)
+	assertContains(t, rollbackText, "web")
 
-	statusJSON := e.simpleVPS(t, app, nil, "status", "--json", "production")
+	statusJSON := e.simpleVPS(t, app, nil, "status", "--json", "--env", "production")
 	var status struct {
 		Processes []struct {
 			Process string `json:"process"`
@@ -295,7 +293,7 @@ func (e *smokeEnv) testConcurrentDeploys(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-start
-			results <- e.runSimpleVPS(t, app, nil, "deploy", "production")
+			results <- e.runSimpleVPS(t, app, nil, "deploy", "--env", "production")
 		}()
 	}
 	close(start)
@@ -309,7 +307,7 @@ func (e *smokeEnv) testConcurrentDeploys(t *testing.T) {
 		assertContains(t, result.stdout, "Deployed api (production)")
 	}
 
-	status := e.simpleVPS(t, app, nil, "status", "production")
+	status := e.simpleVPS(t, app, nil, "status", "--env", "production")
 	assertContains(t, status, "web")
 	assertContains(t, status, "running")
 }
@@ -320,8 +318,8 @@ func (e *smokeEnv) testRemovedProcessReconciliation(t *testing.T) {
 	writePruneFixture(t, app)
 	e.commitFixture(t, app)
 
-	e.simpleVPS(t, app, nil, "setup", "production")
-	e.simpleVPS(t, app, nil, "deploy", "production")
+	e.simpleVPS(t, app, nil, "setup", "--env", "production")
+	e.simpleVPS(t, app, nil, "deploy", "--env", "production")
 	oldRelease := gitRelease(t, e, app)
 	oldWorker := identity.ContainerName("prune", "production", "worker", oldRelease)
 	e.dockerExec(t, "test -f /run/fake-podman/containers/"+oldWorker+".labels")
@@ -341,10 +339,10 @@ command = "sleep 3600"
 	mustWrite(t, manifestPath, nextManifest)
 	mustWrite(t, filepath.Join(app, "README.md"), "worker removed\n")
 	e.commitFixture(t, app)
-	e.simpleVPS(t, app, nil, "deploy", "production")
+	e.simpleVPS(t, app, nil, "deploy", "--env", "production")
 
 	e.dockerExec(t, "test ! -f /run/fake-podman/containers/"+oldWorker+".labels")
-	statusJSON := e.simpleVPS(t, app, nil, "status", "--json", "production")
+	statusJSON := e.simpleVPS(t, app, nil, "status", "--json", "--env", "production")
 	if strings.Contains(statusJSON, `"process": "worker"`) {
 		t.Fatalf("removed worker still appears in status:\n%s", statusJSON)
 	}
@@ -356,17 +354,17 @@ func (e *smokeEnv) testStaticOnlyAppLifecycle(t *testing.T) {
 	writeStaticFixture(t, app)
 	e.commitFixture(t, app)
 
-	e.simpleVPS(t, app, nil, "setup", "production")
-	e.simpleVPS(t, app, nil, "deploy", "production")
+	e.simpleVPS(t, app, nil, "setup", "--env", "production")
+	e.simpleVPS(t, app, nil, "deploy", "--env", "production")
 	oldRelease := currentStaticReleaseFor(t, e, "site", "production")
 	staticReleaseManifest := e.ssh(t, "cat "+identity.ReleaseManifestFile("site", "production", oldRelease))
 	assertContains(t, staticReleaseManifest, `serve = "dist"`)
 
-	status := e.simpleVPS(t, app, nil, "status", "production")
+	status := e.simpleVPS(t, app, nil, "status", "--env", "production")
 	assertContains(t, status, "site (production)")
 	assertContains(t, status, "no processes running")
 
-	rawListJSON := e.simpleVPS(t, app, nil, "app", "list", "--json")
+	rawListJSON := e.simpleVPS(t, app, nil, "app", "list", "--server", "fake-vps", "--json")
 	var listPayload struct {
 		Apps []struct {
 			App       string `json:"app"`
@@ -393,31 +391,19 @@ func (e *smokeEnv) testStaticOnlyAppLifecycle(t *testing.T) {
 
 	mustWrite(t, filepath.Join(app, "dist", "index.html"), "static-v2")
 	e.commitFixture(t, app)
-	e.simpleVPS(t, app, nil, "deploy", "production")
+	e.simpleVPS(t, app, nil, "deploy", "--env", "production")
 	newRelease := currentStaticReleaseFor(t, e, "site", "production")
 	if newRelease == oldRelease {
 		t.Fatal("expected static fixture deploy to produce a new release")
 	}
 	e.assertRemoteBody(t, "curl -fsS -H 'Host: static.example.com' http://127.0.0.1/", "static-v2")
 
-	rawRollback := e.simpleVPS(t, app, nil, "rollback", "--json", "production")
-	var rollback struct {
-		App       string   `json:"app"`
-		Env       string   `json:"env"`
-		Previous  string   `json:"previous"`
-		Release   string   `json:"release"`
-		Processes []string `json:"processes"`
-	}
-	if err := json.Unmarshal([]byte(rawRollback), &rollback); err != nil {
-		t.Fatalf("static rollback --json output not parseable as JSON: %v\nraw:\n%s", err, rawRollback)
-	}
-	if rollback.App != "site" || rollback.Env != "production" || rollback.Previous != newRelease || rollback.Release != oldRelease || len(rollback.Processes) != 0 {
-		t.Fatalf("unexpected static rollback payload: %+v", rollback)
-	}
+	rawRollback := e.simpleVPS(t, app, nil, "rollback", "--env", "production")
+	assertContains(t, rawRollback, "Rolled back site (production) from "+newRelease+" to "+oldRelease)
 	e.assertRemoteBody(t, "curl -fsS -H 'Host: static.example.com' http://127.0.0.1/", "static-ok")
 
-	e.simpleVPS(t, app, nil, "backup", "production")
-	rawBackups := e.simpleVPS(t, app, nil, "backup", "--json", "list", "production")
+	e.simpleVPS(t, app, nil, "backup", "create", "--env", "production")
+	rawBackups := e.simpleVPS(t, app, nil, "backup", "list", "--json", "--env", "production")
 	var backups struct {
 		Backups []struct {
 			ID string `json:"id"`
@@ -431,8 +417,8 @@ func (e *smokeEnv) testStaticOnlyAppLifecycle(t *testing.T) {
 	}
 	backupID := backups.Backups[0].ID
 
-	e.simpleVPS(t, app, nil, "destroy", "production", "--confirm", "site")
-	e.simpleVPS(t, app, nil, "restore", "--from", backupID, "production")
+	e.simpleVPS(t, app, nil, "destroy", "--env", "production", "--confirm", "site")
+	e.simpleVPS(t, app, nil, "restore", "--from", backupID, "--env", "production")
 	e.assertRemoteBody(t, "curl -fsS -H 'Host: static.example.com' http://127.0.0.1/", "static-ok")
 }
 
@@ -442,8 +428,8 @@ func (e *smokeEnv) testMixedContainerStaticLifecycle(t *testing.T) {
 	writeMixedFixture(t, app)
 	e.commitFixture(t, app)
 
-	e.simpleVPS(t, app, nil, "setup", "production")
-	e.simpleVPS(t, app, nil, "deploy", "production")
+	e.simpleVPS(t, app, nil, "setup", "--env", "production")
+	e.simpleVPS(t, app, nil, "deploy", "--env", "production")
 	oldRelease := currentStaticReleaseFor(t, e, "mix", "production")
 	oldWeb := identity.ContainerName("mix", "production", "web", oldRelease)
 	fragment := e.ssh(t, "cat "+identity.CaddyFragmentFile("mix", "production"))
@@ -451,11 +437,13 @@ func (e *smokeEnv) testMixedContainerStaticLifecycle(t *testing.T) {
 	assertContains(t, fragment, `root * "`+filepath.Join(identity.StaticDir("mix", "production"), "releases", oldRelease, "docs")+`"`)
 	e.assertRemoteBody(t, "curl -fsS -H 'Host: mixed.example.com' http://127.0.0.1/health", "ok")
 	e.assertRemoteBody(t, "curl -fsS -H 'Host: mixed.example.com' http://127.0.0.1/docs", "docs-v1")
+	e.assertRemoteBody(t, "curl -fsS -H 'Host: mixed.example.com' http://127.0.0.1/docs/", "docs-v1")
+	e.assertRemoteBody(t, "curl -fsS -H 'Host: mixed.example.com' http://127.0.0.1/docs-v2", "ok")
 
 	mustWrite(t, filepath.Join(app, "docs-dist", "index.html"), "docs-v2")
 	mustWrite(t, filepath.Join(app, "README.md"), "docs v2\n")
 	e.commitFixture(t, app)
-	e.simpleVPS(t, app, nil, "deploy", "production")
+	e.simpleVPS(t, app, nil, "deploy", "--env", "production")
 	newRelease := currentStaticReleaseFor(t, e, "mix", "production")
 	if newRelease == oldRelease {
 		t.Fatal("expected mixed fixture deploy to produce a new release")
@@ -467,14 +455,14 @@ func (e *smokeEnv) testMixedContainerStaticLifecycle(t *testing.T) {
 	e.assertRemoteBody(t, "curl -fsS -H 'Host: mixed.example.com' http://127.0.0.1/health", "ok")
 	e.assertRemoteBody(t, "curl -fsS -H 'Host: mixed.example.com' http://127.0.0.1/docs", "docs-v2")
 
-	e.simpleVPS(t, app, nil, "rollback", "production")
+	e.simpleVPS(t, app, nil, "rollback", "--env", "production")
 	fragment = e.ssh(t, "cat "+identity.CaddyFragmentFile("mix", "production"))
 	assertContains(t, fragment, "reverse_proxy http://"+oldWeb+":3000")
 	assertContains(t, fragment, `root * "`+filepath.Join(identity.StaticDir("mix", "production"), "releases", oldRelease, "docs")+`"`)
 	e.assertRemoteBody(t, "curl -fsS -H 'Host: mixed.example.com' http://127.0.0.1/docs", "docs-v1")
 
-	e.simpleVPS(t, app, nil, "backup", "production")
-	rawBackups := e.simpleVPS(t, app, nil, "backup", "--json", "list", "production")
+	e.simpleVPS(t, app, nil, "backup", "create", "--env", "production")
+	rawBackups := e.simpleVPS(t, app, nil, "backup", "list", "--json", "--env", "production")
 	var backups struct {
 		Backups []struct {
 			ID string `json:"id"`
@@ -487,16 +475,16 @@ func (e *smokeEnv) testMixedContainerStaticLifecycle(t *testing.T) {
 		t.Fatalf("expected mixed backup, got %+v", backups.Backups)
 	}
 	backupID := backups.Backups[0].ID
-	e.simpleVPS(t, app, nil, "deploy", "production")
+	e.simpleVPS(t, app, nil, "deploy", "--env", "production")
 	e.assertRemoteBody(t, "curl -fsS -H 'Host: mixed.example.com' http://127.0.0.1/docs", "docs-v2")
-	e.simpleVPS(t, app, nil, "restore", "--from", backupID, "production")
+	e.simpleVPS(t, app, nil, "restore", "--from", backupID, "--env", "production")
 	fragment = e.ssh(t, "cat "+identity.CaddyFragmentFile("mix", "production"))
 	assertContains(t, fragment, "reverse_proxy http://"+oldWeb+":3000")
 	assertContains(t, fragment, `root * "`+filepath.Join(identity.StaticDir("mix", "production"), "releases", oldRelease, "docs")+`"`)
 	e.assertRemoteBody(t, "curl -fsS -H 'Host: mixed.example.com' http://127.0.0.1/docs", "docs-v1")
 
-	e.simpleVPS(t, app, nil, "destroy", "production", "--confirm", "mix")
-	e.simpleVPS(t, app, nil, "restore", "--from", backupID, "production")
+	e.simpleVPS(t, app, nil, "destroy", "--env", "production", "--confirm", "mix")
+	e.simpleVPS(t, app, nil, "restore", "--from", backupID, "--env", "production")
 	e.assertRemoteBody(t, "curl -fsS -H 'Host: mixed.example.com' http://127.0.0.1/health", "ok")
 	e.assertRemoteBody(t, "curl -fsS -H 'Host: mixed.example.com' http://127.0.0.1/docs", "docs-v1")
 
@@ -517,7 +505,7 @@ serve = "docs-dist"
 	mustWrite(t, manifestPath, nextManifest)
 	mustWrite(t, filepath.Join(app, "README.md"), "docs route removed\n")
 	e.commitFixture(t, app)
-	e.simpleVPS(t, app, nil, "deploy", "production")
+	e.simpleVPS(t, app, nil, "deploy", "--env", "production")
 	fragment = e.ssh(t, "cat "+identity.CaddyFragmentFile("mix", "production"))
 	if strings.Contains(fragment, "docs-dist") || strings.Contains(fragment, "/docs") {
 		t.Fatalf("removed static route still appears in Caddy fragment:\n%s", fragment)
@@ -561,12 +549,12 @@ host = "sec.example.com"
 process = "web"
 `)
 	e.commitFixture(t, app)
-	e.simpleVPS(t, app, nil, "setup", "production")
+	e.simpleVPS(t, app, nil, "setup", "--env", "production")
 
 	// 1. set: value over stdin, never argv. The fake-VPS harness uses
 	// docker exec ssh under the hood and the helper reads from its
 	// own stdin in `secret set`.
-	e.simpleVPS(t, app, []byte("postgres://verybadidea"), "secret", "set", "production", "db_url")
+	e.simpleVPS(t, app, []byte("postgres://verybadidea"), "secret", "set", "db_url", "--env", "production")
 
 	// 2. file lands at the expected path, root-owned, mode 0600,
 	// containing the value verbatim (no trailing newline — the client
@@ -585,14 +573,14 @@ process = "web"
 	}
 
 	// 3. list shows the key — NEVER the value.
-	listing = e.simpleVPS(t, app, nil, "secret", "list", "production")
+	listing = e.simpleVPS(t, app, nil, "secret", "list", "--env", "production")
 	if !strings.Contains(listing, "db_url") {
 		t.Fatalf("secret list missing db_url:\n%s", listing)
 	}
 	if strings.Contains(listing, "postgres://") {
 		t.Fatalf("secret list leaked the value:\n%s", listing)
 	}
-	rawSecretJSON := e.simpleVPS(t, app, nil, "secret", "list", "--json", "production")
+	rawSecretJSON := e.simpleVPS(t, app, nil, "secret", "list", "--json", "--env", "production")
 	var secretPayload struct {
 		App  string   `json:"app"`
 		Env  string   `json:"env"`
@@ -610,7 +598,7 @@ process = "web"
 
 	// 4. deploy: helper resolves @secret:db_url into the env file
 	// next to the literal LOG_LEVEL.
-	e.simpleVPS(t, app, nil, "deploy", "production")
+	e.simpleVPS(t, app, nil, "deploy", "--env", "production")
 	envFile := e.dockerExec(t, "cat "+identity.EnvFile("sec", "production"))
 	if !strings.Contains(envFile, "LOG_LEVEL=info\n") {
 		t.Fatalf("env file missing literal LOG_LEVEL:\n%s", envFile)
@@ -627,13 +615,13 @@ process = "web"
 	}
 
 	// 6. rm removes the key.
-	e.simpleVPS(t, app, nil, "secret", "rm", "production", "db_url")
+	e.simpleVPS(t, app, nil, "secret", "rm", "db_url", "--env", "production")
 	if missing := strings.TrimSpace(e.dockerExec(t, "ls /etc/simple-vps/secrets/sec/production")); missing != "" {
 		t.Fatalf("expected empty secret dir after rm, got:\n%s", missing)
 	}
 
 	// 7. next deploy with the ref still in the manifest fails fast.
-	result := e.runSimpleVPS(t, app, nil, "deploy", "production")
+	result := e.runSimpleVPS(t, app, nil, "deploy", "--env", "production")
 	if result.err == nil {
 		t.Fatal("expected deploy to fail with unresolved @secret reference")
 	}
@@ -650,7 +638,7 @@ func (e *smokeEnv) testStatusAndLogs(t *testing.T) {
 
 	// Text status surfaces the web process, its container, and the
 	// release label baked in by `app apply`.
-	text := e.simpleVPS(t, app, nil, "status", "production")
+	text := e.simpleVPS(t, app, nil, "status", "--env", "production")
 	assertContains(t, text, "api (production)")
 	assertContains(t, text, "web")
 	assertContains(t, text, "running")
@@ -662,7 +650,7 @@ func (e *smokeEnv) testStatusAndLogs(t *testing.T) {
 	// JSON status carries the same data in a structured shape.
 	// Parse it back to prove the contract — text-mode regressions
 	// might still slip through a substring check.
-	rawJSON := e.simpleVPS(t, app, nil, "status", "--json", "production")
+	rawJSON := e.simpleVPS(t, app, nil, "status", "--json", "--env", "production")
 	var payload struct {
 		App       string `json:"app"`
 		Env       string `json:"env"`
@@ -691,7 +679,7 @@ func (e *smokeEnv) testStatusAndLogs(t *testing.T) {
 
 	// Host-level app listing is sourced from Podman labels instead
 	// of the removed apps.json/routes.json registries.
-	rawListJSON := e.simpleVPS(t, app, nil, "app", "list", "--json")
+	rawListJSON := e.simpleVPS(t, app, nil, "app", "list", "--server", "fake-vps", "--json")
 	var listPayload struct {
 		Apps []struct {
 			App       string `json:"app"`
@@ -720,15 +708,15 @@ func (e *smokeEnv) testStatusAndLogs(t *testing.T) {
 
 	// Logs reaches `podman logs` on the right container and prints
 	// the deterministic stub line.
-	logs := e.simpleVPS(t, app, nil, "logs", "production", "web")
+	logs := e.simpleVPS(t, app, nil, "logs", "web", "--env", "production")
 	assertContains(t, logs, "fake podman logs for "+payload.Processes[0].Container)
 
 	// Process argument is optional when exactly one process exists.
-	logsNoSvc := e.simpleVPS(t, app, nil, "logs", "production")
+	logsNoSvc := e.simpleVPS(t, app, nil, "logs", "--env", "production")
 	assertContains(t, logsNoSvc, "fake podman logs for "+payload.Processes[0].Container)
 
 	// Unknown process errors clearly.
-	missing := e.runSimpleVPS(t, app, nil, "logs", "production", "nope")
+	missing := e.runSimpleVPS(t, app, nil, "logs", "nope", "--env", "production")
 	if missing.err == nil {
 		t.Fatal("expected logs to fail when process is unknown")
 	}
@@ -746,7 +734,7 @@ func (e *smokeEnv) testRestart(t *testing.T) {
 
 	// Whole-env restart text output names the env and the bounced
 	// process, with the post-restart state.
-	text := e.simpleVPS(t, app, nil, "restart", "production")
+	text := e.simpleVPS(t, app, nil, "restart", "--env", "production")
 	assertContains(t, text, "api (production)")
 	assertContains(t, text, "web")
 	assertContains(t, text, "restarted (running)")
@@ -764,39 +752,14 @@ func (e *smokeEnv) testRestart(t *testing.T) {
 	// port; Caddy didn't need a reload.
 	e.assertRemoteBody(t, "curl -fsS -H 'Host: api.example.com' http://127.0.0.1/health", "ok")
 
-	// JSON output is structured and matches the helper's payload
-	// shape. Parse it back to catch silent contract drift.
-	rawJSON := e.simpleVPS(t, app, nil, "restart", "--json", "production")
-	var payload struct {
-		App       string `json:"app"`
-		Env       string `json:"env"`
-		Restarted []struct {
-			Process   string `json:"process"`
-			Container string `json:"container"`
-			State     string `json:"state"`
-		} `json:"restarted"`
-	}
-	if err := json.Unmarshal([]byte(rawJSON), &payload); err != nil {
-		t.Fatalf("restart --json output not parseable as JSON: %v\nraw:\n%s", err, rawJSON)
-	}
-	if payload.App != "api" || payload.Env != "production" {
-		t.Fatalf("restart --json mis-identifies the app: %+v", payload)
-	}
-	if len(payload.Restarted) != 1 || payload.Restarted[0].Process != "web" {
-		t.Fatalf("expected one restarted process `web`, got: %+v", payload.Restarted)
-	}
-	if payload.Restarted[0].State != "running" {
-		t.Fatalf("expected state=running after restart, got: %+v", payload.Restarted[0])
-	}
-
 	// Process-scoped restart hits just the named process.
-	svcOut := e.simpleVPS(t, app, nil, "restart", "production", "web")
+	svcOut := e.simpleVPS(t, app, nil, "restart", "web", "--env", "production")
 	assertContains(t, svcOut, "web")
 	assertContains(t, svcOut, "restarted (running)")
 
 	// Unknown process errors with a clear message that names the
 	// missing one.
-	missing := e.runSimpleVPS(t, app, nil, "restart", "production", "nope")
+	missing := e.runSimpleVPS(t, app, nil, "restart", "nope", "--env", "production")
 	if missing.err == nil {
 		t.Fatal("expected restart to fail for unknown process")
 	}
@@ -814,7 +777,7 @@ func (e *smokeEnv) testDestroy(t *testing.T) {
 
 	// Client safety gate: no accidental teardown without either
 	// --confirm <app> or --yes.
-	missingConfirm := e.runSimpleVPS(t, app, nil, "destroy", "production")
+	missingConfirm := e.runSimpleVPS(t, app, nil, "destroy", "--env", "production")
 	if missingConfirm.err == nil {
 		t.Fatal("expected destroy without confirmation to fail")
 	}
@@ -823,10 +786,10 @@ func (e *smokeEnv) testDestroy(t *testing.T) {
 	}
 
 	// Give --purge something observable to remove.
-	e.simpleVPS(t, app, []byte("throwaway"), "secret", "set", "production", "cleanup_key")
+	e.simpleVPS(t, app, []byte("throwaway"), "secret", "set", "cleanup_key", "--env", "production")
 	currentContainer := currentWebContainer(t, e, app)
 
-	out := e.simpleVPS(t, app, nil, "destroy", "production", "--confirm", "api", "--purge")
+	out := e.simpleVPS(t, app, nil, "destroy", "--env", "production", "--confirm", "api", "--purge")
 	assertContains(t, out, "Destroyed api (production)")
 	assertContains(t, out, "containers: 1 removed")
 	assertContains(t, out, "route: removed")
@@ -844,7 +807,7 @@ func (e *smokeEnv) testDestroy(t *testing.T) {
 	e.dockerExec(t, "test ! -e /etc/simple-vps/secrets/api/production")
 	e.dockerExec(t, "! getent passwd "+identity.SystemUser("api", "production")+" >/dev/null")
 
-	status := e.simpleVPS(t, app, nil, "status", "production")
+	status := e.simpleVPS(t, app, nil, "status", "--env", "production")
 	assertContains(t, status, "no processes running")
 
 	// Fake Caddy re-reads conf.d on every request, so route removal is
@@ -852,7 +815,7 @@ func (e *smokeEnv) testDestroy(t *testing.T) {
 	e.ssh(t, "if curl -fsS -H 'Host: api.example.com' http://127.0.0.1/health; then exit 1; fi")
 
 	// Idempotence: a second destroy should be a no-op, not an error.
-	again := e.simpleVPS(t, app, nil, "destroy", "production", "--yes")
+	again := e.simpleVPS(t, app, nil, "destroy", "--env", "production", "--yes")
 	assertContains(t, again, "containers: none")
 	assertContains(t, again, "route: none")
 }
@@ -955,7 +918,7 @@ func currentStaticReleaseFor(t *testing.T, e *smokeEnv, app, env string) string 
 
 func currentWebContainer(t *testing.T, e *smokeEnv, app string) string {
 	t.Helper()
-	rawJSON := e.simpleVPS(t, app, nil, "status", "--json", "production")
+	rawJSON := e.simpleVPS(t, app, nil, "status", "--json", "--env", "production")
 	var payload struct {
 		Processes []struct {
 			Process   string `json:"process"`

@@ -504,7 +504,7 @@ func resolveEnv(app, env string, literals map[string]string, refs map[string]str
 		out[envKey] = string(val)
 	}
 	if len(missing) > 0 {
-		return nil, fmt.Errorf("unresolved @secret references: %s — run `simple-vps secret set %s <key>` for each", strings.Join(missing, ", "), env)
+		return nil, fmt.Errorf("unresolved @secret references: %s — run `simple-vps secret set <key> --env %s` for each", strings.Join(missing, ", "), env)
 	}
 	return out, nil
 }

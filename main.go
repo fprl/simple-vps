@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"path/filepath"
 
 	"github.com/alecthomas/kong"
 	"github.com/fprl/simple-vps/cmd/client"
@@ -40,71 +41,122 @@ func (versionCmd) Run() error {
 	return nil
 }
 
-type initCmd struct{}
+func appRoot(configPath string) (string, error) {
+	if configPath == "" {
+		configPath = client.ManifestFile
+	}
+	cleaned := filepath.Clean(configPath)
+	if filepath.Base(cleaned) != client.ManifestFile {
+		return "", fmt.Errorf("--config must point to %s", client.ManifestFile)
+	}
+	abs, err := filepath.Abs(cleaned)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Dir(abs), nil
+}
 
-func (initCmd) Run() error {
-	client.CmdInit(".")
+type initCmd struct {
+	Config string `name:"config" type:"path" default:"simple-vps.toml" help:"Path to simple-vps.toml."`
+}
+
+func (c initCmd) Run() error {
+	root, err := appRoot(c.Config)
+	if err != nil {
+		return err
+	}
+	client.CmdInit(root)
 	return nil
 }
 
 type checkCmd struct {
-	Env string `arg:"" optional:"" help:"Environment to validate."`
+	Config string `name:"config" type:"path" default:"simple-vps.toml" help:"Path to simple-vps.toml."`
+	Env    string `name:"env" short:"e" help:"Environment to validate. Omit to validate all envs."`
 }
 
 func (c checkCmd) Run() error {
-	client.CmdCheck(".", c.Env)
+	root, err := appRoot(c.Config)
+	if err != nil {
+		return err
+	}
+	client.CmdCheck(root, c.Env)
 	return nil
 }
 
 type setupCmd struct {
-	Env string `arg:"" help:"Environment to set up."`
+	Config string `name:"config" type:"path" default:"simple-vps.toml" help:"Path to simple-vps.toml."`
+	Env    string `name:"env" short:"e" required:"" help:"Environment to set up."`
 }
 
 func (c setupCmd) Run() error {
-	client.CmdSetup(".", c.Env)
+	root, err := appRoot(c.Config)
+	if err != nil {
+		return err
+	}
+	client.CmdSetup(root, c.Env)
 	return nil
 }
 
 type deployCmd struct {
-	Env           string `arg:"" help:"Environment to deploy."`
+	Config        string `name:"config" type:"path" default:"simple-vps.toml" help:"Path to simple-vps.toml."`
+	Env           string `name:"env" short:"e" required:"" help:"Environment to deploy."`
 	Dirty         bool   `help:"Allow deploying a dirty worktree."`
 	Rebuild       bool   `help:"Refresh base images and bypass Podman's build cache."`
 	IncludeDotenv bool   `name:"include-dotenv" help:"Allow deploying dotenv files."`
 }
 
 func (c deployCmd) Run() error {
-	client.CmdDeploy(".", c.Env, c.Dirty, c.Rebuild, c.IncludeDotenv)
+	root, err := appRoot(c.Config)
+	if err != nil {
+		return err
+	}
+	client.CmdDeploy(root, c.Env, c.Dirty, c.Rebuild, c.IncludeDotenv)
 	return nil
 }
 
 type sshCmd struct {
-	Env string `arg:"" help:"Environment to connect to."`
+	Config string `name:"config" type:"path" default:"simple-vps.toml" help:"Path to simple-vps.toml."`
+	Env    string `name:"env" short:"e" required:"" help:"Environment to connect to."`
 }
 
 func (c sshCmd) Run() error {
-	client.CmdSSH(".", c.Env)
+	root, err := appRoot(c.Config)
+	if err != nil {
+		return err
+	}
+	client.CmdSSH(root, c.Env)
 	return nil
 }
 
 type statusCmd struct {
-	Env  string `arg:"" help:"Environment to inspect."`
-	JSON bool   `name:"json" help:"Emit structured JSON instead of the text table."`
+	Config string `name:"config" type:"path" default:"simple-vps.toml" help:"Path to simple-vps.toml."`
+	Env    string `name:"env" short:"e" required:"" help:"Environment to inspect."`
+	JSON   bool   `name:"json" help:"Emit structured JSON instead of the text table."`
 }
 
 func (c statusCmd) Run() error {
-	client.CmdStatus(".", c.Env, c.JSON)
+	root, err := appRoot(c.Config)
+	if err != nil {
+		return err
+	}
+	client.CmdStatus(root, c.Env, c.JSON)
 	return nil
 }
 
 type logsCmd struct {
-	Env     string `arg:"" help:"Environment containing the process."`
+	Config  string `name:"config" type:"path" default:"simple-vps.toml" help:"Path to simple-vps.toml."`
 	Process string `arg:"" optional:"" help:"Process name. Optional when only one process runs."`
+	Env     string `name:"env" short:"e" required:"" help:"Environment containing the process."`
 	Follow  bool   `name:"follow" short:"f" help:"Stream new log lines."`
 	Tail    int    `name:"tail" default:"100" help:"How many trailing lines to show. Ignored in --follow mode."`
 }
 
 func (c logsCmd) Run() error {
-	client.CmdLogs(".", c.Env, c.Process, c.Follow, c.Tail)
+	root, err := appRoot(c.Config)
+	if err != nil {
+		return err
+	}
+	client.CmdLogs(root, c.Env, c.Process, c.Follow, c.Tail)
 	return nil
 }
 
@@ -113,86 +165,116 @@ type appCmd struct {
 }
 
 type appListCmd struct {
-	Server string `help:"SSH target like deploy@example.com. If omitted, inferred from a single-env manifest."`
+	Server string `name:"server" required:"" help:"SSH target like deploy@example.com."`
 	JSON   bool   `name:"json" help:"Emit structured JSON instead of the text table."`
 }
 
 func (c appListCmd) Run() error {
-	client.CmdAppList(".", c.Server, c.JSON)
+	client.CmdAppList(c.Server, c.JSON)
 	return nil
 }
 
 type restartCmd struct {
-	Env     string `arg:"" help:"Environment to restart."`
+	Config  string `name:"config" type:"path" default:"simple-vps.toml" help:"Path to simple-vps.toml."`
 	Process string `arg:"" optional:"" help:"Process to bounce. Omitted = all processes."`
-	JSON    bool   `name:"json" help:"Emit structured JSON instead of the text summary."`
+	Env     string `name:"env" short:"e" required:"" help:"Environment to restart."`
 }
 
 func (c restartCmd) Run() error {
-	client.CmdRestart(".", c.Env, c.Process, c.JSON)
+	root, err := appRoot(c.Config)
+	if err != nil {
+		return err
+	}
+	client.CmdRestart(root, c.Env, c.Process)
 	return nil
 }
 
 type rollbackCmd struct {
-	Env     string `arg:"" help:"Environment to roll back."`
+	Config  string `name:"config" type:"path" default:"simple-vps.toml" help:"Path to simple-vps.toml."`
 	Release string `arg:"" optional:"" help:"Release to run. Omitted = previous local release."`
-	JSON    bool   `name:"json" help:"Emit structured JSON instead of the text summary."`
+	Env     string `name:"env" short:"e" required:"" help:"Environment to roll back."`
 }
 
 func (c rollbackCmd) Run() error {
-	client.CmdRollback(".", c.Env, c.Release, c.JSON)
+	root, err := appRoot(c.Config)
+	if err != nil {
+		return err
+	}
+	client.CmdRollback(root, c.Env, c.Release)
 	return nil
 }
 
 type backupCmd struct {
-	Args []string `arg:"" optional:"" help:"Either <env>, list <env>, or rm <env> <backup-id>."`
-	To   string   `name:"to" help:"Destination directory on the host. Supports plain paths and file:// URLs."`
-	JSON bool     `name:"json" help:"Emit structured JSON for list."`
+	Create backupCreateCmd `cmd:"" help:"Create a backup for one environment."`
+	List   backupListCmd   `cmd:"" help:"List backups for one environment."`
+	Rm     backupRmCmd     `cmd:"rm" help:"Remove one backup."`
 }
 
-func (c backupCmd) Run() error {
-	sub := "create"
-	args := c.Args
-	if len(args) > 0 {
-		switch args[0] {
-		case "list", "rm":
-			sub = args[0]
-			args = args[1:]
-		}
+type backupCreateCmd struct {
+	Config string `name:"config" type:"path" default:"simple-vps.toml" help:"Path to simple-vps.toml."`
+	Env    string `name:"env" short:"e" required:"" help:"Environment to back up."`
+	To     string `name:"to" help:"Destination directory on the host. Supports plain paths and file:// URLs."`
+	JSON   bool   `name:"json" help:"Emit structured JSON instead of the text summary."`
+}
+
+func (c backupCreateCmd) Run() error {
+	root, err := appRoot(c.Config)
+	if err != nil {
+		return err
 	}
-	switch sub {
-	case "create":
-		if len(args) != 1 {
-			return fmt.Errorf("backup requires <env>")
-		}
-		client.CmdBackup(".", args[0], c.To)
-	case "list":
-		if len(args) != 1 {
-			return fmt.Errorf("backup list requires <env>")
-		}
-		client.CmdBackupList(".", args[0], c.JSON)
-	case "rm":
-		if len(args) != 2 {
-			return fmt.Errorf("backup rm requires <env> <backup-id>")
-		}
-		client.CmdBackupRm(".", args[0], args[1])
+	client.CmdBackup(root, c.Env, c.To, c.JSON)
+	return nil
+}
+
+type backupListCmd struct {
+	Config string `name:"config" type:"path" default:"simple-vps.toml" help:"Path to simple-vps.toml."`
+	Env    string `name:"env" short:"e" required:"" help:"Environment to list backups for."`
+	JSON   bool   `name:"json" help:"Emit structured JSON instead of plain backup IDs."`
+}
+
+func (c backupListCmd) Run() error {
+	root, err := appRoot(c.Config)
+	if err != nil {
+		return err
 	}
+	client.CmdBackupList(root, c.Env, c.JSON)
+	return nil
+}
+
+type backupRmCmd struct {
+	Config string `name:"config" type:"path" default:"simple-vps.toml" help:"Path to simple-vps.toml."`
+	ID     string `arg:"" help:"Backup ID to remove."`
+	Env    string `name:"env" short:"e" required:"" help:"Environment to remove a backup from."`
+}
+
+func (c backupRmCmd) Run() error {
+	root, err := appRoot(c.Config)
+	if err != nil {
+		return err
+	}
+	client.CmdBackupRm(root, c.Env, c.ID)
 	return nil
 }
 
 type restoreCmd struct {
-	Env    string `arg:"" help:"Environment to restore."`
+	Config string `name:"config" type:"path" default:"simple-vps.toml" help:"Path to simple-vps.toml."`
 	From   string `name:"from" required:"" help:"Backup ID or path on the host."`
+	Env    string `name:"env" short:"e" required:"" help:"Environment to restore."`
 	DryRun bool   `name:"dry-run" help:"Show what would be restored without writing."`
 }
 
 func (c restoreCmd) Run() error {
-	client.CmdRestore(".", c.Env, c.From, c.DryRun)
+	root, err := appRoot(c.Config)
+	if err != nil {
+		return err
+	}
+	client.CmdRestore(root, c.Env, c.From, c.DryRun)
 	return nil
 }
 
 type destroyCmd struct {
-	Env     string `arg:"" help:"Environment to destroy."`
+	Config  string `name:"config" type:"path" default:"simple-vps.toml" help:"Path to simple-vps.toml."`
+	Env     string `name:"env" short:"e" required:"" help:"Environment to destroy."`
 	App     string `name:"app" help:"App name. Required with --server when the env is no longer in simple-vps.toml."`
 	Server  string `name:"server" help:"SSH target like deploy@example.com. Required with --app when the env is no longer in simple-vps.toml."`
 	Confirm string `name:"confirm" help:"Required app-name confirmation unless --yes is passed."`
@@ -201,7 +283,11 @@ type destroyCmd struct {
 }
 
 func (c destroyCmd) Run() error {
-	client.CmdDestroy(".", c.Env, c.Confirm, c.Yes, c.Purge, c.App, c.Server)
+	root, err := appRoot(c.Config)
+	if err != nil {
+		return err
+	}
+	client.CmdDestroy(root, c.Env, c.Confirm, c.Yes, c.Purge, c.App, c.Server)
 	return nil
 }
 
@@ -212,32 +298,47 @@ type secretCmd struct {
 }
 
 type secretSetCmd struct {
-	Env string `arg:"" help:"Environment to write the secret into."`
-	Key string `arg:"" help:"Env-var name (e.g., DATABASE_URL)."`
+	Config string `name:"config" type:"path" default:"simple-vps.toml" help:"Path to simple-vps.toml."`
+	Key    string `arg:"" help:"Env-var name (e.g., DATABASE_URL)."`
+	Env    string `name:"env" short:"e" required:"" help:"Environment to write the secret into."`
 }
 
 func (c secretSetCmd) Run() error {
-	client.CmdSecretSet(".", c.Env, c.Key)
+	root, err := appRoot(c.Config)
+	if err != nil {
+		return err
+	}
+	client.CmdSecretSet(root, c.Env, c.Key)
 	return nil
 }
 
 type secretListCmd struct {
-	Env  string `arg:"" help:"Environment to list."`
-	JSON bool   `name:"json" help:"Emit structured JSON instead of plain key lines."`
+	Config string `name:"config" type:"path" default:"simple-vps.toml" help:"Path to simple-vps.toml."`
+	Env    string `name:"env" short:"e" required:"" help:"Environment to list."`
+	JSON   bool   `name:"json" help:"Emit structured JSON instead of plain key lines."`
 }
 
 func (c secretListCmd) Run() error {
-	client.CmdSecretList(".", c.Env, c.JSON)
+	root, err := appRoot(c.Config)
+	if err != nil {
+		return err
+	}
+	client.CmdSecretList(root, c.Env, c.JSON)
 	return nil
 }
 
 type secretRmCmd struct {
-	Env string `arg:"" help:"Environment to update."`
-	Key string `arg:"" help:"Env-var name to remove."`
+	Config string `name:"config" type:"path" default:"simple-vps.toml" help:"Path to simple-vps.toml."`
+	Key    string `arg:"" help:"Env-var name to remove."`
+	Env    string `name:"env" short:"e" required:"" help:"Environment to update."`
 }
 
 func (c secretRmCmd) Run() error {
-	client.CmdSecretRm(".", c.Env, c.Key)
+	root, err := appRoot(c.Config)
+	if err != nil {
+		return err
+	}
+	client.CmdSecretRm(root, c.Env, c.Key)
 	return nil
 }
 
@@ -248,7 +349,7 @@ type hostCmd struct {
 }
 
 type hostStatusCmd struct {
-	Server string `help:"SSH target like deploy@example.com."`
+	Server string `name:"server" required:"" help:"SSH target like deploy@example.com."`
 	JSON   bool   `name:"json" help:"Emit structured JSON instead of the text summary."`
 }
 
@@ -265,7 +366,7 @@ func (c hostStatusCmd) Run() error {
 }
 
 type hostDoctorCmd struct {
-	Server string `help:"SSH target like deploy@example.com."`
+	Server string `name:"server" required:"" help:"SSH target like deploy@example.com."`
 	JSON   bool   `name:"json" help:"Emit structured JSON instead of the text summary."`
 }
 
