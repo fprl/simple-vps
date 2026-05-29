@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/fprl/simple-vps/internal/host"
 	"github.com/fprl/simple-vps/internal/store"
 )
 
@@ -142,9 +143,11 @@ func doctorIdentityFindings() []string {
 }
 
 func CmdDoctor(jsonFlag bool) {
-	stateFindings := doctorStateFindings(store.Default())
+	stateStore := store.Default()
+	stateFindings := doctorStateFindings(stateStore)
+	serviceFindings := doctorServiceFindings(stateStore, host.SystemServiceStatus)
 	identityFindings := doctorIdentityFindings()
-	report := doctorReportFor(stateFindings, identityFindings)
+	report := doctorReportFor(stateFindings, serviceFindings, identityFindings)
 
 	if jsonFlag {
 		buf, err := json.MarshalIndent(report, "", "  ")
@@ -163,6 +166,7 @@ func CmdDoctor(jsonFlag bool) {
 
 type doctorReport struct {
 	State    doctorSection `json:"state"`
+	Services doctorSection `json:"services"`
 	Identity doctorSection `json:"identity"`
 	Healthy  bool          `json:"healthy"`
 }
@@ -172,12 +176,15 @@ type doctorSection struct {
 	Findings []string `json:"findings"`
 }
 
-func doctorReportFor(stateFindings []string, identityFindings []string) doctorReport {
+func doctorReportFor(stateFindings []string, serviceFindings []string, identityFindings []string) doctorReport {
 	report := doctorReport{
 		State:    doctorSectionFor(stateFindings),
+		Services: doctorSectionFor(serviceFindings),
 		Identity: doctorSectionFor(identityFindings),
 	}
-	report.Healthy = report.State.Status == "healthy" && report.Identity.Status == "healthy"
+	report.Healthy = report.State.Status == "healthy" &&
+		report.Services.Status == "healthy" &&
+		report.Identity.Status == "healthy"
 	return report
 }
 
@@ -196,6 +203,7 @@ func renderDoctorText(report doctorReport) string {
 	var b strings.Builder
 	b.WriteString("Simple VPS doctor\n")
 	writeDoctorSectionText(&b, "state", report.State)
+	writeDoctorSectionText(&b, "services", report.Services)
 	writeDoctorSectionText(&b, "identity", report.Identity)
 	return b.String()
 }
@@ -224,6 +232,37 @@ func doctorStateFindings(stateStore store.Store) []string {
 	// host-level: set by the installer, used at routing time.
 	if _, err := stateStore.ReadCloudflare(); err != nil {
 		findings = append(findings, fmt.Sprintf("cloudflare state: %v", err))
+	}
+	return findings
+}
+
+func doctorServiceFindings(stateStore store.Store, serviceStatus func(string) string) []string {
+	installed, err := stateStore.HostInstalled()
+	if err != nil || !installed {
+		return nil
+	}
+	hostFile, err := stateStore.ReadHost()
+	if err != nil {
+		return nil
+	}
+	return doctorServiceFindingsFor(hostFile.Desired, serviceStatus)
+}
+
+func doctorServiceFindingsFor(desired store.HostDesired, serviceStatus func(string) string) []string {
+	required := []string{"caddy"}
+	switch desired.Ingress.Tunnel {
+	case store.TunnelCloudflare:
+		required = append(required, "cloudflared")
+	case store.TunnelTailscaleFunnel:
+		required = append(required, "tailscaled")
+	}
+
+	var findings []string
+	for _, service := range required {
+		status := serviceStatus(service)
+		if status != "active" {
+			findings = append(findings, fmt.Sprintf("%s service is %s (expected active)", service, status))
+		}
 	}
 	return findings
 }

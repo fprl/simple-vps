@@ -186,6 +186,7 @@ func (e *smokeEnv) assertHostDoctorHealthy(t *testing.T) {
 	output := e.simpleVPS(t, e.repoRoot, nil, "host", "doctor", "--server", "fake-vps")
 	assertContains(t, output, "Simple VPS doctor")
 	assertContains(t, output, "state: healthy")
+	assertContains(t, output, "services: healthy")
 	assertContains(t, output, "identity: healthy")
 
 	rawDoctorJSON := e.simpleVPS(t, e.repoRoot, nil, "host", "doctor", "--json", "--server", "fake-vps")
@@ -194,6 +195,10 @@ func (e *smokeEnv) assertHostDoctorHealthy(t *testing.T) {
 			Status   string   `json:"status"`
 			Findings []string `json:"findings"`
 		} `json:"state"`
+		Services struct {
+			Status   string   `json:"status"`
+			Findings []string `json:"findings"`
+		} `json:"services"`
 		Identity struct {
 			Status   string   `json:"status"`
 			Findings []string `json:"findings"`
@@ -203,7 +208,7 @@ func (e *smokeEnv) assertHostDoctorHealthy(t *testing.T) {
 	if err := json.Unmarshal([]byte(rawDoctorJSON), &doctorPayload); err != nil {
 		t.Fatalf("host doctor --json output not parseable as JSON: %v\nraw:\n%s", err, rawDoctorJSON)
 	}
-	if !doctorPayload.Healthy || doctorPayload.State.Status != "healthy" || doctorPayload.Identity.Status != "healthy" {
+	if !doctorPayload.Healthy || doctorPayload.State.Status != "healthy" || doctorPayload.Services.Status != "healthy" || doctorPayload.Identity.Status != "healthy" {
 		t.Fatalf("unexpected healthy doctor payload: %+v", doctorPayload)
 	}
 

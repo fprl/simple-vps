@@ -598,6 +598,10 @@ func addCaddy(ops *[]operation, opts InstallOptions) {
 		// Caddy's runtime data (certificates, last_config.json, etc.)
 		// lives outside /etc so config edits stay clean to diff.
 		{Path: "/var/lib/caddy", Owner: "root", Group: "root", Mode: 0755},
+		// Caddy bind-mounts /var/apps read-only so static routes can serve
+		// host-side releases. Podman refuses to start if the host source is
+		// missing, even when no app has been deployed yet.
+		{Path: "/var/apps", Owner: "root", Group: "root", Mode: 0755},
 	} {
 		dir := dir
 		*ops = append(*ops, operation{name: "caddy dir " + dir.Path, run: func(apply host.Apply) (bool, error) { return host.EnsureDirectory(apply, dir) }})

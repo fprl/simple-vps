@@ -624,6 +624,9 @@ func TestRunInstallWritesCaddyContainerSystemdUnit(t *testing.T) {
 	if !ok {
 		t.Fatal("expected caddy.service unit to be installed")
 	}
+	if !runner.ranCommand("install", "-d -o root -g root -m 755 /var/apps") {
+		t.Fatal("expected /var/apps to be created before caddy.service starts")
+	}
 	content := string(unit.Content)
 	for _, want := range []string{
 		"podman run --rm --name caddy",

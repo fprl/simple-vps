@@ -59,6 +59,43 @@ func TestSelectRollbackReleaseErrors(t *testing.T) {
 	}
 }
 
+func TestImageReleasesFromEntriesUsesPodmanLabels(t *testing.T) {
+	entries := []imageEntry{
+		{
+			Names: []string{"localhost/simple-vps/svps-de70a215abfd:new"},
+			Labels: map[string]string{
+				"simple-vps.app":      "hello",
+				"simple-vps.env":      "production",
+				"simple-vps.infra_id": "svps-de70a215abfd",
+				"simple-vps.release":  "new",
+			},
+		},
+		{
+			Names: []string{"localhost/simple-vps/svps-de70a215abfd:old"},
+			Labels: map[string]string{
+				"simple-vps.app":      "hello",
+				"simple-vps.env":      "production",
+				"simple-vps.infra_id": "svps-de70a215abfd",
+				"simple-vps.release":  "old",
+			},
+		},
+		{
+			Names: []string{"localhost/simple-vps/svps-other:ignored"},
+			Labels: map[string]string{
+				"simple-vps.app":      "hello",
+				"simple-vps.env":      "production",
+				"simple-vps.infra_id": "svps-other",
+				"simple-vps.release":  "ignored",
+			},
+		},
+	}
+
+	got := imageReleasesFromEntries("hello", "production", entries)
+	if len(got) != 2 || got[0].Release != "new" || got[1].Release != "old" {
+		t.Fatalf("unexpected releases: %+v", got)
+	}
+}
+
 func TestStaticReleasesAtOrdersNewestFirst(t *testing.T) {
 	root := t.TempDir()
 	old := filepath.Join(root, "old")

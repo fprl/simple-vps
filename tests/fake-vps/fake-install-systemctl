@@ -27,15 +27,32 @@ active_file() {
   printf '%s/%s\n' "$active_dir" "${1//\//_}"
 }
 
+unit_candidates() {
+  local unit="$1"
+  printf '%s\n' "$unit"
+  case "$unit" in
+    *.service)
+      printf '%s\n' "${unit%.service}"
+      ;;
+    *)
+      printf '%s.service\n' "$unit"
+      ;;
+  esac
+}
+
 case "$action" in
   daemon-reload|enable|disable)
     exit 0
     ;;
   is-active)
     unit="$(unit_from_args "$@")"
-    if [[ -n "$unit" && -f "$(active_file "$unit")" ]]; then
-      echo active
-      exit 0
+    if [[ -n "$unit" ]]; then
+      while IFS= read -r candidate; do
+        if [[ -f "$(active_file "$candidate")" ]]; then
+          echo active
+          exit 0
+        fi
+      done < <(unit_candidates "$unit")
     fi
     echo inactive
     exit 3

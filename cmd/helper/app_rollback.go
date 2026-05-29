@@ -156,7 +156,7 @@ func (c appRollbackCmd) rollbackStatic(app *config.AppContext) (rollbackPayload,
 		return rollbackPayload{}, fmt.Errorf("caddy reload after rollback: %v", err)
 	}
 
-	return rollbackPayload{App: c.App, Env: c.Env, Previous: current, Release: target.Release}, nil
+	return rollbackPayload{App: c.App, Env: c.Env, Previous: current, Release: target.Release, Processes: []string{}}, nil
 }
 
 type rollbackPayload struct {
@@ -175,6 +175,7 @@ type imageRelease struct {
 type imageEntry struct {
 	Repository string            `json:"Repository"`
 	Tag        string            `json:"Tag"`
+	Names      []string          `json:"Names"`
 	Labels     map[string]string `json:"Labels"`
 }
 
@@ -191,14 +192,17 @@ func podmanImages(app, env string) ([]imageRelease, error) {
 	if err := json.Unmarshal(out, &entries); err != nil {
 		return nil, fmt.Errorf("parse podman images json: %v", err)
 	}
-	repo := identity.ImageRepo(app, env)
+	return imageReleasesFromEntries(app, env, entries), nil
+}
+
+func imageReleasesFromEntries(app, env string, entries []imageEntry) []imageRelease {
 	var releases []imageRelease
 	seen := map[string]bool{}
 	for _, e := range entries {
-		if e.Repository != repo {
+		if e.Labels["simple-vps.app"] != app || e.Labels["simple-vps.env"] != env {
 			continue
 		}
-		if e.Labels["simple-vps.app"] != app || e.Labels["simple-vps.env"] != env {
+		if e.Labels["simple-vps.infra_id"] != identity.InfraID(app, env) {
 			continue
 		}
 		release := e.Labels["simple-vps.release"]
@@ -209,9 +213,9 @@ func podmanImages(app, env string) ([]imageRelease, error) {
 			continue
 		}
 		seen[release] = true
-		releases = append(releases, imageRelease{Release: release, Image: repo + ":" + release})
+		releases = append(releases, imageRelease{Release: release, Image: identity.ImageTag(app, env, release)})
 	}
-	return releases, nil
+	return releases
 }
 
 func currentRelease(processes []processStatus) (string, error) {

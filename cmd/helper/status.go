@@ -88,9 +88,10 @@ func hostStatusReportFor(stateStore store.Store, serviceStatus func(string) stri
 	for _, service := range []string{"tailscaled", "cloudflared", "caddy"} {
 		report.Services[service] = serviceStatus(service)
 	}
-	// Post-cutover host footprint per ADR-0005 §14: the helper itself
-	// (on PATH, implied), Podman, Caddy, rsync.
-	for _, tool := range []string{"podman", "caddy", "rsync"} {
+	// The helper itself is implied by this command running. Caddy is
+	// supervised as a container service, so the host only needs Podman
+	// and rsync on PATH for deploy operations.
+	for _, tool := range []string{"podman", "rsync"} {
 		report.Tools[tool] = toolStatus(tool)
 	}
 	return report, nil
@@ -108,7 +109,7 @@ func renderHostStatusText(report hostStatusReport) string {
 		fmt.Fprintf(&b, "  %s: %s\n", service, report.Services[service])
 	}
 	b.WriteString("tools:\n")
-	for _, tool := range []string{"podman", "caddy", "rsync"} {
+	for _, tool := range []string{"podman", "rsync"} {
 		fmt.Fprintf(&b, "  %s: %s\n", tool, report.Tools[tool])
 	}
 	return b.String()

@@ -74,11 +74,11 @@ func TestHostStatusReportUsesInjectedChecks(t *testing.T) {
 }
 
 func TestDoctorReportJSONShape(t *testing.T) {
-	report := doctorReportFor([]string{"host is not installed"}, nil)
+	report := doctorReportFor([]string{"host is not installed"}, nil, nil)
 	if report.Healthy {
 		t.Fatal("expected degraded report")
 	}
-	if report.State.Status != "degraded" || report.Identity.Status != "healthy" {
+	if report.State.Status != "degraded" || report.Services.Status != "healthy" || report.Identity.Status != "healthy" {
 		t.Fatalf("unexpected statuses: %+v", report)
 	}
 
@@ -88,6 +88,49 @@ func TestDoctorReportJSONShape(t *testing.T) {
 	}
 	if !strings.Contains(string(raw), `"findings":[]`) {
 		t.Fatalf("empty findings should encode as [], got: %s", raw)
+	}
+}
+
+func TestDoctorServiceFindingsRequireCaddy(t *testing.T) {
+	desired := validDoctorHostDesired()
+	findings := doctorServiceFindingsFor(desired, func(service string) string {
+		if service == "caddy" {
+			return "failed"
+		}
+		return "inactive"
+	})
+
+	if len(findings) != 1 || !strings.Contains(findings[0], "caddy service is failed") {
+		t.Fatalf("unexpected service findings: %+v", findings)
+	}
+}
+
+func TestDoctorServiceFindingsAllowInactiveOptionalServices(t *testing.T) {
+	desired := validDoctorHostDesired()
+	findings := doctorServiceFindingsFor(desired, func(service string) string {
+		if service == "caddy" {
+			return "active"
+		}
+		return "inactive"
+	})
+
+	if len(findings) != 0 {
+		t.Fatalf("expected inactive optional services to pass, got: %+v", findings)
+	}
+}
+
+func TestDoctorServiceFindingsRequireConfiguredTunnelService(t *testing.T) {
+	desired := validDoctorHostDesired()
+	desired.Ingress.Tunnel = store.TunnelCloudflare
+	findings := doctorServiceFindingsFor(desired, func(service string) string {
+		if service == "caddy" {
+			return "active"
+		}
+		return "inactive"
+	})
+
+	if len(findings) != 1 || !strings.Contains(findings[0], "cloudflared service is inactive") {
+		t.Fatalf("unexpected service findings: %+v", findings)
 	}
 }
 
@@ -109,5 +152,17 @@ func writeValidHost(t *testing.T, path string) {
 }`
 	if err := os.WriteFile(path, []byte(raw), 0644); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func validDoctorHostDesired() store.HostDesired {
+	return store.HostDesired{
+		Users: store.HostUsers{Operator: "operator", Deploy: "deploy"},
+		Ingress: store.HostIngressDesired{
+			Expose: store.ExposePublic,
+			Tunnel: store.TunnelNone,
+		},
+		Features: store.HostFeatures{},
+		Packages: map[string]store.DesiredPackage{},
 	}
 }
