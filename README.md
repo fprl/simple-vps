@@ -35,6 +35,7 @@ make fake-vps-install-smoke
 Example apps live under `examples/`:
 
 - `examples/hono-bun-api` - Dockerfile-backed Bun/Hono API.
+- `examples/php-plain` - Dockerfile-backed PHP HTTP app.
 - `examples/astro-static` - static-only `dist/` deploy.
 - `examples/mixed-api-docs` - container API plus host-served `/docs`.
 

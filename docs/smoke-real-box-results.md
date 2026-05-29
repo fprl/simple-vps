@@ -6,6 +6,33 @@ live in [SPEC.md](../SPEC.md), [README.md](../README.md), and
 the exact commands tested at the time, including names that ADR-0008 later
 removed.
 
+## 2026-05-29 — PHP example real VPS smoke
+
+- **Host:** `128.140.3.159`
+- **OS:** Hetzner Ubuntu 26.04 LTS, `x86_64`
+- **Base commit:** `f01f55f`
+- **Change tested:** new `examples/php-plain`
+- **Temporary host:** `php-main.128.140.3.159.nip.io`
+- **DNS/TLS:** `tls = "internal"` with curl `--resolve ... -k`
+- **Smoke root:** `/tmp/simple-vps-php-smoke-pNWHbo`
+
+Commands covered:
+
+- `check --env production`
+- `setup --env production`
+- `secret set APP_SECRET --env production`
+- `deploy --env production`
+- HTTPS `/health` -> `ok`
+- HTTPS `/` -> JSON containing `"app":"php-plain"` and
+  `"secret":"php-secret"`
+- `destroy --env production --confirm php-plain --purge`
+
+Final `app list --server deploy@128.140.3.159 --json` returned `{"apps":[]}`.
+
+**Outcome:** pass. The PHP example image built from
+`docker.io/library/php:8.4-cli-alpine`, served HTTP on port `8080`, received
+secrets through `runtime/.env`, and cleaned up correctly.
+
 ## 2026-05-29 — current main real VPS primitive smoke
 
 - **Host:** `128.140.3.159`
