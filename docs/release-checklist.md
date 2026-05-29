@@ -15,6 +15,7 @@ make test
 make fake-vps-smoke
 make fake-vps-install-smoke
 make build-release VERSION="$VERSION"
+make build VERSION="$VERSION"
 ```
 
 ## Example Manifest Checks
