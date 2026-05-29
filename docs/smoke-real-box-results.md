@@ -2052,3 +2052,45 @@ Issues encountered:
 - Direct `github.com/.../releases/download/...` asset URLs returned `404` under
   token auth for this private repo path. Downloading through the GitHub Release
   Asset API with `Accept: application/octet-stream` worked.
+
+## 2026-05-30 — Scripted `v0.5.0-rc3` Release Smoke
+
+VPS: Hetzner Ubuntu 24.04 at `128.140.3.159`.
+
+Purpose: verify the new `scripts/release-smoke.sh` helper can run the same
+release-artifact smoke without hand-written harness commands.
+
+Command:
+
+```sh
+SIMPLE_VPS_RELEASE_TOKEN=<token> \
+  make release-smoke VERSION=v0.5.0-rc3 HOST=128.140.3.159
+```
+
+Result:
+
+```text
+release smoke workdir: /tmp/simple-vps-release-smoke-5Ke9EK
+release: v0.5.0-rc3
+host: 128.140.3.159
+app: svps-smoke-225027
+route host: svps-smoke-225027.128.140.3.159.nip.io
+simple-vps: OK
+v0.5.0-rc3
+==> Apply 20260529T225139Z changed 0 operations
+Deployed svps-smoke-225027 (production) at a9a59eca847c
+/health -> ok
+/       -> {"app":"svps-smoke-225027","status":"running","database_path":"/data/app.sqlite"}
+Destroyed svps-smoke-225027 (production)
+app list --json -> {"apps":[]}
+release smoke passed
+workdir: /tmp/simple-vps-release-smoke-5Ke9EK
+log: /tmp/simple-vps-release-smoke-5Ke9EK/release-smoke.log
+```
+
+Notes:
+
+- The installer path downloaded the `v0.5.0-rc3` Darwin client and Linux helper
+  release assets.
+- Host install was idempotent on this already-provisioned VPS (`changed 0
+  operations`).

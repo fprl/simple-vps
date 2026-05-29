@@ -194,6 +194,12 @@ simple-vps-darwin-amd64
 simple-vps-darwin-arm64
 ```
 
+Smoke a published release against a VPS:
+
+```bash
+scripts/release-smoke.sh --version v0.5.0-rc3 --host <ip>
+```
+
 ## References
 
 - [SPEC.md](SPEC.md)
