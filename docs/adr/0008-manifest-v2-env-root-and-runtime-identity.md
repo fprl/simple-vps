@@ -181,7 +181,7 @@ Secrets remain root-owned plaintext files under:
 /etc/simple-vps/secrets/<app>/<env>/<KEY>
 ```
 
-The public command is `simple-vps secret set <env> <key>`. Values are
+The public command is `simple-vps secret set <key> --env <env>`. Values are
 read from stdin only. Deploy resolves all `@secret:KEY` references
 before any build or container mutation. Missing secrets fail fast.
 

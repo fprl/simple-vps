@@ -7,6 +7,12 @@
 - **Related**: ADR-0001 (bounded Go provisioner), ADR-0002 (state file layout),
   ADR-0003 (apt repo key trust policy).
 
+> ADR-0008 and ADR-0009 supersede this ADR's public manifest, storage, static,
+> identity, and CLI details. This ADR remains as historical rationale for the
+> container runtime decision; current contracts live in [SPEC.md](../../SPEC.md),
+> [ADR-0008](0008-manifest-v2-env-root-and-runtime-identity.md), and
+> [ADR-0009](0009-v1-cli-and-primitive-contract.md).
+
 ## Context
 
 The current code supports three deploy runtimes per env: `bun`, `node`,

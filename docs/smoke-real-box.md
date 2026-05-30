@@ -3,7 +3,7 @@
 For release-candidate validation, use the scripted smoke first:
 
 ```sh
-scripts/release-smoke.sh --version v0.5.0-rc3 --host <IP>
+scripts/release-smoke.sh --version v0.5.0-rc4 --host <IP>
 ```
 
 This runbook is the lower-level debugging path when the scripted smoke fails

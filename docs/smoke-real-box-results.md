@@ -6,6 +6,67 @@ live in [SPEC.md](../SPEC.md), [README.md](../README.md), and
 the exact commands tested at the time, including names that ADR-0008 later
 removed.
 
+## 2026-05-30 — v0.5.0 fresh VPS example matrix
+
+- **Host:** `128.140.3.159`
+- **OS:** freshly rebuilt Hetzner Ubuntu VPS, `x86_64`
+- **Build tested:** local `v0.5.0-rc4` release build from `dist/simple-vps`
+- **DNS/TLS:** `nip.io` hostnames with `tls = "internal"` and curl
+  `--resolve ... -k`
+
+Purpose: prove the public examples deploy on a real fresh VPS before cutting
+the final `v0.5.0` release.
+
+Matrix:
+
+1. `examples/hono-bun-api`
+   - `check --env production`
+   - `setup --env production`
+   - `deploy --env production`
+   - `/health` returned `ok`
+   - `/` returned `{"app":"hono-api","status":"running"}`
+   - `destroy --env production --confirm hono-api --purge`
+
+2. `examples/php-plain`
+   - `check --env production`
+   - `setup --env production`
+   - `secret set APP_SECRET --env production`
+   - `deploy --env production`
+   - `/health` returned `ok`
+   - `/` returned
+     `{"app":"php-plain","status":"running","secret":"matrix-php-secret","database_path":"/data/app.sqlite"}`
+   - `destroy --env production --confirm php-plain --purge`
+
+3. `examples/astro-static`
+   - Built a real Astro `dist/` in a temp checkout with `pnpm exec astro build`
+   - `check --env production`
+   - `setup --env production`
+   - `deploy --env production`
+   - `/` returned generated HTML containing `static-ok`
+   - `destroy --env production --confirm astro-site --purge`
+
+4. `examples/mixed-api-docs`
+   - `check --env production`
+   - `setup --env production`
+   - `deploy --env production`
+   - `/health` returned `ok`
+   - `/` returned `api-ok`
+   - `/docs/` returned HTML containing `docs-ok`
+   - `destroy --env production --confirm mixed-app --purge`
+
+Final `app list --server deploy@128.140.3.159 --json` returned:
+
+```json
+{
+  "apps": []
+}
+```
+
+Two local harness corrections were needed and did not require product changes:
+temp example copies must patch `server = "deploy@128.140.3.159"` before setup,
+and deploy examples must be committed git repositories because release IDs come
+from `git rev-parse`.
+
 ## 2026-05-30 — v0.5.0-rc3 rebuilt VPS release smoke and guide proof
 
 - **Host:** `128.140.3.159`

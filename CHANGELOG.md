@@ -2,6 +2,63 @@
 
 ## Unreleased
 
+## v0.5.0 - 2026-05-30
+
+### Added
+
+- Manifest v2 with `[processes.*]`, `[vars]`, route-level `serve`, redirects,
+  per-process resources, route TLS mode, and `[deploy].release`.
+- Static-only and mixed container/static deploys, including ignored/generated
+  static directories in release artifacts and rollback snapshots.
+- Flat env roots at `/var/apps/<app>.<env>/`, runtime env files under
+  `runtime/.env`, durable app data under `data/`, and derived infra IDs for
+  users, networks, containers, routes, and locks.
+- Repo-centric CLI contract with required `--env`, `--config`, `secret set`,
+  `backup create/list/rm`, `restart`, `logs`, `ssh`, and `app list`.
+- `simple-vps init` templates for `container`, `static`, `php`, and `hono`.
+- Release asset publishing, checksum verification, private-release installer
+  support, and a scripted fresh-VPS release smoke.
+
+### Changed
+
+- Web deploys now start the next versioned container, health-check it, reload
+  Caddy to the new upstream, then remove old containers.
+- Backups snapshot app data, active static release assets, applied manifest
+  snapshots, and secrets while keeping generated runtime files out of user data.
+- Rollback re-applies the selected release snapshot and does not mutate current
+  `/data`, current secrets, or rerun `[deploy].release`.
+- Docs now lead with the current v0.5.0 manifest/CLI contract, getting-started
+  path, and release checklist.
+
+### Removed
+
+- Removed the old public manifest surface: `[services.*]`, route `service`,
+  route `type`, `[env.<name>.env]`, `healthcheck`, `healthcheck_status`,
+  public `tmpfs`, `net_bind_service`, and nested
+  `/var/apps/<app>/<env>/shared`.
+- Removed positional-env command aliases and `secret put`.
+
+## v0.5.0-rc4 - 2026-05-30
+
+### Added
+
+- Fresh-VPS matrix proof for Hono/Bun, plain PHP with secrets and `/data`,
+  real Astro static output, and mixed API plus `/docs` static routing.
+
+### Changed
+
+- The Astro static example is now a real Astro app with framework build files
+  instead of a hand-written HTML placeholder.
+- Public install and release docs now point at `v0.5.0-rc4`.
+- `install.sh` defaults to `v0.5.0-rc4`.
+
+### Fixed
+
+- The scripted release smoke refreshes `known_hosts` by default for disposable
+  rebuilt VPS hosts.
+- Private tagged installer downloads now use the GitHub Contents API path when
+  authenticated.
+
 ## v0.5.0-rc3 - 2026-05-29
 
 ### Added

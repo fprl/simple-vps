@@ -1,9 +1,9 @@
 # Release Checklist
 
-Use this before cutting preview releases.
+Use this before cutting preview or stable releases.
 
 ```bash
-VERSION=v0.5.0-rc3
+VERSION=v0.5.0-rc4
 ```
 
 ## Local Checks

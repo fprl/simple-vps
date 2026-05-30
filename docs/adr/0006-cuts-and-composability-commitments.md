@@ -9,6 +9,12 @@
   [docs/positioning.md](../positioning.md) (audience and design
   discipline tests).
 
+> ADR-0008 and ADR-0009 supersede this ADR's public manifest, identity, route,
+> and CLI details. This ADR remains as historical rationale for the complexity
+> cuts; current contracts live in [SPEC.md](../../SPEC.md),
+> [ADR-0008](0008-manifest-v2-env-root-and-runtime-identity.md), and
+> [ADR-0009](0009-v1-cli-and-primitive-contract.md).
+
 ## Context
 
 After outside review of ADR-0005, several design choices were
