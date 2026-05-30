@@ -6,6 +6,51 @@ live in [SPEC.md](../SPEC.md), [README.md](../README.md), and
 the exact commands tested at the time, including names that ADR-0008 later
 removed.
 
+## 2026-05-30 — v0.5.0-rc4 release artifact smoke
+
+- **Host:** `128.140.3.159`
+- **OS:** Hetzner Ubuntu VPS, `x86_64`
+- **Release tested:** `v0.5.0-rc4`
+- **Smoke root:** `/tmp/simple-vps-release-smoke-KQR1p1`
+- **DNS/TLS:** `nip.io` hostname with `tls = "internal"` and curl
+  `--resolve ... -k`
+
+Purpose: verify the published `v0.5.0-rc4` release assets install the host and
+deploy a generated first app before cutting stable `v0.5.0`.
+
+Commands:
+
+```bash
+GH_TOKEN=<token> SIMPLE_VPS_RELEASE_TOKEN=<token> \
+  scripts/release-smoke.sh --version v0.5.0-rc4 --host 128.140.3.159
+```
+
+Observed:
+
+```text
+release: v0.5.0-rc4
+host: 128.140.3.159
+app: svps-smoke-080136
+route host: svps-smoke-080136.128.140.3.159.nip.io
+==> Downloading Simple VPS binary from https://github.com/fprl/simple-vps/releases/download/v0.5.0-rc4/simple-vps-darwin-arm64
+==> Downloading Simple VPS Linux helper binary from https://github.com/fprl/simple-vps/releases/download/v0.5.0-rc4/simple-vps-linux-amd64
+==> Apply 20260530T080406Z changed 1 operations
+v0.5.0-rc4
+Deployed svps-smoke-080136 (production) at 92d4fed894dc
+/health -> ok
+/       -> {"app":"svps-smoke-080136","status":"running","database_path":"/data/app.sqlite"}
+Destroyed svps-smoke-080136 (production)
+  containers: 1 removed
+  route: removed
+  secrets: purged
+app list --json -> {  "apps": []}
+release smoke passed
+```
+
+**Outcome:** pass. The published rc4 installer and release assets can install a
+host, generate a PHP app with `simple-vps init`, deploy, serve through Caddy,
+destroy, and leave no app envs behind.
+
 ## 2026-05-30 — v0.5.0 fresh VPS example matrix
 
 - **Host:** `128.140.3.159`

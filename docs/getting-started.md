@@ -7,7 +7,7 @@ This is the shortest path from a fresh Ubuntu VPS to a deployed app.
 Download a release binary for the machine where you run deploy commands:
 
 ```bash
-VERSION=v0.5.0-rc4
+VERSION=v0.5.0
 OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
 ARCH="$(uname -m)"
 case "$OS" in
@@ -68,7 +68,7 @@ for `~/.ssh/<root-key>` below.
 Run this from your laptop against a fresh Ubuntu 24.04/26.04 VPS:
 
 ```bash
-VERSION=v0.5.0-rc4
+VERSION=v0.5.0
 if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
   gh api -H 'Accept: application/vnd.github.raw' \
     "/repos/fprl/simple-vps/contents/install.sh?ref=$VERSION" > install.sh
