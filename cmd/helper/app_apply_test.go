@@ -56,12 +56,12 @@ func TestResolveEnvDoesNotMutateInputMaps(t *testing.T) {
 }
 
 func TestValidateReleaseRejectsPathTraversal(t *testing.T) {
-	for _, release := range []string{"abc1234", "abc1234-s012345abcdef", "abc1234-dirty-20260530t143012z", "abc1234-dirty-20260530t143012z-s012345abcdef"} {
+	for _, release := range []string{"abc1234", "abc1234-s012345abcdef", "abc1234-dirty-20260530t143012000000000z", "abc1234-dirty-20260530t143012000000000z-s012345abcdef"} {
 		if err := validateRelease(release); err != nil {
 			t.Fatalf("expected %q to be valid: %v", release, err)
 		}
 	}
-	for _, release := range []string{"", "abc123", "../abc", "abc/def", "ABC123", "abc_def", "abc.def", "dirty-20260528123456", "abc1234-dirty-20260530T143012Z"} {
+	for _, release := range []string{"", "abc123", "../abc", "abc/def", "ABC123", "abc_def", "abc.def", "dirty-20260528123456", "abc1234-dirty-20260530T143012Z", "abc1234-dirty-20260530t143012z"} {
 		if err := validateRelease(release); err == nil {
 			t.Fatalf("expected %q to be invalid", release)
 		}
@@ -69,17 +69,21 @@ func TestValidateReleaseRejectsPathTraversal(t *testing.T) {
 }
 
 func TestReleaseMetadataValidation(t *testing.T) {
-	meta, err := newReleaseMetadata("abc1234-dirty-20260530t143012z", true, "abc1234abc1234abc1234abc1234abc1234abc1234", "2026-05-30T14:30:12Z")
+	meta, err := newReleaseMetadata("abc1234-dirty-20260530t143012000000000z", true, "abc1234abc1234abc1234abc1234abc1234abc1234", "2026-05-30T14:30:12Z")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !meta.Dirty || meta.Release != "abc1234-dirty-20260530t143012z" {
+	if !meta.Dirty || meta.Release != "abc1234-dirty-20260530t143012000000000z" {
 		t.Fatalf("unexpected metadata: %+v", meta)
 	}
-	if _, err := newReleaseMetadata("abc1234-s012345abcdef", false, "abc1234abc1234abc1234abc1234abc1234abc1234", "2026-05-30T14:30:12Z"); err != nil {
+	staticMeta, err := newReleaseMetadata("abc1234-s012345abcdef", false, "abc1234abc1234abc1234abc1234abc1234abc1234", "2026-05-30T14:30:12Z")
+	if err != nil {
 		t.Fatalf("expected clean static release metadata to pass: %v", err)
 	}
-	if _, err := newReleaseMetadata("abc1234-dirty-20260530t143012z-s012345abcdef", true, "abc1234abc1234abc1234abc1234abc1234abc1234", "2026-05-30T14:30:12Z"); err != nil {
+	if staticMeta.StaticHash != "012345abcdef" {
+		t.Fatalf("expected static hash in metadata, got %+v", staticMeta)
+	}
+	if _, err := newReleaseMetadata("abc1234-dirty-20260530t143012000000000z-s012345abcdef", true, "abc1234abc1234abc1234abc1234abc1234abc1234", "2026-05-30T14:30:12Z"); err != nil {
 		t.Fatalf("expected dirty static release metadata to pass: %v", err)
 	}
 	if _, err := newReleaseMetadata("ABC", false, "abc1234", "2026-05-30T14:30:12Z"); err == nil {
@@ -88,17 +92,24 @@ func TestReleaseMetadataValidation(t *testing.T) {
 	if _, err := newReleaseMetadata("abc1234", false, "not-a-sha", "2026-05-30T14:30:12Z"); err == nil {
 		t.Fatal("expected invalid base commit to fail")
 	}
-	if _, err := newReleaseMetadata("abc1234-dirty-20260530t143012z", false, "abc1234", "2026-05-30T14:30:12Z"); err == nil {
+	if _, err := newReleaseMetadata("abc1234-dirty-20260530t143012000000000z", false, "abc1234", "2026-05-30T14:30:12Z"); err == nil {
 		t.Fatal("expected dirty metadata mismatch to fail")
 	}
-	if _, err := newReleaseMetadata("abc1234-dirty-20260530t143013z", true, "abc1234abc1234abc1234abc1234abc1234abc1234", "2026-05-30T14:30:12Z"); err == nil {
+	if _, err := newReleaseMetadata("abc1234-dirty-20260530t143013000000000z", true, "abc1234abc1234abc1234abc1234abc1234abc1234", "2026-05-30T14:30:12Z"); err == nil {
 		t.Fatal("expected dirty timestamp mismatch to fail")
 	}
-	if _, err := newReleaseMetadata("def1234-dirty-20260530t143012z", true, "abc1234abc1234abc1234abc1234abc1234abc1234", "2026-05-30T14:30:12Z"); err == nil {
+	if _, err := newReleaseMetadata("def1234-dirty-20260530t143012000000000z", true, "abc1234abc1234abc1234abc1234abc1234abc1234", "2026-05-30T14:30:12Z"); err == nil {
 		t.Fatal("expected dirty base commit mismatch to fail")
 	}
 	if _, err := newReleaseMetadata("abc1234", false, "abc1234", "not-a-time"); err == nil {
 		t.Fatal("expected invalid created_at to fail")
+	}
+}
+
+func TestReadReleaseMetadataRequiresFile(t *testing.T) {
+	_, err := readReleaseMetadata("missing-release-metadata-test", "production", "abc1234")
+	if err == nil || !strings.Contains(err.Error(), "read release metadata") {
+		t.Fatalf("expected missing release metadata error, got %v", err)
 	}
 }
 

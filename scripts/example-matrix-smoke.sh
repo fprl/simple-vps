@@ -62,6 +62,9 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ -n "$host" ]] || die "--host or SIMPLE_VPS_EXAMPLE_MATRIX_HOST is required"
+if [[ "$client" != /* ]]; then
+  client="$(cd "$(dirname "$client")" && pwd)/$(basename "$client")"
+fi
 [[ -x "$client" ]] || die "client binary is not executable: $client"
 [[ -r "$deploy_key" ]] || die "deploy SSH key not readable: $deploy_key"
 
@@ -86,13 +89,21 @@ cleanup() {
   if [[ "$skip_destroy" == "1" ]]; then
     return
   fi
+  local best_effort="${1:-0}"
+  local failed=0
   for item in "${deployed[@]:-}"; do
     local_app="${item%%|*}"
     local_dir="${item#*|}"
-    "$client" destroy --config "$local_dir/simple-vps.toml" --env production --confirm "$local_app" --purge >>"$log" 2>&1 || true
+    if ! "$client" destroy --config "$local_dir/simple-vps.toml" --env production --confirm "$local_app" --purge >>"$log" 2>&1; then
+      failed=1
+      printf 'cleanup failed for %s; see %s\n' "$local_app" "$log" >&2
+    fi
   done
+  if [[ "$best_effort" != "1" && "$failed" != "0" ]]; then
+    return 1
+  fi
 }
-trap cleanup EXIT
+trap 'cleanup 1' EXIT
 
 patch_manifest() {
   local app="$1"

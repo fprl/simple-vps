@@ -308,11 +308,13 @@ Every successful deploy stores the manifest that produced that release at
 `releases/<release>/simple-vps.toml` and release metadata at
 `releases/<release>/release.json`, then updates `simple-vps.toml` to the active
 manifest. Dirty deploy IDs are shaped like
-`<short-sha>-dirty-<yyyymmdd>t<hhmmss>z`, optionally followed by the static
-tree suffix. Clean release IDs are the base commit short SHA, optionally
-followed by that same static-tree suffix. Rollback uses the selected release's
-manifest snapshot for process ports, routes, static paths, and runtime var
-references; it does not infer the old shape from the latest local checkout.
+`<short-sha>-dirty-<yyyymmdd>t<hhmmss><nanoseconds>z`, optionally followed by
+the static tree suffix. The nanosecond timestamp keeps repeated dirty deploys
+from the same base commit from reusing image tags or container names. Clean
+release IDs are the base commit short SHA, optionally followed by that same
+static-tree suffix. Rollback uses the selected release's manifest snapshot for
+process ports, routes, static paths, and runtime var references; it does not
+infer the old shape from the latest local checkout.
 
 Static route assets are copied to:
 

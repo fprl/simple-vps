@@ -9,6 +9,7 @@ import (
 	"github.com/fprl/simple-vps/internal/host"
 	"github.com/fprl/simple-vps/internal/identity"
 	"github.com/fprl/simple-vps/internal/names"
+	"github.com/fprl/simple-vps/internal/releaseid"
 	"github.com/fprl/simple-vps/internal/secrets"
 	"github.com/fprl/simple-vps/internal/utils"
 )
@@ -24,10 +25,7 @@ func validateAppEnv(app, env string) error {
 }
 
 func validateRelease(release string) error {
-	if !names.ReleaseRe.MatchString(release) {
-		return fmt.Errorf("invalid release id: %q", release)
-	}
-	return nil
+	return releaseid.Validate(release)
 }
 
 // appSetupEnvCmd creates the per-env Linux user, on-disk layout, and

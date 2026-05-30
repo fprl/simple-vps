@@ -3,6 +3,8 @@ package helper
 import (
 	"strings"
 	"testing"
+
+	"github.com/fprl/simple-vps/internal/identity"
 )
 
 func TestContainersToProcessesFiltersUnlabelledAndSorts(t *testing.T) {
@@ -46,31 +48,37 @@ func TestContainersToAppEnvsGroupsAndSorts(t *testing.T) {
 			Names:  []string{"svps-api-staging-web"},
 			State:  "running",
 			Status: "Up",
-			Labels: map[string]string{"simple-vps.app": "api", "simple-vps.env": "staging", "simple-vps.process": "web"},
+			Labels: map[string]string{"simple-vps.app": "api", "simple-vps.env": "staging", "simple-vps.process": "web", "simple-vps.infra_id": identity.InfraID("api", "staging")},
 		},
 		{
 			Names:  []string{"svps-api-production-worker"},
 			State:  "running",
 			Status: "Up",
-			Labels: map[string]string{"simple-vps.app": "api", "simple-vps.env": "production", "simple-vps.process": "worker"},
+			Labels: map[string]string{"simple-vps.app": "api", "simple-vps.env": "production", "simple-vps.process": "worker", "simple-vps.infra_id": identity.InfraID("api", "production")},
 		},
 		{
 			Names:  []string{"svps-api-production-web"},
 			State:  "running",
 			Status: "Up",
-			Labels: map[string]string{"simple-vps.app": "api", "simple-vps.env": "production", "simple-vps.process": "web"},
+			Labels: map[string]string{"simple-vps.app": "api", "simple-vps.env": "production", "simple-vps.process": "web", "simple-vps.infra_id": identity.InfraID("api", "production")},
 		},
 		{
 			Names:  []string{"svps-blog-production-web"},
 			State:  "running",
 			Status: "Up",
-			Labels: map[string]string{"simple-vps.app": "blog", "simple-vps.env": "production", "simple-vps.process": "web"},
+			Labels: map[string]string{"simple-vps.app": "blog", "simple-vps.env": "production", "simple-vps.process": "web", "simple-vps.infra_id": identity.InfraID("blog", "production")},
 		},
 		{
 			Names:  []string{"not-ours"},
 			State:  "running",
 			Status: "Up",
 			Labels: map[string]string{"simple-vps.app": "api", "simple-vps.env": "production"},
+		},
+		{
+			Names:  []string{"wrong-infra"},
+			State:  "running",
+			Status: "Up",
+			Labels: map[string]string{"simple-vps.app": "api", "simple-vps.env": "production", "simple-vps.process": "web", "simple-vps.infra_id": "svps-other"},
 		},
 	})
 
@@ -157,33 +165,23 @@ func TestRenderAppListTextWithApps(t *testing.T) {
 	}
 }
 
-func TestRenderStatusTextHandlesMissingReleaseLabel(t *testing.T) {
-	processes := []processStatus{
-		{Process: "web", Container: "x", State: "running"},
-	}
-	out := renderStatusText("api", "production", processes, true, nil, nil)
-	if !strings.Contains(out, "release=?") {
-		t.Fatalf("expected `release=?` fallback for missing label:\n%s", out)
-	}
-}
-
 func TestRenderStatusTextMarksDirtyReleaseAndStatic(t *testing.T) {
 	release := &statusRelease{
-		Release:    "abc1234-dirty-20260530t143012z",
+		Release:    "abc1234-dirty-20260530t143012000000000z",
 		Source:     "mixed",
 		Dirty:      true,
 		BaseCommit: "abc1234abc1234abc1234abc1234abc1234abc1234",
 	}
 	static := &staticStatus{
-		Release: "abc1234-dirty-20260530t143012z",
+		Release: "abc1234-dirty-20260530t143012000000000z",
 		Routes:  []string{"docs"},
 		Dirty:   true,
 	}
 	processes := []processStatus{
-		{Process: "web", State: "running", Release: "abc1234-dirty-20260530t143012z", Dirty: true},
+		{Process: "web", State: "running", Release: "abc1234-dirty-20260530t143012000000000z", Dirty: true},
 	}
 	out := renderStatusText("api", "production", processes, true, release, static)
-	if !strings.Contains(out, "release: abc1234-dirty-20260530t143012z (dirty, base abc1234abc12)") {
+	if !strings.Contains(out, "release: abc1234-dirty-20260530t143012000000000z (dirty, base abc1234abc12)") {
 		t.Fatalf("missing dirty release summary:\n%s", out)
 	}
 	if !strings.Contains(out, "static") || !strings.Contains(out, "routes=docs") {
@@ -196,7 +194,7 @@ func TestActiveStatusReleaseUsesRunningProcessesOnly(t *testing.T) {
 		{Process: "web", State: "running", Release: "new1234"},
 		{Process: "web", State: "exited", Release: "old1234"},
 	}
-	release := activeStatusRelease("api", "production", runningProcesses(processes), nil)
+	release := activeStatusRelease(runningProcesses(processes), nil)
 	if release == nil {
 		t.Fatal("expected active release")
 	}

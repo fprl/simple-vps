@@ -59,7 +59,7 @@ func TestInfraNamesStayWithinLimits(t *testing.T) {
 	app := "very-long-application-name"
 	env := "production-environment"
 	process := "background-worker-process"
-	release := "abc1234-dirty-20260528t123456z"
+	release := "abc1234-dirty-20260528t123456000000000z"
 
 	for name, value := range map[string]string{
 		"SystemUser":    SystemUser(app, env),

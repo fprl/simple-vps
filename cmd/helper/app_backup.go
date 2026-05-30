@@ -500,6 +500,12 @@ func extractBackupTar(path, dest string) (backupPayload, error) {
 	if payload.Metadata.SchemaVersion != 1 {
 		return backupPayload{}, fmt.Errorf("unsupported backup schema version %d", payload.Metadata.SchemaVersion)
 	}
+	if err := validateRelease(payload.Metadata.Release); err != nil {
+		return backupPayload{}, err
+	}
+	if _, err := readReleaseMetadataFile(filepath.Join(destAbs, "release.json"), payload.Metadata.Release); err != nil {
+		return backupPayload{}, fmt.Errorf("backup release metadata: %v", err)
+	}
 	if payload.Secrets == nil {
 		payload.Secrets = map[string]string{}
 	}
@@ -636,7 +642,9 @@ func listBackups(app, env, dir string) ([]backupInfo, error) {
 			return nil, err
 		}
 		item := backupInfo{ID: strings.TrimSuffix(entry.Name(), ".tar"), Path: path, Size: info.Size()}
-		addBackupMetadata(path, &item)
+		if err := addBackupMetadata(path, &item); err != nil {
+			return nil, err
+		}
 		out = append(out, item)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID > out[j].ID })
@@ -649,15 +657,20 @@ func backupInfoForPath(path string) (backupInfo, error) {
 		return backupInfo{}, err
 	}
 	item := backupInfo{ID: strings.TrimSuffix(filepath.Base(path), ".tar"), Path: path, Size: info.Size()}
-	addBackupMetadata(path, &item)
+	if err := addBackupMetadata(path, &item); err != nil {
+		return backupInfo{}, err
+	}
 	return item, nil
 }
 
-func addBackupMetadata(path string, item *backupInfo) {
-	if payload, err := readBackupMetadata(path); err == nil {
-		item.CreatedAt = payload.CreatedAt
-		item.Release = payload.Release
+func addBackupMetadata(path string, item *backupInfo) error {
+	payload, err := readBackupMetadata(path)
+	if err != nil {
+		return err
 	}
+	item.CreatedAt = payload.CreatedAt
+	item.Release = payload.Release
+	return nil
 }
 
 func readBackupMetadata(path string) (backupMetadata, error) {

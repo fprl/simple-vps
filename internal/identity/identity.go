@@ -110,8 +110,8 @@ func ReleaseManifestFile(app, env, release string) string {
 	return ReleaseDir(app, env) + "/" + release + "/simple-vps.toml"
 }
 
-// ReleaseMetadataFile stores non-authoritative but user-visible release
-// details such as dirty state and base commit.
+// ReleaseMetadataFile stores mandatory release details such as dirty state,
+// base commit, creation time, and static asset hash.
 func ReleaseMetadataFile(app, env, release string) string {
 	return ReleaseDir(app, env) + "/" + release + "/release.json"
 }

@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+### Added
+
+- Shared local deploy diagnostics used by both `check --env` and `deploy`.
+- Read-only remote deploy preflight before upload, build, identity creation, or
+  route/container mutation.
+- Dirty release IDs with base commit and nanosecond created time, plus release
+  metadata that makes dirty status visible.
+- Real example matrix smoke for PHP, Hono/Bun, mixed API/static, and Astro
+  static apps.
+
+### Changed
+
+- Backup, restore, rollback, status, and app list now require release metadata
+  snapshots instead of tolerating pre-metadata release shapes.
+- Deploy now writes release metadata before runtime mutation and fails on
+  mismatched manifest app names.
+
+### Removed
+
+- Removed the stale real-box results log that documented old command and layout
+  shapes.
+
 ## v0.5.0 - 2026-05-30
 
 ### Added

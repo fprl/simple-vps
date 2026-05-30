@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/fprl/simple-vps/internal/config"
+	"github.com/fprl/simple-vps/internal/releaseid"
 )
 
 type localDeployOptions struct {
@@ -23,7 +24,7 @@ type localDeployPlan struct {
 	ServeDirs  []string
 }
 
-const timeRFC3339UTC = time.RFC3339
+const timeRFC3339UTC = time.RFC3339Nano
 
 func checkDiagnostics(root, envName string) (diagnostics, error) {
 	errors, warnings, err := config.CheckManifest(root, envName)
@@ -105,7 +106,15 @@ func buildLocalDeployPlan(root, envName string, opts localDeployOptions) (localD
 			})
 			return plan, diags, nil
 		}
-		plan.Release = plan.Release + "-s" + hash[:12]
+		release, err := releaseid.WithStaticHash(plan.Release, hash[:12])
+		if err != nil {
+			diags = append(diags, diagnostic{
+				Level:   diagnosticError,
+				Message: err.Error(),
+			})
+			return plan, diags, nil
+		}
+		plan.Release = release
 	}
 
 	if !opts.IncludeDotenv {
@@ -188,7 +197,7 @@ func gitWorktreeDirty(root string, ignoreDirs []string) (bool, error) {
 }
 
 func dirtyReleaseID(shortCommit string, at time.Time) string {
-	return fmt.Sprintf("%s-dirty-%s", shortCommit, at.UTC().Format("20060102t150405z"))
+	return releaseid.Dirty(shortCommit, at)
 }
 
 func cleanIgnoredDirs(dirs []string) []string {

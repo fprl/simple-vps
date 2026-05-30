@@ -13,14 +13,13 @@ The fake-VPS smoke (`make fake-vps-smoke`, `make fake-vps-install-smoke`)
 proves simple-vps's internal shape is consistent against fake Podman
 and fake Caddy. This runbook drives the same path against a real
 Ubuntu 24.04/26.04 VPS with real Podman and real Caddy. Authored from a
-live smoke session — every command below was actually run, and every
-surprise was filed in [smoke-real-box-results.md](smoke-real-box-results.md).
+live smoke session; every command below was actually run.
 
 Run this end-to-end after any change that touches the install path,
 the helper-side `app apply` / `app setup-env` verbs, or the Caddy
 fragment / Podman networking shape. The fake smoke catches a lot but
-not everything — finding 1 (`ufw --force allow`) and finding 3 (UFW
-blocking Podman bridge DNS) were both invisible to it.
+not everything: it cannot prove host firewall behavior, Podman bridge DNS, or
+the real Caddy container lifecycle.
 
 ## 0. Prereqs
 
@@ -31,8 +30,7 @@ blocking Podman bridge DNS) were both invisible to it.
   want real TLS via Let's Encrypt. **Routing alone works without DNS** —
   curl with a `Host:` header reaches Caddy on port 443 (Caddy auto-
   redirects 80 → 443, so plain HTTP is not the test). Use `tls
-  internal` in the fragment for self-signed certs during the smoke;
-  see finding 6.
+  internal` in the fragment for self-signed certs during the smoke.
 - `simple-vps` built locally:
 
   ```sh
@@ -75,7 +73,7 @@ blocking Podman bridge DNS) were both invisible to it.
 
 Expected output ends with `==> Provisioning complete` and `Apply
 <ID> changed N operations`. If you see `simple-vps: error: ...`
-instead, capture the stderr line and add it to results.md.
+instead, capture the stderr line in the release notes or issue you are working.
 
 After install, verify (over SSH as root):
 
@@ -278,3 +276,28 @@ SIMPLE_VPS_KNOWN_HOSTS="$(ssh-keyscan -t ed25519 -H <IP> 2>/dev/null)" \
 
 Expected destroy output names the removed container, removed route, and
 purged secrets. Expected status after destroy has an empty `processes` array.
+
+## 6. Example Matrix
+
+For v0.6 DX hardening, also run the checked-in example matrix after the
+host has the current helper:
+
+```sh
+make build build-linux
+./dist/simple-vps host install --host <IP> --bootstrap-user root --ssh-key ~/.ssh/hetzner \
+  --operator-user admin --deploy-user deploy \
+  --operator-ssh-public-key-file ~/.ssh/hetzner.pub \
+  --deploy-ssh-public-key-file ~/.ssh/simple-vps-deploy.pub \
+  --ingress public --admin public-ssh --no-tailscale --no-cloudflare-tunnel --yes
+scripts/example-matrix-smoke.sh --host <IP> --client ./dist/simple-vps
+```
+
+The May 30, 2026 v0.6 run against `128.140.3.159` passed PHP, Hono/Bun,
+mixed API plus static docs, and real `astro build` static deploys. Host doctor
+was healthy before the run, and final `app list --json` was empty after manual
+cleanup verification.
+
+Issue found: the matrix script previously resolved relative `--client` paths
+after `cd` into each example and ignored destroy failures during success
+cleanup. The script now resolves the client path once up front and fails the
+normal success path if cleanup cannot destroy deployed example envs.

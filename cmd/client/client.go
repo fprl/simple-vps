@@ -237,7 +237,18 @@ func serverAppSetupEnvCommand(appName string, envName string) string {
 }
 
 func serverAppPreflightCommand(appName string, envName string, requiredSecrets []string) string {
+	return serverAppPreflightCommandWithJSON(appName, envName, requiredSecrets, false)
+}
+
+func serverAppPreflightJSONCommand(appName string, envName string, requiredSecrets []string) string {
+	return serverAppPreflightCommandWithJSON(appName, envName, requiredSecrets, true)
+}
+
+func serverAppPreflightCommandWithJSON(appName string, envName string, requiredSecrets []string, jsonFlag bool) string {
 	args := []string{"app", "preflight"}
+	if jsonFlag {
+		args = append(args, "--json")
+	}
 	for _, secret := range requiredSecrets {
 		args = append(args, "--secret", secret)
 	}

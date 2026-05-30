@@ -32,12 +32,15 @@ func (c appStatusCmd) Run() error {
 		utils.Die(err.Error(), 1)
 	}
 	processes := containersToProcesses(out)
+	if err := attachProcessReleaseMetadata(c.App, c.Env, processes); err != nil {
+		utils.Die(err.Error(), 1)
+	}
 	envKnown := envIdentityExists(c.App, c.Env)
 	static, err := activeStaticStatus(c.App, c.Env)
 	if err != nil {
 		utils.Die(err.Error(), 1)
 	}
-	release := activeStatusRelease(c.App, c.Env, runningProcesses(processes), static)
+	release := activeStatusRelease(runningProcesses(processes), static)
 	if c.JSON {
 		payload := statusPayload{App: c.App, Env: c.Env, Release: release, Static: static, Processes: processes}
 		buf, err := json.MarshalIndent(payload, "", "  ")
@@ -68,7 +71,7 @@ func (c appListCmd) Run() error {
 		utils.Die(err.Error(), 1)
 	}
 	apps := mergeAppEnvs(identityApps, containersToAppEnvs(out))
-	if err := attachStaticStatuses(apps); err != nil {
+	if err := attachAppListRuntimeMetadata(apps); err != nil {
 		utils.Die(err.Error(), 1)
 	}
 	if c.JSON {
@@ -209,13 +212,6 @@ func containersToProcesses(entries []containerEntry) []processStatus {
 			Release:   release,
 			Status:    e.Status,
 		}
-		if release != "" {
-			if meta, ok, err := readReleaseMetadata(e.Labels["simple-vps.app"], e.Labels["simple-vps.env"], release); err == nil && ok {
-				status.Dirty = meta.Dirty
-				status.BaseCommit = meta.BaseCommit
-				status.CreatedAt = meta.CreatedAt
-			}
-		}
 		out = append(out, status)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Process < out[j].Process })
@@ -245,6 +241,9 @@ func containersToAppEnvs(entries []containerEntry) []appEnvStatus {
 		if app == "" || env == "" || process == "" || process == "release" {
 			continue
 		}
+		if e.Labels["simple-vps.infra_id"] != identity.InfraID(app, env) {
+			continue
+		}
 		k := key{app: app, env: env}
 		grouped[k] = append(grouped[k], e)
 	}
@@ -269,6 +268,23 @@ func containersToAppEnvs(entries []containerEntry) []appEnvStatus {
 		})
 	}
 	return out
+}
+
+func attachProcessReleaseMetadata(app, env string, processes []processStatus) error {
+	for i := range processes {
+		release := processes[i].Release
+		if release == "" {
+			return fmt.Errorf("process %s for %s (%s) has no release label", processes[i].Process, app, env)
+		}
+		meta, err := readReleaseMetadata(app, env, release)
+		if err != nil {
+			return fmt.Errorf("process %s for %s (%s) release %s: %v", processes[i].Process, app, env, release, err)
+		}
+		processes[i].Dirty = meta.Dirty
+		processes[i].BaseCommit = meta.BaseCommit
+		processes[i].CreatedAt = meta.CreatedAt
+	}
+	return nil
 }
 
 func mergeAppEnvs(identityApps, processApps []appEnvStatus) []appEnvStatus {
@@ -384,8 +400,11 @@ func renderAppListText(apps []appEnvStatus) string {
 	return b.String()
 }
 
-func attachStaticStatuses(apps []appEnvStatus) error {
+func attachAppListRuntimeMetadata(apps []appEnvStatus) error {
 	for i := range apps {
+		if err := attachProcessReleaseMetadata(apps[i].App, apps[i].Env, apps[i].Processes); err != nil {
+			return err
+		}
 		static, err := activeStaticStatus(apps[i].App, apps[i].Env)
 		if err != nil {
 			return err
@@ -417,7 +436,7 @@ func renderStatusReleaseText(release *statusRelease) string {
 	return out
 }
 
-func activeStatusRelease(app, env string, processes []processStatus, static *staticStatus) *statusRelease {
+func activeStatusRelease(processes []processStatus, static *staticStatus) *statusRelease {
 	processRelease, processMixed := commonProcessRelease(processes)
 	staticRelease := ""
 	if static != nil {
@@ -436,7 +455,7 @@ func activeStatusRelease(app, env string, processes []processStatus, static *sta
 		}
 	case processRelease != "":
 		release := statusRelease{Release: processRelease, Source: "process"}
-		applyReleaseMetadata(app, env, processRelease, &release)
+		copyProcessReleaseMetadata(processes, processRelease, &release)
 		if staticRelease == processRelease {
 			release.Source = "mixed"
 			release.StaticRelease = staticRelease
@@ -445,7 +464,7 @@ func activeStatusRelease(app, env string, processes []processStatus, static *sta
 		return &release
 	case staticRelease != "":
 		release := statusRelease{Release: staticRelease, Source: "static"}
-		applyReleaseMetadata(app, env, staticRelease, &release)
+		copyStaticReleaseMetadata(static, &release)
 		return &release
 	default:
 		return nil
@@ -469,14 +488,25 @@ func commonProcessRelease(processes []processStatus) (string, bool) {
 	return release, false
 }
 
-func applyReleaseMetadata(app, env, release string, target *statusRelease) {
-	meta, ok, err := readReleaseMetadata(app, env, release)
-	if err != nil || !ok {
+func copyProcessReleaseMetadata(processes []processStatus, release string, target *statusRelease) {
+	for _, proc := range processes {
+		if proc.Release != release {
+			continue
+		}
+		target.Dirty = proc.Dirty
+		target.BaseCommit = proc.BaseCommit
+		target.CreatedAt = proc.CreatedAt
 		return
 	}
-	target.Dirty = meta.Dirty
-	target.BaseCommit = meta.BaseCommit
-	target.CreatedAt = meta.CreatedAt
+}
+
+func copyStaticReleaseMetadata(static *staticStatus, target *statusRelease) {
+	if static == nil {
+		return
+	}
+	target.Dirty = static.Dirty
+	target.BaseCommit = static.BaseCommit
+	target.CreatedAt = static.CreatedAt
 }
 
 func activeStaticStatus(app, env string) (*staticStatus, error) {
@@ -497,11 +527,13 @@ func activeStaticStatus(app, env string) (*staticStatus, error) {
 		return nil, err
 	}
 	status := &staticStatus{Release: release, Routes: routes}
-	if meta, ok, err := readReleaseMetadata(app, env, release); err == nil && ok {
-		status.Dirty = meta.Dirty
-		status.BaseCommit = meta.BaseCommit
-		status.CreatedAt = meta.CreatedAt
+	meta, err := readReleaseMetadata(app, env, release)
+	if err != nil {
+		return nil, err
 	}
+	status.Dirty = meta.Dirty
+	status.BaseCommit = meta.BaseCommit
+	status.CreatedAt = meta.CreatedAt
 	return status, nil
 }
 
@@ -528,6 +560,7 @@ func podmanPSContainers(app, env string) ([]containerEntry, error) {
 	cmd := exec.Command("podman", "ps", "-a",
 		"--filter", "label=simple-vps.app="+app,
 		"--filter", "label=simple-vps.env="+env,
+		"--filter", "label=simple-vps.infra_id="+identity.InfraID(app, env),
 		"--format", "json",
 	)
 	out, err := cmd.Output()

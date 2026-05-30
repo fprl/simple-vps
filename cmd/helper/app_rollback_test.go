@@ -88,6 +88,15 @@ func TestImageReleasesFromEntriesUsesPodmanLabels(t *testing.T) {
 				"simple-vps.release":  "ignored",
 			},
 		},
+		{
+			Names: []string{"localhost/simple-vps/svps-de70a215abfd:1111111"},
+			Tag:   "1111111",
+			Labels: map[string]string{
+				"simple-vps.app":      "hello",
+				"simple-vps.env":      "production",
+				"simple-vps.infra_id": "svps-de70a215abfd",
+			},
+		},
 	}
 
 	got := imageReleasesFromEntries("hello", "production", entries)

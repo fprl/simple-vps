@@ -246,9 +246,6 @@ func imageReleasesFromEntries(app, env string, entries []imageEntry) []imageRele
 			continue
 		}
 		release := e.Labels["simple-vps.release"]
-		if release == "" {
-			release = e.Tag
-		}
 		if release == "" || release == "<none>" || seen[release] {
 			continue
 		}
@@ -348,6 +345,9 @@ func releaseSnapshots(app, env string) ([]imageRelease, error) {
 		info, err := os.Stat(identity.ReleaseManifestFile(app, env, release))
 		if err != nil || info.IsDir() {
 			continue
+		}
+		if _, err := readReleaseMetadata(app, env, release); err != nil {
+			return nil, err
 		}
 		withSnapshots = append(withSnapshots, releaseWithSnapshot{
 			release: release,

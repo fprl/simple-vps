@@ -220,7 +220,9 @@ When a manifest has `serve` routes, clean Git deploys still append those
 directories from the working tree. This keeps generated or ignored `dist/`
 output deployable without switching the whole artifact away from `git archive`.
 The release ID includes a static-tree hash suffix so static byte changes
-produce a distinct release.
+produce a distinct release. Dirty release IDs include the base commit and a
+nanosecond UTC timestamp so repeated dirty deploys from the same commit cannot
+reuse the same image tag or container name.
 
 Backups include the active static release assets whenever the applied
 manifest has `serve` routes, whether the app is static-only or mixed.

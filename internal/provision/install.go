@@ -387,9 +387,8 @@ func ensureDeployTmpDir(apply host.Apply) (bool, error) {
 // addPodmanHostBaseline writes the host config that makes Podman bridge
 // networking actually work on Ubuntu's default-deny UFW posture, and
 // makes short image names (`FROM nginx:alpine`) resolve. Both surfaced
-// during the first real-box smoke (docs/smoke-real-box-results.md
-// findings 3 and 4); the fake-VPS fixture couldn't catch them because
-// it doesn't run real podman or real ufw.
+// during real-box smoke; the fake-VPS fixture couldn't catch them
+// because it doesn't run real podman or real ufw.
 //
 // Scope is deliberately narrow:
 //
@@ -590,7 +589,7 @@ func ensureIngressNetwork(apply host.Apply) (bool, error) {
 // /etc/caddy/Caddyfile`; a missing file makes the container exit 1
 // and systemd loops through Restart=on-failure until "start request
 // repeated too quickly" kills the service. We learned that the hard
-// way on real-box smoke; see docs/smoke-real-box-results.md finding 2.
+// way on real-box smoke.
 func addCaddy(ops *[]operation, opts InstallOptions) {
 	for _, dir := range []host.Directory{
 		{Path: "/etc/caddy", Owner: "root", Group: "root", Mode: 0755},

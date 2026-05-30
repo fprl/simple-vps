@@ -89,9 +89,9 @@ func TestValidateArtifactDotenvIgnoresUndeployedDirs(t *testing.T) {
 }
 
 func TestDirtyReleaseIDIncludesBaseCommit(t *testing.T) {
-	at := time.Date(2026, 5, 30, 14, 30, 12, 0, time.UTC)
+	at := time.Date(2026, 5, 30, 14, 30, 12, 123456789, time.UTC)
 	got := dirtyReleaseID("a1b2c3d4e5f6", at)
-	want := "a1b2c3d4e5f6-dirty-20260530t143012z"
+	want := "a1b2c3d4e5f6-dirty-20260530t143012123456789z"
 	if got != want {
 		t.Fatalf("dirtyReleaseID = %q, want %q", got, want)
 	}
@@ -487,6 +487,12 @@ func TestServerAppPreflightCommandIncludesRequiredSecrets(t *testing.T) {
 	if got != want {
 		t.Fatalf("unexpected command:\nwant: %s\n got: %s", want, got)
 	}
+
+	got = serverAppPreflightJSONCommand("api", "production", []string{"DATABASE_URL"})
+	want = "sudo simple-vps server app preflight --json --secret DATABASE_URL api production"
+	if got != want {
+		t.Fatalf("unexpected json command:\nwant: %s\n got: %s", want, got)
+	}
 }
 
 func TestServerAppListCommandSupportsJSON(t *testing.T) {
@@ -663,9 +669,10 @@ func TestDeployRemotePreflightIsReadOnlyAndChecksSecrets(t *testing.T) {
 		SecretRefs: map[string]string{"DATABASE_URL": "DATABASE_URL"},
 	}
 	runner := &fakeSSHRunner{responses: map[string]string{
-		"true":                        `ok`,
-		"command -v rsync >/dev/null": "",
-		serverAppPreflightCommand("api", "production", []string{"DATABASE_URL"}): "Preflight passed for api (production)\n",
+		"true":                             `ok`,
+		"command -v simple-vps >/dev/null": "",
+		"command -v rsync >/dev/null":      "",
+		serverAppPreflightJSONCommand("api", "production", []string{"DATABASE_URL"}): `{"app":"api","env":"production","healthy":true,"findings":[]}`,
 	}}
 
 	if err := deployRemotePreflight(runner, ctx); err != nil {
@@ -687,10 +694,11 @@ func TestDeployRemotePreflightFailsMissingSecrets(t *testing.T) {
 		SecretRefs: map[string]string{"DATABASE_URL": "DATABASE_URL"},
 	}
 	runner := &fakeSSHRunner{responses: map[string]string{
-		"true":                        `ok`,
-		"command -v rsync >/dev/null": "",
+		"true":                             `ok`,
+		"command -v simple-vps >/dev/null": "",
+		"command -v rsync >/dev/null":      "",
 	}, failures: map[string]string{
-		serverAppPreflightCommand("api", "production", []string{"DATABASE_URL"}): "Preflight failed for api (production)\n  - missing secret DATABASE_URL; run `simple-vps secret set DATABASE_URL --env production`\n",
+		serverAppPreflightJSONCommand("api", "production", []string{"DATABASE_URL"}): `{"app":"api","env":"production","healthy":false,"findings":["missing secret DATABASE_URL; run ` + "`" + `simple-vps secret set DATABASE_URL --env production` + "`" + `"]}`,
 	}}
 
 	err := deployRemotePreflight(runner, ctx)
