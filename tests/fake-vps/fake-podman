@@ -241,9 +241,18 @@ PY
       echo "fake podman: no such container: $container" >&2
       exit 1
     fi
-    # If the request is `caddy validate`, exit 0. (Real validation runs
-    # inside the Caddy container against the full Caddyfile; the fake
-    # accepts whatever fragment is written.)
+    if [[ "$container" == "caddy" && "${1:-}" == "caddy" && "${2:-}" == "validate" && -f "$state_dir/fail-caddy-validate" ]]; then
+      echo "fake caddy validate failed" >&2
+      exit 42
+    fi
+    if [[ "$container" == "caddy" && "${1:-}" == "caddy" && "${2:-}" == "reload" && -f "$state_dir/fail-caddy-reload" ]]; then
+      echo "fake caddy reload failed" >&2
+      exit 42
+    fi
+    # If the request is `caddy validate` or `caddy reload`, exit 0.
+    # Real validation runs inside the Caddy container against the full
+    # Caddyfile; the fake accepts whatever fragment is written unless a
+    # test drops one of the failure marker files above.
     exit 0
     ;;
 
@@ -392,6 +401,34 @@ PY
       kill "$(cat "$listener")" 2>/dev/null || true
       rm -f "$listener"
     fi
+    exit 0
+    ;;
+
+  start)
+    # `podman start <name>` — used to recover stopped workers when a
+    # later deploy step fails. Container metadata is preserved.
+    name="${1:-}"
+    if [[ -z "$name" || ! -f "$state_dir/containers/$name.labels" ]]; then
+      echo "fake podman: no such container: $name" >&2
+      exit 1
+    fi
+    listener="$state_dir/listeners/$name.pid"
+    if [[ -f "$listener" ]]; then
+      exit 0
+    fi
+    image=""
+    image_file="$state_dir/containers/$name.image"
+    [[ -f "$image_file" ]] && image="$(cat "$image_file")"
+    port_file="$state_dir/containers/$name.port"
+    if [[ "$image" == *caddy* ]]; then
+      bind_port="$(cat "$port_file" 2>/dev/null || echo 80)"
+      python3 -u "$(dirname "$0")/fake-podman.caddy.py" "$bind_port" "$state_dir" \
+        >/dev/null 2>"$state_dir/listeners/$name.log" &
+    else
+      python3 -u "$(dirname "$0")/fake-podman.app.py" "$port_file" \
+        >/dev/null 2>"$state_dir/listeners/$name.log" &
+    fi
+    echo "$!" > "$listener"
     exit 0
     ;;
 

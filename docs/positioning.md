@@ -138,15 +138,16 @@ Concretely:
 
 ### 2. Composable primitive
 
-State is in files (ADR-0002). CLI is the API. `--json` output on
-every read-only command. Someone — the user later, the community, a
-paid SaaS — can build a dashboard, scheduler, or multi-host
-coordinator on top of simple-vps without changing simple-vps.
+State is in files (ADR-0002). CLI is the API. Machine-facing read
+surfaces expose `--json` where the output is stable: `status`, `app
+list`, `backup list`, `backup create`, `secret list`, `host status`,
+and `host doctor`. Someone — the user later, the community, a paid
+SaaS — can build a dashboard, scheduler, or multi-host coordinator on
+top of simple-vps without changing simple-vps.
 
-This is a moat. The discipline cost is real (see ADR-0006:
-additive-only schema changes, migration tooling shipped with the
-binary, deprecation windows). The moat is only real if the discipline
-holds.
+This is a moat. The discipline cost is real: contracts are written
+down, tests pin them, and pre-1.0 breaking changes happen deliberately
+instead of through drift.
 
 ### 3. Less complexity unless really needed
 

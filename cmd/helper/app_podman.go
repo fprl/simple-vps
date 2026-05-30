@@ -161,6 +161,8 @@ func waitHealthy(containerName string, port int, path string, timeout time.Durat
 	return lastErr
 }
 
+const releaseCommandTimeout = 10 * time.Minute
+
 func runReleaseCommand(app, env, command, imageTag, userID, groupID, release string) error {
 	name := identity.ContainerName(app, env, "release", release)
 	_, _ = utils.RunChecked("podman", []string{"rm", "-f", name}, "")
@@ -183,7 +185,8 @@ func runReleaseCommand(app, env, command, imageTag, userID, groupID, release str
 		args = append(args, "--env-file", identity.EnvFile(app, env))
 	}
 	args = append(args, imageTag, "/bin/sh", "-c", command)
-	if _, err := utils.RunChecked("podman", args, ""); err != nil {
+	if _, err := utils.RunCheckedWithTimeout("podman", args, "", releaseCommandTimeout); err != nil {
+		_, _ = utils.RunChecked("podman", []string{"rm", "-f", name}, "")
 		return fmt.Errorf("release command %q failed before traffic switch: %v", command, err)
 	}
 	return nil

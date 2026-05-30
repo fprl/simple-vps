@@ -45,6 +45,7 @@ func TestContainerSmoke(t *testing.T) {
 
 	t.Run("container app reaches setup + deploy + caddy proxy", env.testContainerAppLifecycle)
 	t.Run("release command failure leaves old traffic unchanged", env.testReleaseCommandFailure)
+	t.Run("caddy switch failure restores runtime state", env.testCaddySwitchFailureRollback)
 	t.Run("dirty deploy records base commit and status", env.testDirtyDeployStatus)
 	t.Run("container rollback runs an older image release", env.testRollback)
 	t.Run("backup and restore round-trip app state", env.testBackupRestore)
@@ -231,6 +232,62 @@ func (e *smokeEnv) testReleaseCommandFailure(t *testing.T) {
 	if envAfterFailure != stableEnv {
 		t.Fatalf("failing release command changed runtime env:\nbefore:\n%s\nafter:\n%s", stableEnv, envAfterFailure)
 	}
+}
+
+func (e *smokeEnv) testCaddySwitchFailureRollback(t *testing.T) {
+	app := filepath.Join(e.tmp, "caddy-fail")
+	mustMkdir(t, app)
+	writeCaddyFailFixture(t, app)
+	e.commitFixture(t, app)
+
+	e.simpleVPS(t, app, nil, "setup", "--env", "production")
+	e.simpleVPS(t, app, nil, "deploy", "--env", "production")
+	stableWorker := currentProcessContainer(t, e, app, "worker")
+	stableEnv := e.dockerExec(t, "cat "+identity.EnvFile("caddyfail", "production"))
+	stableManifest := e.dockerExec(t, "cat "+identity.ManifestFile("caddyfail", "production"))
+	stableFragment := e.ssh(t, "cat "+identity.CaddyFragmentFile("caddyfail", "production"))
+	stableStaticCurrent := e.dockerExec(t, "readlink "+filepath.Join(identity.StaticDir("caddyfail", "production"), "current"))
+	e.dockerExec(t, "test -f /run/fake-podman/listeners/"+stableWorker+".pid")
+
+	manifestPath := filepath.Join(app, "simple-vps.toml")
+	manifest, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nextManifest := strings.Replace(string(manifest), `MARKER = "stable"`, `MARKER = "failed"`, 1)
+	nextManifest = strings.Replace(nextManifest, `path = "/docs"`, `path = "/docs-v2"`, 1)
+	if nextManifest == string(manifest) {
+		t.Fatal("test fixture did not contain stable marker")
+	}
+	mustWrite(t, manifestPath, nextManifest)
+	mustWrite(t, filepath.Join(app, "docs-dist", "index.html"), "docs failed\n")
+	mustWrite(t, filepath.Join(app, "README.md"), "trigger caddy failure\n")
+	e.commitFixture(t, app)
+	failedRelease := gitRelease(t, e, app)
+	e.dockerExec(t, "touch /run/fake-podman/fail-caddy-reload")
+	defer e.dockerExec(t, "rm -f /run/fake-podman/fail-caddy-reload")
+
+	failed := e.runSimpleVPS(t, app, nil, "deploy", "--env", "production")
+	if failed.err == nil {
+		t.Fatal("deploy with failing Caddy reload should fail")
+	}
+	assertContains(t, failed.stdout+failed.stderr, "caddy reload")
+
+	if got := e.dockerExec(t, "cat "+identity.EnvFile("caddyfail", "production")); got != stableEnv {
+		t.Fatalf("failing Caddy reload changed runtime env:\nbefore:\n%s\nafter:\n%s", stableEnv, got)
+	}
+	if got := e.dockerExec(t, "cat "+identity.ManifestFile("caddyfail", "production")); got != stableManifest {
+		t.Fatalf("failing Caddy reload changed current manifest:\nbefore:\n%s\nafter:\n%s", stableManifest, got)
+	}
+	if got := e.ssh(t, "cat "+identity.CaddyFragmentFile("caddyfail", "production")); got != stableFragment {
+		t.Fatalf("failing Caddy reload changed traffic:\nbefore:\n%s\nafter:\n%s", stableFragment, got)
+	}
+	if got := e.dockerExec(t, "readlink "+filepath.Join(identity.StaticDir("caddyfail", "production"), "current")); got != stableStaticCurrent {
+		t.Fatalf("failing Caddy reload changed static current:\nbefore: %s\nafter: %s", stableStaticCurrent, got)
+	}
+	e.dockerExec(t, "test -f /run/fake-podman/listeners/"+stableWorker+".pid")
+	e.dockerExec(t, "test ! -e /run/fake-podman/containers/"+identity.ContainerName("caddyfail", "production", "web", failedRelease)+".labels")
+	e.dockerExec(t, "test ! -e /run/fake-podman/containers/"+identity.ContainerName("caddyfail", "production", "worker", failedRelease)+".labels")
 }
 
 func (e *smokeEnv) testDirtyDeployStatus(t *testing.T) {
@@ -750,9 +807,9 @@ process = "web"
 	}
 }
 
-// testStatusAndLogs covers the read-only operator surface introduced
-// in PR #38. Assumes the earlier subtests have already deployed the
-// `api` container app and left its `web` process running.
+// testStatusAndLogs covers the read-only operator surface. It assumes
+// the earlier subtests have already deployed the `api` container app
+// and left its `web` process running.
 func (e *smokeEnv) testStatusAndLogs(t *testing.T) {
 	app := filepath.Join(e.tmp, "container-api")
 
@@ -1004,6 +1061,39 @@ health = "/health"
 [routes.app]
 host = "release-fail.example.com"
 process = "web"
+	`)
+}
+
+func writeCaddyFailFixture(t *testing.T, app string) {
+	t.Helper()
+	mustMkdir(t, filepath.Join(app, "docs-dist"))
+	mustWrite(t, filepath.Join(app, "docs-dist", "index.html"), "docs stable\n")
+	mustWrite(t, filepath.Join(app, "Dockerfile"), `FROM alpine
+CMD ["/bin/sh", "-c", "sleep 3600"]
+`)
+	mustWrite(t, filepath.Join(app, "simple-vps.toml"), `name = "caddyfail"
+
+[env.production]
+server = "fake-vps"
+
+[vars]
+MARKER = "stable"
+
+[processes.web]
+port = 3000
+health = "/health"
+
+[processes.worker]
+command = "sleep 3600"
+
+[routes.app]
+host = "caddy-fail.example.com"
+process = "web"
+
+[routes.docs]
+host = "caddy-fail.example.com"
+path = "/docs"
+serve = "docs-dist"
 `)
 }
 
@@ -1084,6 +1174,11 @@ func currentStaticReleaseFor(t *testing.T, e *smokeEnv, app, env string) string 
 
 func currentWebContainer(t *testing.T, e *smokeEnv, app string) string {
 	t.Helper()
+	return currentProcessContainer(t, e, app, "web")
+}
+
+func currentProcessContainer(t *testing.T, e *smokeEnv, app string, process string) string {
+	t.Helper()
 	rawJSON := e.simpleVPS(t, app, nil, "status", "--json", "--env", "production")
 	var payload struct {
 		Processes []struct {
@@ -1095,10 +1190,10 @@ func currentWebContainer(t *testing.T, e *smokeEnv, app string) string {
 		t.Fatalf("status --json output not parseable as JSON: %v\nraw:\n%s", err, rawJSON)
 	}
 	for _, proc := range payload.Processes {
-		if proc.Process == "web" {
+		if proc.Process == process {
 			return proc.Container
 		}
 	}
-	t.Fatalf("status --json missing web process:\n%s", rawJSON)
+	t.Fatalf("status --json missing %s process:\n%s", process, rawJSON)
 	return ""
 }

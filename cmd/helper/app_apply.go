@@ -40,6 +40,7 @@ type appApplyCmd struct {
 type applyReleaseResult struct {
 	containersToRemove []string
 	startedContainers  []string
+	stoppedContainers  []string
 	processNames       map[string]string
 	staticSnapshot     *staticCurrentSnapshot
 	staticReleaseDir   string
@@ -80,6 +81,29 @@ func (c appApplyCmd) runLockedE() error {
 		return err
 	}
 
+	var envSnapshot *fileSnapshot
+	if app.NeedsImage {
+		snapshot, err := snapshotEnvFile(c.App, c.Env)
+		if err != nil {
+			return fmt.Errorf("snapshot runtime env file: %v", err)
+		}
+		envSnapshot = &snapshot
+	}
+	manifestSnapshot, err := snapshotCurrentManifest(c.App, c.Env)
+	if err != nil {
+		return fmt.Errorf("snapshot current manifest: %v", err)
+	}
+	deployCommitted := false
+	defer func() {
+		if deployCommitted {
+			return
+		}
+		if envSnapshot != nil {
+			_ = restoreEnvFile(c.App, c.Env, *envSnapshot)
+		}
+		_ = restoreCurrentManifest(c.App, c.Env, manifestSnapshot)
+	}()
+
 	meta, err := c.releaseMetadata()
 	if err != nil {
 		return err
@@ -99,14 +123,16 @@ func (c appApplyCmd) runLockedE() error {
 		return err
 	}
 
+	if err := persistCurrentManifestFromRelease(c.App, c.Env, c.SHA); err != nil {
+		result.cleanupFailed(c.App, c.Env)
+		return err
+	}
 	if err := c.switchTraffic(app, result); err != nil {
 		result.cleanupFailed(c.App, c.Env)
 		return err
 	}
 	releaseSnapshotActive = true
-	if err := persistCurrentManifestFromRelease(c.App, c.Env, c.SHA); err != nil {
-		return err
-	}
+	deployCommitted = true
 	removeContainers(result.containersToRemove)
 
 	fmt.Printf("Deployed %s (%s) at %s\n", c.App, c.Env, c.SHA)
@@ -216,6 +242,7 @@ func (c appApplyCmd) applyRelease(ctxDir string, app *config.AppContext) (applyR
 		}
 		result.containersToRemove = containerResult.containersToRemove
 		result.startedContainers = containerResult.startedContainers
+		result.stoppedContainers = containerResult.stoppedContainers
 		result.processNames = containerResult.processNames
 	} else {
 		result.containersToRemove = appContainerNames(existing)
@@ -273,8 +300,24 @@ func removeContainers(names []string) {
 	}
 }
 
+func stopContainers(names []string) error {
+	for _, name := range names {
+		if _, err := utils.RunChecked("podman", []string{"stop", name}, ""); err != nil {
+			return fmt.Errorf("stop %s: %v", name, err)
+		}
+	}
+	return nil
+}
+
+func startContainers(names []string) {
+	for _, name := range names {
+		_, _ = utils.RunChecked("podman", []string{"start", name}, "")
+	}
+}
+
 func (r applyReleaseResult) cleanupFailed(app, env string) {
 	removeContainers(r.startedContainers)
+	startContainers(r.stoppedContainers)
 	if r.staticSnapshot != nil {
 		_ = restoreStaticCurrent(app, env, *r.staticSnapshot)
 	}
@@ -324,22 +367,14 @@ func writeManifestSnapshot(app, env, release string, data []byte) error {
 type containerApplyResult struct {
 	containersToRemove []string
 	startedContainers  []string
+	stoppedContainers  []string
 	processNames       map[string]string
 }
 
-func (c appApplyCmd) applyContainer(ctxDir string, app *config.AppContext, existing []containerEntry) (result containerApplyResult, retErr error) {
+func (c appApplyCmd) applyContainer(ctxDir string, app *config.AppContext, existing []containerEntry) (containerApplyResult, error) {
 	if len(app.Processes) == 0 {
 		return containerApplyResult{}, fmt.Errorf("manifest must declare at least one [processes.<name>] block")
 	}
-	restoreEnvFile, err := snapshotRuntimeEnvFile(c.App, c.Env)
-	if err != nil {
-		return containerApplyResult{}, err
-	}
-	defer func() {
-		if retErr != nil {
-			_ = restoreEnvFile()
-		}
-	}()
 	resolved, err := resolveEnv(c.App, c.Env, app.Vars, app.SecretRefs)
 	if err != nil {
 		return containerApplyResult{}, err
@@ -366,14 +401,20 @@ func (c appApplyCmd) applyContainer(ctxDir string, app *config.AppContext, exist
 	}
 
 	var started []string
+	var stopped []string
 	processNames := map[string]string{}
 	containersToRemove := containersForRemovedProcesses(existing, app.Processes)
 	for _, processName := range sortedKeys(app.Processes) {
 		proc := app.Processes[processName]
 		if proc.Port == nil {
-			for _, old := range processContainers(existing, processName, "") {
-				_, _ = utils.RunChecked("podman", []string{"rm", "-f", old}, "")
+			old := processContainers(existing, processName, "")
+			if err := stopContainers(old); err != nil {
+				removeContainers(started)
+				startContainers(stopped)
+				return containerApplyResult{}, err
 			}
+			stopped = append(stopped, old...)
+			containersToRemove = append(containersToRemove, old...)
 		}
 		containerName := nextProcessContainerName(existing, c.App, c.Env, processName, c.SHA, time.Now().UTC().Format("20060102t150405000000000z"))
 		started = append(started, containerName)
@@ -382,6 +423,7 @@ func (c appApplyCmd) applyContainer(ctxDir string, app *config.AppContext, exist
 		}
 		if err := startProcess(c.App, c.Env, processName, proc, imageTag, userID, groupID, c.SHA, containerName); err != nil {
 			removeContainers(started)
+			startContainers(stopped)
 			return containerApplyResult{}, err
 		}
 		if proc.Port != nil {
@@ -391,26 +433,8 @@ func (c appApplyCmd) applyContainer(ctxDir string, app *config.AppContext, exist
 	return containerApplyResult{
 		containersToRemove: uniqueContainerNames(containersToRemove),
 		startedContainers:  uniqueContainerNames(started),
+		stoppedContainers:  uniqueContainerNames(stopped),
 		processNames:       processNames,
-	}, nil
-}
-
-func snapshotRuntimeEnvFile(app, env string) (func() error, error) {
-	path := identity.EnvFile(app, env)
-	data, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return func() error {
-			if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-				return err
-			}
-			return nil
-		}, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("snapshot runtime env file: %v", err)
-	}
-	return func() error {
-		return os.WriteFile(path, data, 0600)
 	}, nil
 }
 

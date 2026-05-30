@@ -2,6 +2,7 @@ package utils
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -48,7 +49,22 @@ func Die(message string, code int) {
 }
 
 func RunChecked(name string, args []string, cwd string) ([]byte, error) {
-	cmd := exec.Command(name, args...)
+	return runChecked(nil, 0, name, args, cwd)
+}
+
+func RunCheckedWithTimeout(name string, args []string, cwd string, timeout time.Duration) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	return runChecked(ctx, timeout, name, args, cwd)
+}
+
+func runChecked(ctx context.Context, timeout time.Duration, name string, args []string, cwd string) ([]byte, error) {
+	var cmd *exec.Cmd
+	if ctx != nil {
+		cmd = exec.CommandContext(ctx, name, args...)
+	} else {
+		cmd = exec.Command(name, args...)
+	}
 	if cwd != "" {
 		cmd.Dir = cwd
 	}
@@ -63,6 +79,9 @@ func RunChecked(name string, args []string, cwd string) ([]byte, error) {
 		}
 		if stdout.Len() > 0 {
 			os.Stderr.Write(stdout.Bytes())
+		}
+		if ctx != nil && ctx.Err() == context.DeadlineExceeded {
+			return nil, fmt.Errorf("command timed out after %s: %s %v", timeout, name, args)
 		}
 		return nil, fmt.Errorf("command failed: %s %v: %w", name, args, err)
 	}

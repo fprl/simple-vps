@@ -86,6 +86,7 @@ simple-vps secret set <KEY> --env <env>               # stdin-only write to /etc
 simple-vps secret list --env <env> [--json]           # keys only, never values
 simple-vps secret rm <KEY> --env <env>                # remove one key
 simple-vps ssh --env <env>                            # SSH into the host
+simple-vps version                                    # print the CLI version
 ```
 
 `restart` uses `podman restart` — container config is preserved (same
@@ -293,7 +294,9 @@ release = "bun run migrate"
 ```
 
 The release command runs from the built image with resolved vars/secrets and
-`/data` mounted before routed web processes move traffic.
+`/data` mounted before routed web processes move traffic. It has a hard
+10-minute timeout; a failed or timed-out release command aborts before Caddy
+moves traffic.
 
 Container app data lives under `/data` inside the container. On the host,
 the env root is flat and scoped to `(app, env)`:

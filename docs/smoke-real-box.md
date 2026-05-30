@@ -37,9 +37,8 @@ the real Caddy container lifecycle.
   make clean && make build
   ```
 
-  `make clean` matters — `prepareGoHelperBinaries` prefers stale
-  `dist/` over rebuilding (see PR #30), so always build fresh before
-  a smoke run.
+  `make clean` matters because host install can reuse local `dist/`
+  binaries. Always build fresh before a smoke run.
 
 - Operator and deploy SSH keys generated for the smoke:
 
@@ -197,9 +196,8 @@ SIMPLE_VPS_KNOWN_HOSTS="$(ssh-keyscan -t ed25519 -H <IP> 2>/dev/null)" \
 ```
 
 Expected last line: `Deployed hello (production) at <sha>`. If the
-deploy errors with `wget: bad address`, the host installer didn't
-write the UFW podman bridge rules — re-install with a build that
-includes PR #33 (`addPodmanHostBaseline`).
+deploy errors with `wget: bad address`, rerun host install with the
+current binary and then rerun `simple-vps host doctor`.
 
 Verify the app read surface:
 

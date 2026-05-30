@@ -458,33 +458,64 @@ func persistCurrentManifestFromRelease(app, env, release string) error {
 	return nil
 }
 
-type envFileSnapshot struct {
+func snapshotCurrentManifest(app, env string) (fileSnapshot, error) {
+	return snapshotFile(identity.ManifestFile(app, env))
+}
+
+func restoreCurrentManifest(app, env string, snapshot fileSnapshot) error {
+	path := identity.ManifestFile(app, env)
+	if err := restoreFile(path, snapshot, 0644); err != nil {
+		return err
+	}
+	if !snapshot.Existed {
+		return nil
+	}
+	if _, err := utils.RunChecked("chown", []string{"root:root", path}, ""); err != nil {
+		return fmt.Errorf("chown restored manifest: %v", err)
+	}
+	return nil
+}
+
+type fileSnapshot struct {
 	Data    []byte
 	Existed bool
 }
 
-func snapshotEnvFile(app, env string) (envFileSnapshot, error) {
-	path := identity.EnvFile(app, env)
+func snapshotFile(path string) (fileSnapshot, error) {
 	data, err := os.ReadFile(path)
 	if err == nil {
-		return envFileSnapshot{Data: data, Existed: true}, nil
+		return fileSnapshot{Data: data, Existed: true}, nil
 	}
 	if os.IsNotExist(err) {
-		return envFileSnapshot{}, nil
+		return fileSnapshot{}, nil
 	}
-	return envFileSnapshot{}, err
+	return fileSnapshot{}, err
 }
 
-func restoreEnvFile(app, env string, snapshot envFileSnapshot) error {
-	path := identity.EnvFile(app, env)
+func restoreFile(path string, snapshot fileSnapshot, mode os.FileMode) error {
 	if !snapshot.Existed {
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 			return err
 		}
 		return nil
 	}
-	if err := os.WriteFile(path, snapshot.Data, 0600); err != nil {
+	if err := os.WriteFile(path, snapshot.Data, mode); err != nil {
 		return err
+	}
+	return nil
+}
+
+func snapshotEnvFile(app, env string) (fileSnapshot, error) {
+	return snapshotFile(identity.EnvFile(app, env))
+}
+
+func restoreEnvFile(app, env string, snapshot fileSnapshot) error {
+	path := identity.EnvFile(app, env)
+	if err := restoreFile(path, snapshot, 0600); err != nil {
+		return err
+	}
+	if !snapshot.Existed {
+		return nil
 	}
 	user := identity.SystemUser(app, env)
 	if _, err := utils.RunChecked("chown", []string{user + ":" + user, path}, ""); err != nil {

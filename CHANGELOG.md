@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Fixed
+
+- Failed Caddy validate/reload now restores the previous runtime env file,
+  current manifest, static pointers, and stopped worker containers.
+- Release commands now time out after 10 minutes instead of holding the deploy
+  lock forever.
+
 ## v0.7.0 - 2026-05-30
 
 ### Added
