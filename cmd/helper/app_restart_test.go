@@ -52,7 +52,7 @@ func TestPickRestartTargetsUnknownProcess(t *testing.T) {
 	}
 	if _, err := pickRestartTargets("api", "production", "worker", processes); err == nil {
 		t.Fatal("expected error for unknown process, got nil")
-	} else if !strings.Contains(err.Error(), `no process "worker"`) {
+	} else if !strings.Contains(err.Error(), `no running process "worker"`) {
 		t.Fatalf("expected unknown-process error, got %v", err)
 	}
 }
@@ -62,6 +62,20 @@ func TestPickRestartTargetsNothingRunning(t *testing.T) {
 		t.Fatal("expected error when nothing is running")
 	} else if !strings.Contains(err.Error(), "no processes running") {
 		t.Fatalf("expected no-processes-running error, got %v", err)
+	}
+}
+
+func TestPickRestartTargetsIgnoresStoppedContainers(t *testing.T) {
+	processes := []processStatus{
+		{Process: "web", Container: "web-old", State: "exited"},
+		{Process: "web", Container: "web-new", State: "running"},
+	}
+	targets, err := pickRestartTargets("api", "production", "web", processes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(targets) != 1 || targets[0].Container != "web-new" {
+		t.Fatalf("expected only running target, got %+v", targets)
 	}
 }
 

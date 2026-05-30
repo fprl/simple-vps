@@ -93,20 +93,21 @@ func resolveRestartTargets(app, env, process string) ([]processStatus, error) {
 // Split out so tests can exercise the filter logic without mocking out
 // the `podman ps` shell-out; the latter is covered by the smoke.
 func pickRestartTargets(app, env, process string, processes []processStatus) ([]processStatus, error) {
-	if len(processes) == 0 {
+	running := runningProcesses(processes)
+	if len(running) == 0 {
 		return nil, fmt.Errorf("no processes running for %s (%s)", app, env)
 	}
 	if process != "" {
-		for _, s := range processes {
+		for _, s := range running {
 			if s.Process == process {
 				return []processStatus{s}, nil
 			}
 		}
-		return nil, fmt.Errorf("no process %q for %s (%s)", process, app, env)
+		return nil, fmt.Errorf("no running process %q for %s (%s)", process, app, env)
 	}
 	// `containersToProcesses` already sorts; restate the assumption so
 	// the rolling order is obvious at the call site.
-	return processes, nil
+	return running, nil
 }
 
 // postRestartState looks up one container by name in a fresh ps dump

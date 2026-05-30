@@ -141,6 +141,10 @@ func validateEnvIdentityFile(app, env string) error {
 	if err != nil {
 		return err
 	}
+	return validateEnvIdentityData(app, env, data)
+}
+
+func validateEnvIdentityData(app, env string, data []byte) error {
 	var file envIdentityFile
 	if err := json.Unmarshal(data, &file); err != nil {
 		return fmt.Errorf("parse identity file: %v", err)

@@ -331,8 +331,9 @@ do not enter that app's deploy artifact.
 
 Before deploy uploads anything, the client runs a read-only remote preflight:
 SSH reachability, deploy-user `rsync`, helper availability, host state validity,
-setup-env layout, running ingress Caddy container, app network, and required
-secret presence. Setup and repair stay explicit in `setup` and `host install`.
+setup-env layout, env identity validity, running ingress Caddy container, full
+Caddy config validation, app network, and required secret presence. Setup and
+repair stay explicit in `setup` and `host install`.
 
 See [ADR-0008](docs/adr/0008-manifest-v2-env-root-and-runtime-identity.md)
 for the manifest v2, env-root, and derived infra ID contract.
