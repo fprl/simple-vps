@@ -1,0 +1,13 @@
+{
+  "name": "simple-vps-astro-static",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "astro build",
+    "dev": "astro dev",
+    "preview": "astro preview"
+  },
+  "devDependencies": {
+    "astro": "6.4.2"
+  }
+}

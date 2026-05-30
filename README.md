@@ -36,7 +36,8 @@ Example apps live under `examples/`:
 
 - `examples/hono-bun-api` - Dockerfile-backed Bun/Hono API.
 - `examples/php-plain` - Dockerfile-backed PHP HTTP app.
-- `examples/astro-static` - static-only `dist/` deploy.
+- `examples/astro-static` - real Astro app; run `npm run build`, then deploy
+  generated `dist/`.
 - `examples/mixed-api-docs` - container API plus host-served `/docs`.
 
 For the fresh-VPS-to-first-app path, use

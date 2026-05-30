@@ -20,10 +20,13 @@ make build VERSION="$VERSION"
 
 ## Example Manifest Checks
 
+The Astro example check needs Node/npm and network access because it builds a
+real static site before validating `serve = "dist"`.
+
 ```bash
 (cd examples/hono-bun-api && ../../dist/simple-vps check --env production)
 (cd examples/php-plain && ../../dist/simple-vps check --env production)
-(cd examples/astro-static && ../../dist/simple-vps check --env production)
+(cd examples/astro-static && npm install --no-package-lock && npm run build && ../../dist/simple-vps check --env production)
 (cd examples/mixed-api-docs && ../../dist/simple-vps check --env production)
 tmp=$(mktemp -d /tmp/simple-vps-init-check-XXXXXX)
 ./dist/simple-vps init --config "$tmp/simple-vps.toml" --template php --name init-php --server deploy@example.com --host init-php.example.com
