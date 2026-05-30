@@ -183,6 +183,25 @@ func TestContainersOutsideDesiredRelease(t *testing.T) {
 	}
 }
 
+func TestNextProcessContainerNameUsesInstanceWhenDefaultExists(t *testing.T) {
+	base := identity.ContainerName("api", "production", "web", "abc123")
+	got := nextProcessContainerName([]containerEntry{
+		{Names: []string{base}, Labels: map[string]string{"simple-vps.process": "web", "simple-vps.release": "abc123"}},
+	}, "api", "production", "web", "abc123", "20260530t143012000000000z")
+	want := identity.ContainerInstanceName("api", "production", "web", "abc123", "20260530t143012000000000z")
+	if got != want {
+		t.Fatalf("expected instance container %q, got %q", want, got)
+	}
+}
+
+func TestNextProcessContainerNameUsesDefaultWhenFree(t *testing.T) {
+	got := nextProcessContainerName(nil, "api", "production", "web", "abc123", "20260530t143012000000000z")
+	want := identity.ContainerName("api", "production", "web", "abc123")
+	if got != want {
+		t.Fatalf("expected default container %q, got %q", want, got)
+	}
+}
+
 func TestPodmanBuildArgsRebuildBypassesCacheAndPullsBases(t *testing.T) {
 	args := podmanBuildArgs("api", "production", identity.ImageTag("api", "production", "abc123"), "abc123", "/tmp/Dockerfile", "/tmp/ctx", true)
 	joined := strings.Join(args, " ")
@@ -198,7 +217,8 @@ func TestBuildPodmanRunArgsEmitsHardeningDataMountResourcesAndLabels(t *testing.
 		Command:   "/usr/bin/myserver --foo",
 		Resources: config.Resources{Memory: &memory, CPUs: &cpus},
 	}
-	args := buildPodmanRunArgs("api", "production", "web", proc, identity.ImageTag("api", "production", "abc123"), "999", "988", "abc123", true)
+	containerName := identity.ContainerName("api", "production", "web", "abc123")
+	args := buildPodmanRunArgs("api", "production", "web", proc, identity.ImageTag("api", "production", "abc123"), "999", "988", "abc123", containerName, true)
 	joined := strings.Join(args, " ")
 	for _, want := range []string{
 		"--cap-drop ALL",
@@ -226,7 +246,7 @@ func TestBuildPodmanRunArgsEmitsHardeningDataMountResourcesAndLabels(t *testing.
 }
 
 func TestBuildPodmanRunArgsSkipsEnvFileWhenAbsent(t *testing.T) {
-	args := buildPodmanRunArgs("api", "production", "web", config.Process{}, "img:tag", "999", "988", "abc123", false)
+	args := buildPodmanRunArgs("api", "production", "web", config.Process{}, "img:tag", "999", "988", "abc123", identity.ContainerName("api", "production", "web", "abc123"), false)
 	for _, a := range args {
 		if a == "--env-file" {
 			t.Fatalf("did not expect --env-file when env file is absent, args:\n%s", strings.Join(args, " "))
@@ -266,6 +286,24 @@ func TestRenderAppCaddyfileProcessRouteUsesVersionedContainerDNS(t *testing.T) {
 	want := "reverse_proxy http://" + identity.ContainerName("api", "production", "web", "abc123") + ":3000"
 	if !strings.Contains(got, want) {
 		t.Fatalf("expected versioned container reverse_proxy %q, got:\n%s", want, got)
+	}
+}
+
+func TestRenderAppCaddyfileCanUseSpecificProcessContainerName(t *testing.T) {
+	port := 3000
+	ctx := &config.AppContext{
+		Processes: map[string]config.Process{"web": {Port: &port}},
+		Routes: map[string]config.Route{
+			"app": {Host: "api.example.com", Process: "web"},
+		},
+	}
+	upstream := identity.ContainerInstanceName("api", "production", "web", "abc123", "20260530t143012000000000z")
+	got, err := renderAppCaddyfileWithProcessNames("api", "production", ctx, "abc123", map[string]string{"web": upstream})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, "reverse_proxy http://"+upstream+":3000") {
+		t.Fatalf("expected Caddy to point at specific container %q, got:\n%s", upstream, got)
 	}
 }
 

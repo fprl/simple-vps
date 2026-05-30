@@ -339,6 +339,18 @@ func assertContains(t *testing.T, got string, want string) {
 	}
 }
 
+func assertContainsInOrder(t *testing.T, got string, wants ...string) {
+	t.Helper()
+	offset := 0
+	for _, want := range wants {
+		index := strings.Index(got[offset:], want)
+		if index < 0 {
+			t.Fatalf("expected output to contain %q after byte %d\noutput:\n%s", want, offset, got)
+		}
+		offset += index + len(want)
+	}
+}
+
 func assertEqual(t *testing.T, got string, want string) {
 	t.Helper()
 	if got != want {

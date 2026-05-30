@@ -28,8 +28,8 @@ if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
     --pattern "$ASSET" \
     --clobber
 else
-  curl -fsSLO "https://github.com/fprl/simple-vps/releases/download/$VERSION/SHA256SUMS"
-  curl -fsSLO "https://github.com/fprl/simple-vps/releases/download/$VERSION/$ASSET"
+  curl -fsSL -O "https://github.com/fprl/simple-vps/releases/download/$VERSION/SHA256SUMS"
+  curl -fsSL -O "https://github.com/fprl/simple-vps/releases/download/$VERSION/$ASSET"
 fi
 if command -v shasum >/dev/null 2>&1; then
   grep "  $ASSET$" SHA256SUMS | shasum -a 256 -c -

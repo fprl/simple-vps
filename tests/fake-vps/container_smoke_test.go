@@ -51,7 +51,7 @@ func TestContainerSmoke(t *testing.T) {
 	t.Run("concurrent deploys of the same app env serialize", env.testConcurrentDeploys)
 	t.Run("static-only app deploys and restores without containers", env.testStaticOnlyAppLifecycle)
 	t.Run("mixed container and static routes deploy as one release", env.testMixedContainerStaticLifecycle)
-	t.Run("@secret refs resolve through put/list/rm into the runtime env", env.testSecretLifecycle)
+	t.Run("@secret refs resolve through set/list/rm into the runtime env", env.testSecretLifecycle)
 	t.Run("status + logs surface deployed processes without SSHing in", env.testStatusAndLogs)
 	t.Run("restart bounces containers in place via podman restart", env.testRestart)
 	t.Run("destroy tears down one app environment", env.testDestroy)
@@ -151,14 +151,29 @@ EOF`)
 	// sees in production works.
 	e.assertRemoteBody(t, "curl -fsS -H 'Host: api.example.com' http://127.0.0.1/health", "ok")
 
-	// 8. A second deploy on the same source must produce a byte-identical
-	// fragment (no churn from non-deterministic upstreams or ports).
+	// 8. A second deploy on the same source must start a replacement
+	// container before Caddy moves traffic, instead of removing the routed
+	// container name up front.
 	firstFragment := fragment
+	commandsBeforeRedeploy := e.ssh(t, "cat /run/fake-podman/commands.log")
 	e.simpleVPS(t, app, nil, "deploy", "--env", "production")
 	secondFragment := e.ssh(t, "cat "+identity.CaddyFragmentFile("api", "production"))
-	if firstFragment != secondFragment {
-		t.Fatalf("expected stable fragment across deploys, got:\nfirst:\n%s\nsecond:\n%s", firstFragment, secondFragment)
+	if firstFragment == secondFragment {
+		t.Fatalf("expected same-release redeploy to route to a replacement container:\n%s", secondFragment)
 	}
+	secondWebContainer := currentWebContainer(t, e, app)
+	if secondWebContainer == webContainer {
+		t.Fatalf("expected same-release redeploy to replace %s", webContainer)
+	}
+	assertContains(t, secondFragment, "reverse_proxy http://"+secondWebContainer+":3000")
+	e.dockerExec(t, "test ! -e /run/fake-podman/containers/"+webContainer+".labels")
+	commandsAfterRedeploy := e.ssh(t, "cat /run/fake-podman/commands.log")
+	redeployCommands := strings.TrimPrefix(commandsAfterRedeploy, commandsBeforeRedeploy)
+	assertContainsInOrder(t, redeployCommands,
+		"podman run -d --name "+secondWebContainer,
+		"podman exec caddy caddy reload --config /etc/caddy/Caddyfile",
+		"podman rm -f "+webContainer,
+	)
 
 	// 9. Explicit rebuild refreshes mutable base images and bypasses
 	// Podman's build cache.

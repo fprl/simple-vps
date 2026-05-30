@@ -388,7 +388,6 @@ type hostInstallCmd struct {
 	TargetHost               string `name:"host" help:"Target VPS host for remote mode."`
 	BootstrapUser            string `help:"SSH user for remote bootstrap."`
 	SSHKey                   string `name:"ssh-key" help:"SSH private key for remote mode."`
-	SSHPublicKeyFile         string `name:"ssh-public-key-file" help:"SSH public key file for operator access."`
 	OperatorSSHPublicKeyFile string `help:"SSH public key file for operator access."`
 	DeploySSHPublicKeyFile   string `help:"SSH public key file for deploy access."`
 	SharedKey                bool   `help:"Reuse operator SSH key for deploy."`
@@ -425,9 +424,6 @@ func (c hostInstallCmd) Run() error {
 	}
 	if c.SSHKey != "" {
 		opts.SSHKey = c.SSHKey
-	}
-	if c.SSHPublicKeyFile != "" {
-		opts.SSHPublicKeyFile = c.SSHPublicKeyFile
 	}
 	if c.OperatorSSHPublicKeyFile != "" {
 		opts.OperatorSSHPublicKeyFile = c.OperatorSSHPublicKeyFile

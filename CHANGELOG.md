@@ -20,11 +20,19 @@
   snapshots instead of tolerating pre-metadata release shapes.
 - Deploy now writes release metadata before runtime mutation and fails on
   mismatched manifest app names.
+- Same-release redeploys now start a replacement web container and reload Caddy
+  to that instance before removing the previous routed container.
+
+### Fixed
+
+- The direct release download docs now spell out redirect-following curl flags.
 
 ### Removed
 
 - Removed the stale real-box results log that documented old command and layout
   shapes.
+- Removed the legacy host-install `--ssh-public-key-file` flag; use
+  `--operator-ssh-public-key-file` and `--deploy-ssh-public-key-file`.
 
 ## v0.5.0 - 2026-05-30
 

@@ -56,7 +56,7 @@ func (e *smokeEnv) installHost(t *testing.T, publicKeyFile string) int {
 		"--mode", "remote",
 		"--host", "fake-vps",
 		"--bootstrap-user", "root",
-		"--ssh-public-key-file", publicKeyFile,
+		"--operator-ssh-public-key-file", publicKeyFile,
 		"--shared-key",
 		"--timezone", "Europe/Madrid",
 		"--locale", "en_US.UTF-8",

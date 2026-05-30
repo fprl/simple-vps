@@ -21,7 +21,6 @@ type Options struct {
 	TargetHost               string
 	BootstrapUser            string
 	SSHKey                   string
-	SSHPublicKeyFile         string
 	OperatorSSHPublicKeyFile string
 	DeploySSHPublicKeyFile   string
 	OperatorUser             string
@@ -249,14 +248,7 @@ func BuildPlan(opts Options, isRoot bool, osReleaseExists bool) (Plan, error) {
 
 	operatorKeyFile := opts.OperatorSSHPublicKeyFile
 	deployKeyFile := opts.DeploySSHPublicKeyFile
-	if opts.SSHPublicKeyFile != "" {
-		if operatorKeyFile == "" {
-			operatorKeyFile = opts.SSHPublicKeyFile
-		}
-		if opts.SharedKey && deployKeyFile == "" {
-			deployKeyFile = opts.SSHPublicKeyFile
-		}
-	} else if operatorKeyFile == "" && opts.SSHKey != "" && fileExists(opts.SSHKey+".pub") {
+	if operatorKeyFile == "" && opts.SSHKey != "" && fileExists(opts.SSHKey+".pub") {
 		operatorKeyFile = opts.SSHKey + ".pub"
 	}
 
@@ -675,7 +667,7 @@ func resolveSSHKeyPlan(plan Plan, requireOperator bool, rootKeysPath string) (ke
 	}
 
 	if requireOperator && operatorKey == "" && !nonEmptyFile(rootKeysPath) {
-		return keyPlan{}, fmt.Errorf("No SSH public key source found for operator user.\nProvide --operator-ssh-public-key-file or --ssh-public-key-file, or create %s first.\nThis protects against locking yourself out when password auth is disabled.", rootKeysPath)
+		return keyPlan{}, fmt.Errorf("No SSH public key source found for operator user.\nProvide --operator-ssh-public-key-file, or create %s first.\nThis protects against locking yourself out when password auth is disabled.", rootKeysPath)
 	}
 
 	return keyPlan{Operator: operatorKey, Deploy: deployKey}, nil

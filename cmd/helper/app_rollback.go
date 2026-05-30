@@ -142,7 +142,7 @@ func (c appRollbackCmd) rollbackToTarget(current, targetRelease string, app *con
 			}
 			containerName := identity.ContainerName(c.App, c.Env, procName, targetRelease)
 			started = append(started, containerName)
-			if err := startProcess(c.App, c.Env, procName, proc, imageTag, userID, groupID, targetRelease); err != nil {
+			if err := startProcess(c.App, c.Env, procName, proc, imageTag, userID, groupID, targetRelease, containerName); err != nil {
 				cleanupStarted()
 				_ = restoreEnvFile(c.App, c.Env, envSnapshot)
 				_ = restoreStaticCurrent(c.App, c.Env, staticSnapshot)

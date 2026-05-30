@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/fprl/simple-vps/internal/config"
 	"github.com/fprl/simple-vps/internal/host"
@@ -39,6 +40,7 @@ type appApplyCmd struct {
 type applyReleaseResult struct {
 	containersToRemove []string
 	startedContainers  []string
+	processNames       map[string]string
 	staticSnapshot     *staticCurrentSnapshot
 	staticReleaseDir   string
 	staticReleaseNew   bool
@@ -214,6 +216,7 @@ func (c appApplyCmd) applyRelease(ctxDir string, app *config.AppContext) (applyR
 		}
 		result.containersToRemove = containerResult.containersToRemove
 		result.startedContainers = containerResult.startedContainers
+		result.processNames = containerResult.processNames
 	} else {
 		result.containersToRemove = appContainerNames(existing)
 	}
@@ -238,7 +241,7 @@ func (c appApplyCmd) switchTraffic(app *config.AppContext, result applyReleaseRe
 	if err != nil {
 		return fmt.Errorf("snapshot existing fragment: %v", err)
 	}
-	if err := writeAppCaddyfile(c.App, c.Env, app, c.SHA); err != nil {
+	if err := writeAppCaddyfileWithProcessNames(c.App, c.Env, app, c.SHA, result.processNames); err != nil {
 		_ = restoreCaddyFragment(caddyPath, prevFragment, prevExisted)
 		if result.staticSnapshot != nil {
 			_ = restoreStaticCurrent(c.App, c.Env, *result.staticSnapshot)
@@ -321,6 +324,7 @@ func writeManifestSnapshot(app, env, release string, data []byte) error {
 type containerApplyResult struct {
 	containersToRemove []string
 	startedContainers  []string
+	processNames       map[string]string
 }
 
 func (c appApplyCmd) applyContainer(ctxDir string, app *config.AppContext, existing []containerEntry) (containerApplyResult, error) {
@@ -353,6 +357,7 @@ func (c appApplyCmd) applyContainer(ctxDir string, app *config.AppContext, exist
 	}
 
 	var started []string
+	processNames := map[string]string{}
 	containersToRemove := containersForRemovedProcesses(existing, app.Processes)
 	for _, processName := range sortedKeys(app.Processes) {
 		proc := app.Processes[processName]
@@ -361,20 +366,36 @@ func (c appApplyCmd) applyContainer(ctxDir string, app *config.AppContext, exist
 				_, _ = utils.RunChecked("podman", []string{"rm", "-f", old}, "")
 			}
 		}
-		containerName := identity.ContainerName(c.App, c.Env, processName, c.SHA)
+		containerName := nextProcessContainerName(existing, c.App, c.Env, processName, c.SHA, time.Now().UTC().Format("20060102t150405000000000z"))
 		started = append(started, containerName)
-		if err := startProcess(c.App, c.Env, processName, proc, imageTag, userID, groupID, c.SHA); err != nil {
+		if proc.Port != nil {
+			processNames[processName] = containerName
+		}
+		if err := startProcess(c.App, c.Env, processName, proc, imageTag, userID, groupID, c.SHA, containerName); err != nil {
 			removeContainers(started)
 			return containerApplyResult{}, err
 		}
 		if proc.Port != nil {
-			containersToRemove = append(containersToRemove, processContainers(existing, processName, c.SHA)...)
+			containersToRemove = append(containersToRemove, processContainers(existing, processName, "")...)
 		}
 	}
 	return containerApplyResult{
 		containersToRemove: uniqueContainerNames(containersToRemove),
 		startedContainers:  uniqueContainerNames(started),
+		processNames:       processNames,
 	}, nil
+}
+
+func nextProcessContainerName(entries []containerEntry, app, env, processName, release, instance string) string {
+	base := identity.ContainerName(app, env, processName, release)
+	for _, e := range entries {
+		for _, name := range e.Names {
+			if name == base {
+				return identity.ContainerInstanceName(app, env, processName, release, instance)
+			}
+		}
+	}
+	return base
 }
 
 func containersForRemovedProcesses(entries []containerEntry, next map[string]config.Process) []string {

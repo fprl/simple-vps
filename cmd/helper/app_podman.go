@@ -61,8 +61,7 @@ func hostUserIDs(name string) (string, string, error) {
 // No --publish: Caddy reaches the process over the shared `ingress`
 // network by container DNS. Manifest-declared memory and CPU limits
 // render to the closed set of runtime flags.
-func buildPodmanRunArgs(app, env, processName string, proc config.Process, imageTag, userID, groupID, release string, envFileExists bool) []string {
-	containerName := identity.ContainerName(app, env, processName, release)
+func buildPodmanRunArgs(app, env, processName string, proc config.Process, imageTag, userID, groupID, release, containerName string, envFileExists bool) []string {
 	dataDir := identity.DataDir(app, env)
 	appNet := identity.Network(app, env)
 	envFile := identity.EnvFile(app, env)
@@ -108,8 +107,7 @@ func buildPodmanRunArgs(app, env, processName string, proc config.Process, image
 	return args
 }
 
-func startProcess(app, env, processName string, proc config.Process, imageTag, userID, groupID, release string) error {
-	containerName := identity.ContainerName(app, env, processName, release)
+func startProcess(app, env, processName string, proc config.Process, imageTag, userID, groupID, release, containerName string) error {
 	envFile := identity.EnvFile(app, env)
 
 	_, _ = utils.RunChecked("podman", []string{"rm", "-f", containerName}, "")
@@ -118,7 +116,7 @@ func startProcess(app, env, processName string, proc config.Process, imageTag, u
 	if _, err := os.Stat(envFile); err == nil {
 		envFileExists = true
 	}
-	args := buildPodmanRunArgs(app, env, processName, proc, imageTag, userID, groupID, release, envFileExists)
+	args := buildPodmanRunArgs(app, env, processName, proc, imageTag, userID, groupID, release, containerName, envFileExists)
 
 	if _, err := utils.RunChecked("podman", args, ""); err != nil {
 		return fmt.Errorf("podman run %s: %v", containerName, err)

@@ -42,6 +42,13 @@ func ContainerName(app, env, process, release string) string {
 	return boundedIdentityName(InfraID(app, env)+"-"+process+"-"+release, dnsLabelLimit)
 }
 
+// ContainerInstanceName names an extra container for the same process and
+// release. It is used when redeploying the same release so a fresh web
+// container can be started and routed before the previous one is removed.
+func ContainerInstanceName(app, env, process, release, instance string) string {
+	return boundedIdentityName(InfraID(app, env)+"-"+process+"-"+release+"-"+instance, dnsLabelLimit)
+}
+
 func boundedIdentityName(base string, limit int) string {
 	if len(base) <= limit {
 		return base
