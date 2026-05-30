@@ -3,7 +3,7 @@
 Use this before cutting preview or stable releases.
 
 ```bash
-VERSION=v0.5.0
+VERSION=v0.6.0
 ```
 
 ## Local Checks
@@ -38,10 +38,22 @@ tmp=$(mktemp -d /tmp/simple-vps-init-check-XXXXXX)
 make init-template-builds
 ```
 
+## Publish
+
+```bash
+git tag -a "$VERSION" -m "$VERSION"
+git push origin "$VERSION"
+```
+
+The `Release` GitHub Actions workflow builds the release assets, generates
+`SHA256SUMS`, creates or updates the GitHub release, and uploads the assets with
+`--clobber`.
+
 ## Real VPS Smoke
 
-Run against a freshly rebuilt Ubuntu 24.04 or 26.04 VPS.
-Requires `curl`, `git`, `jq`, and `ssh-keyscan` on the smoke machine.
+Run against a freshly rebuilt Ubuntu 24.04 or 26.04 VPS after the GitHub release
+assets exist. Requires `curl`, `git`, `jq`, and `ssh-keyscan` on the smoke
+machine.
 
 ```bash
 scripts/release-smoke.sh --version "$VERSION" --host <ip>
@@ -60,23 +72,6 @@ By default the script uses:
 Override those with `SIMPLE_VPS_BOOTSTRAP_SSH_KEY`,
 `SIMPLE_VPS_OPERATOR_PUBKEY`, `SIMPLE_VPS_DEPLOY_PUBKEY`, and
 `SIMPLE_VPS_DEPLOY_SSH_KEY`.
-
-## Publish
-
-```bash
-git tag -a "$VERSION" -m "$VERSION"
-git push origin "$VERSION"
-```
-
-The `Release` GitHub Actions workflow builds the release assets, generates
-`SHA256SUMS`, creates or updates the GitHub release, and uploads the assets with
-`--clobber`.
-
-After publishing, run the real VPS smoke again:
-
-```bash
-scripts/release-smoke.sh --version "$VERSION" --host <ip>
-```
 
 ## Example Matrix Smoke
 

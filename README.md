@@ -67,7 +67,7 @@ install the local CLI onto your laptop.
 Download the installer from the same release you are installing:
 
 ```bash
-VERSION=v0.5.0
+VERSION=v0.6.0
 if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
   gh api -H 'Accept: application/vnd.github.raw' \
     "/repos/fprl/simple-vps/contents/install.sh?ref=$VERSION" > install.sh
@@ -214,7 +214,7 @@ Build all release binaries:
 
 ```bash
 make clean
-make build-release VERSION=v0.5.0
+make build-release VERSION=v0.6.0
 ```
 
 Artifacts land in `dist/`:
@@ -229,7 +229,7 @@ simple-vps-darwin-arm64
 Smoke a published release against a VPS:
 
 ```bash
-scripts/release-smoke.sh --version v0.5.0 --host <ip>
+scripts/release-smoke.sh --version v0.6.0 --host <ip>
 ```
 
 ## References

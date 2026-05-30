@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.6.0 - 2026-05-30
+
 ### Added
 
 - Shared local deploy diagnostics used by both `check --env` and `deploy`.

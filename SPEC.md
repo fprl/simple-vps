@@ -348,7 +348,7 @@ The script finds, downloads, or builds a Go binary, then execs
 
 ```text
 # on a fresh box, ssh'd as root:
-VERSION=v0.5.0
+VERSION=v0.6.0
 if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
   gh api -H 'Accept: application/vnd.github.raw' \
     "/repos/fprl/simple-vps/contents/install.sh?ref=$VERSION" > install.sh
