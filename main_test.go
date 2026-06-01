@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -152,5 +153,34 @@ func TestAppRootRequiresCanonicalManifestFilename(t *testing.T) {
 	_, err := appRoot(filepath.Join(t.TempDir(), "deploy.toml"))
 	if err == nil || !strings.Contains(err.Error(), "simple-vps.toml") {
 		t.Fatalf("expected canonical manifest filename error, got %v", err)
+	}
+}
+
+func TestProjectAppRootExplainsMissingManifest(t *testing.T) {
+	_, err := projectAppRoot(filepath.Join(t.TempDir(), "simple-vps.toml"))
+	if err == nil {
+		t.Fatal("expected missing manifest error")
+	}
+	text := err.Error()
+	for _, want := range []string{
+		"this is a project command",
+		"simple-vps.toml was not found",
+		"--config path/to/simple-vps.toml",
+		"simple-vps init",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("missing manifest error should contain %q, got:\n%s", want, text)
+		}
+	}
+}
+
+func TestProjectAppRootRejectsManifestDirectory(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "simple-vps.toml"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	_, err := projectAppRoot(filepath.Join(root, "simple-vps.toml"))
+	if err == nil || !strings.Contains(err.Error(), "got directory") {
+		t.Fatalf("expected directory error, got %v", err)
 	}
 }

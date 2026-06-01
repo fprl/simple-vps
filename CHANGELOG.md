@@ -52,6 +52,8 @@
 - Deploy preflight now uses typed remote issue codes, so missing secrets still
   block before any app-env mutation while a missing app env can be prepared
   safely.
+- Project commands now explain missing `simple-vps.toml` with `--config` and
+  `init` guidance instead of surfacing a low-level manifest read error.
 - Failed deploys now clean up their uploaded remote source directory before
   exiting.
 - Failed release commands restore the previous runtime env file before

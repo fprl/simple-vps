@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 
 	"github.com/alecthomas/kong"
@@ -64,6 +65,25 @@ func appRoot(configPath string) (string, error) {
 	return filepath.Dir(abs), nil
 }
 
+func projectAppRoot(configPath string) (string, error) {
+	root, err := appRoot(configPath)
+	if err != nil {
+		return "", err
+	}
+	manifest := filepath.Join(root, client.ManifestFile)
+	info, err := os.Stat(manifest)
+	if os.IsNotExist(err) {
+		return "", fmt.Errorf("this is a project command, but %s was not found.\nRun it from a directory containing %s, or pass --config path/to/%s.\nTo start a new project, run `simple-vps init`.", manifest, client.ManifestFile, client.ManifestFile)
+	}
+	if err != nil {
+		return "", err
+	}
+	if info.IsDir() {
+		return "", fmt.Errorf("--config must point to %s, got directory %s", client.ManifestFile, manifest)
+	}
+	return root, nil
+}
+
 type initCmd struct {
 	Config   string `name:"config" type:"path" default:"simple-vps.toml" help:"Path to simple-vps.toml."`
 	Template string `name:"template" enum:"container,static,php,hono" default:"container" help:"Scaffold template."`
@@ -98,7 +118,7 @@ type checkCmd struct {
 }
 
 func (c checkCmd) Run() error {
-	root, err := appRoot(c.Config)
+	root, err := projectAppRoot(c.Config)
 	if err != nil {
 		return err
 	}
@@ -112,7 +132,7 @@ type setupCmd struct {
 }
 
 func (c setupCmd) Run() error {
-	root, err := appRoot(c.Config)
+	root, err := projectAppRoot(c.Config)
 	if err != nil {
 		return err
 	}
@@ -129,7 +149,7 @@ type deployCmd struct {
 }
 
 func (c deployCmd) Run() error {
-	root, err := appRoot(c.Config)
+	root, err := projectAppRoot(c.Config)
 	if err != nil {
 		return err
 	}
@@ -143,7 +163,7 @@ type sshCmd struct {
 }
 
 func (c sshCmd) Run() error {
-	root, err := appRoot(c.Config)
+	root, err := projectAppRoot(c.Config)
 	if err != nil {
 		return err
 	}
@@ -158,7 +178,7 @@ type statusCmd struct {
 }
 
 func (c statusCmd) Run() error {
-	root, err := appRoot(c.Config)
+	root, err := projectAppRoot(c.Config)
 	if err != nil {
 		return err
 	}
@@ -175,7 +195,7 @@ type logsCmd struct {
 }
 
 func (c logsCmd) Run() error {
-	root, err := appRoot(c.Config)
+	root, err := projectAppRoot(c.Config)
 	if err != nil {
 		return err
 	}
@@ -204,7 +224,7 @@ type restartCmd struct {
 }
 
 func (c restartCmd) Run() error {
-	root, err := appRoot(c.Config)
+	root, err := projectAppRoot(c.Config)
 	if err != nil {
 		return err
 	}
@@ -219,7 +239,7 @@ type rollbackCmd struct {
 }
 
 func (c rollbackCmd) Run() error {
-	root, err := appRoot(c.Config)
+	root, err := projectAppRoot(c.Config)
 	if err != nil {
 		return err
 	}
@@ -241,7 +261,7 @@ type backupCreateCmd struct {
 }
 
 func (c backupCreateCmd) Run() error {
-	root, err := appRoot(c.Config)
+	root, err := projectAppRoot(c.Config)
 	if err != nil {
 		return err
 	}
@@ -256,7 +276,7 @@ type backupListCmd struct {
 }
 
 func (c backupListCmd) Run() error {
-	root, err := appRoot(c.Config)
+	root, err := projectAppRoot(c.Config)
 	if err != nil {
 		return err
 	}
@@ -271,7 +291,7 @@ type backupRmCmd struct {
 }
 
 func (c backupRmCmd) Run() error {
-	root, err := appRoot(c.Config)
+	root, err := projectAppRoot(c.Config)
 	if err != nil {
 		return err
 	}
@@ -287,7 +307,7 @@ type restoreCmd struct {
 }
 
 func (c restoreCmd) Run() error {
-	root, err := appRoot(c.Config)
+	root, err := projectAppRoot(c.Config)
 	if err != nil {
 		return err
 	}
@@ -306,9 +326,13 @@ type destroyCmd struct {
 }
 
 func (c destroyCmd) Run() error {
-	root, err := appRoot(c.Config)
-	if err != nil {
-		return err
+	root := "."
+	if c.App == "" && c.Server == "" {
+		var err error
+		root, err = projectAppRoot(c.Config)
+		if err != nil {
+			return err
+		}
 	}
 	client.CmdDestroy(root, c.Env, c.Confirm, c.Yes, c.Purge, c.App, c.Server)
 	return nil
@@ -327,7 +351,7 @@ type secretSetCmd struct {
 }
 
 func (c secretSetCmd) Run() error {
-	root, err := appRoot(c.Config)
+	root, err := projectAppRoot(c.Config)
 	if err != nil {
 		return err
 	}
@@ -342,7 +366,7 @@ type secretListCmd struct {
 }
 
 func (c secretListCmd) Run() error {
-	root, err := appRoot(c.Config)
+	root, err := projectAppRoot(c.Config)
 	if err != nil {
 		return err
 	}
@@ -357,7 +381,7 @@ type secretRmCmd struct {
 }
 
 func (c secretRmCmd) Run() error {
-	root, err := appRoot(c.Config)
+	root, err := projectAppRoot(c.Config)
 	if err != nil {
 		return err
 	}
