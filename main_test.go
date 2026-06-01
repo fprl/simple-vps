@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -10,7 +11,11 @@ import (
 
 func newTestParser(t *testing.T) *kong.Kong {
 	t.Helper()
-	parser, err := kong.New(&cli{}, kong.Name("simple-vps"))
+	parser, err := kong.New(
+		&cli{},
+		kong.Name("simple-vps"),
+		kong.ConfigureHelp(kong.HelpOptions{NoExpandSubcommands: true}),
+	)
 	if err != nil {
 		t.Fatalf("parser setup failed: %v", err)
 	}
@@ -91,6 +96,34 @@ func TestHostWithoutSubcommandShowsSubcommandHelp(t *testing.T) {
 	for _, want := range []string{"status", "doctor", "install"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("host parse error should mention %q subcommand, got: %v", want, err)
+		}
+	}
+}
+
+func TestTopLevelHelpShowsParentCommands(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	parser, err := kong.New(
+		&cli{},
+		kong.Name("simple-vps"),
+		kong.Description("Deploy containerized apps to a single hardened VPS."),
+		kong.ConfigureHelp(kong.HelpOptions{NoExpandSubcommands: true}),
+		kong.UsageOnError(),
+		kong.Exit(func(int) {}),
+		kong.Writers(&stdout, &stderr),
+	)
+	if err != nil {
+		t.Fatalf("parser setup failed: %v", err)
+	}
+	_, _ = parser.Parse([]string{"--help"})
+	text := stdout.String() + stderr.String()
+	for _, want := range []string{"backup <command>", "app <command>", "secret <command>", "host <command>"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("top-level help should mention %q, got:\n%s", want, text)
+		}
+	}
+	for _, legacy := range []string{"backup create", "app list", "secret set", "host status"} {
+		if strings.Contains(text, legacy) {
+			t.Fatalf("top-level help should not expand %q, got:\n%s", legacy, text)
 		}
 	}
 }

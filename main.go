@@ -490,6 +490,7 @@ func main() {
 		&cli{},
 		kong.Name("simple-vps"),
 		kong.Description("Deploy containerized apps to a single hardened VPS."),
+		kong.ConfigureHelp(kong.HelpOptions{NoExpandSubcommands: true}),
 		kong.UsageOnError(),
 	)
 	parser.FatalIfErrorf(parser.Run())
