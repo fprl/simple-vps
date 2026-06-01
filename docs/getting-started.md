@@ -8,15 +8,12 @@ Install the release binary for the machine where you run deploy commands:
 
 ```bash
 curl -fsSL https://github.com/fprl/simple-vps/releases/download/v0.7.0/install.sh | bash
+simple-vps version
 ```
 
 The installer downloads the right release asset, verifies `SHA256SUMS`, and
-writes `simple-vps` to `~/.local/bin`. Make sure that directory is on `PATH`:
-
-```bash
-export PATH="$HOME/.local/bin:$PATH"
-simple-vps version
-```
+writes `simple-vps` to `~/.local/bin`. If your shell cannot find `simple-vps`,
+the installer prints the exact `PATH` line to add.
 
 The curl command assumes public release assets. For private release assets,
 download `install.sh` with GitHub authentication first, then run it with

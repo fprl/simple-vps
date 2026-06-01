@@ -51,12 +51,12 @@ Install the local CLI on your laptop or CI machine:
 
 ```bash
 curl -fsSL https://github.com/fprl/simple-vps/releases/download/v0.7.0/install.sh | bash
-export PATH="$HOME/.local/bin:$PATH"
 simple-vps version
 ```
 
 The installer downloads the release asset for your OS/CPU, verifies it against
-`SHA256SUMS`, and writes `simple-vps` to `~/.local/bin`.
+`SHA256SUMS`, and writes `simple-vps` to `~/.local/bin`. If your shell cannot
+find `simple-vps`, the installer prints the exact `PATH` line to add.
 
 The curl command assumes public release assets. For private release assets,
 download `install.sh` with GitHub authentication first, then run it with

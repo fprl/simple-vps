@@ -356,9 +356,11 @@ asset for the laptop/CI platform, verifies `SHA256SUMS`, and writes
 
 ```bash
 curl -fsSL https://github.com/fprl/simple-vps/releases/download/v0.7.0/install.sh | bash
-export PATH="$HOME/.local/bin:$PATH"
 simple-vps version
 ```
+
+If the current shell cannot find `simple-vps`, the installer prints the
+manual `PATH` repair command.
 
 Bootstrapping a fresh Ubuntu 24.04/26.04 host is the explicit infrastructure
 mutation:
