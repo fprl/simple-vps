@@ -135,6 +135,63 @@ process = "web"
 	}
 }
 
+func TestCommandRunnerUsesDefaultDeployKeyWhenPresent(t *testing.T) {
+	home := t.TempDir()
+	sshDir := filepath.Join(home, ".ssh")
+	if err := os.Mkdir(sshDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	defaultKey := filepath.Join(sshDir, "simple-vps-deploy")
+	if err := os.WriteFile(defaultKey, []byte("key"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("SIMPLE_VPS_SSH_KEY", "")
+
+	runner, err := NewCommandRunner()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runner.Close()
+
+	assertSSHOptionSequence(t, runner.SshOptions, "-i", defaultKey)
+	assertSSHOptionSequence(t, runner.SshOptions, "-o", "IdentitiesOnly=yes")
+	if strings.Contains(strings.Join(runner.SshOptions, " "), "UserKnownHostsFile") {
+		t.Fatalf("default key path should use normal known_hosts, got %v", runner.SshOptions)
+	}
+}
+
+func TestCommandRunnerDoesNotForceMissingDefaultDeployKey(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("SIMPLE_VPS_SSH_KEY", "")
+
+	runner, err := NewCommandRunner()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runner.Close()
+
+	if strings.Contains(strings.Join(runner.SshOptions, " "), "simple-vps-deploy") {
+		t.Fatalf("missing default key should not be forced, got %v", runner.SshOptions)
+	}
+}
+
+func TestCommandRunnerEnvKeyUsesNormalKnownHosts(t *testing.T) {
+	t.Setenv("SIMPLE_VPS_SSH_KEY", "test-private-key")
+
+	runner, err := NewCommandRunner()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runner.Close()
+
+	assertSSHOptionSequence(t, runner.SshOptions, "-o", "IdentitiesOnly=yes")
+	if strings.Contains(strings.Join(runner.SshOptions, " "), "UserKnownHostsFile") {
+		t.Fatalf("env key should use normal known_hosts, got %v", runner.SshOptions)
+	}
+}
+
 func TestCheckDiagnosticsExplainsMissingGitRepo(t *testing.T) {
 	root := t.TempDir()
 	writeClientDockerfile(t, root)
@@ -485,6 +542,16 @@ func runGit(t *testing.T, root string, args ...string) {
 	if err != nil {
 		t.Fatalf("git %s failed: %v\n%s", strings.Join(args, " "), err, out)
 	}
+}
+
+func assertSSHOptionSequence(t *testing.T, opts []string, first string, second string) {
+	t.Helper()
+	for i := 0; i < len(opts)-1; i++ {
+		if opts[i] == first && opts[i+1] == second {
+			return
+		}
+	}
+	t.Fatalf("expected SSH option sequence %q %q in %v", first, second, opts)
 }
 
 func TestServerAppApplyCommandPutsTypedFlagsBeforePositional(t *testing.T) {

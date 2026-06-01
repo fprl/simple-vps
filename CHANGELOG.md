@@ -27,8 +27,15 @@
   non-interactive `sudo -n` over SSH `BatchMode`.
 - `check --env` now reports local deploy checks instead of implying remote
   deploy state.
-- Host install output prints exact next commands for host status, deploy-key
-  env vars, and app init.
+- Host install output prints exact next commands for host status and app init,
+  plus a deploy-key env var only when the deploy key is not the default path.
+- `install.sh` is now the local CLI installer; VPS provisioning starts with
+  `simple-vps host install`.
+- `host install` now defaults the deploy public key to
+  `~/.ssh/simple-vps-deploy.pub` when present, and app commands automatically
+  use the matching private key at `~/.ssh/simple-vps-deploy`.
+- Remote host install accepts new SSH host keys for never-seen VPSes while
+  still rejecting changed remembered keys.
 - GitHub Actions workflows use `actions/checkout@v5` and
   `actions/setup-go@v6`.
 - Getting started and README now lead with the tested first-run flow and
@@ -44,6 +51,11 @@
   exiting.
 - Fake VPS smoke covers the release-command failure path and asserts old
   traffic remains active.
+
+### Removed
+
+- Removed the `SIMPLE_VPS_KNOWN_HOSTS` app-command path; Simple VPS now uses
+  normal OpenSSH `known_hosts`.
 
 ## v0.6.0 - 2026-05-30
 

@@ -4,49 +4,23 @@ This is the shortest path from a fresh Ubuntu VPS to a deployed app.
 
 ## 1. Install the local CLI
 
-Download a release binary for the machine where you run deploy commands:
+Install the release binary for the machine where you run deploy commands:
 
 ```bash
-VERSION=v0.7.0
-OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
-ARCH="$(uname -m)"
-case "$OS" in
-  darwin|linux) ;;
-  *) echo "unsupported OS: $OS" >&2; exit 1 ;;
-esac
-case "$ARCH" in
-  x86_64|amd64) ARCH=amd64 ;;
-  arm64|aarch64) ARCH=arm64 ;;
-  *) echo "unsupported architecture: $ARCH" >&2; exit 1 ;;
-esac
-ASSET="simple-vps-$OS-$ARCH"
-
-mkdir -p "$HOME/.local/bin"
-if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
-  gh release download "$VERSION" --repo fprl/simple-vps \
-    --pattern SHA256SUMS \
-    --pattern "$ASSET" \
-    --clobber
-else
-  curl -fsSL -O "https://github.com/fprl/simple-vps/releases/download/$VERSION/SHA256SUMS"
-  curl -fsSL -O "https://github.com/fprl/simple-vps/releases/download/$VERSION/$ASSET"
-fi
-if command -v shasum >/dev/null 2>&1; then
-  grep "  $ASSET$" SHA256SUMS | shasum -a 256 -c -
-else
-  grep "  $ASSET$" SHA256SUMS | sha256sum -c -
-fi
-install -m 0755 "$ASSET" "$HOME/.local/bin/simple-vps"
+curl -fsSL https://github.com/fprl/simple-vps/releases/download/v0.7.0/install.sh | bash
 ```
 
-Make sure `~/.local/bin` is on `PATH`:
+The installer downloads the right release asset, verifies `SHA256SUMS`, and
+writes `simple-vps` to `~/.local/bin`. Make sure that directory is on `PATH`:
 
 ```bash
+export PATH="$HOME/.local/bin:$PATH"
 simple-vps version
 ```
 
-If release assets are private, authenticate `gh` first. The curl fallback is
-only for public assets.
+The curl command assumes public release assets. For private release assets,
+download `install.sh` with GitHub authentication first, then run it with
+`SIMPLE_VPS_RELEASE_TOKEN`, `GH_TOKEN`, or `GITHUB_TOKEN`.
 
 ## 2. Prepare SSH keys
 
@@ -54,9 +28,10 @@ You need a root/bootstrap key for the fresh VPS and a deploy key that
 simple-vps will install on the host:
 
 ```bash
-ssh-keygen -q -t ed25519 -N '' -f "$HOME/.ssh/simple-vps-deploy"
-ssh-keygen -R <vps-ip>
-ssh-keyscan -T 10 -t ed25519,rsa,ecdsa <vps-ip> >> "$HOME/.ssh/known_hosts"
+test -f "$HOME/.ssh/simple-vps-deploy" || \
+  ssh-keygen -q -t ed25519 -N '' -f "$HOME/.ssh/simple-vps-deploy"
+test -f "$HOME/.ssh/simple-vps-deploy.pub" || \
+  ssh-keygen -y -f "$HOME/.ssh/simple-vps-deploy" > "$HOME/.ssh/simple-vps-deploy.pub"
 ```
 
 `~/.ssh/simple-vps-deploy` is the key app commands use after host install.
@@ -68,40 +43,32 @@ for `~/.ssh/<root-key>` below.
 Run this from your laptop against a fresh Ubuntu 24.04/26.04 VPS:
 
 ```bash
-VERSION=v0.7.0
-if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
-  gh api -H 'Accept: application/vnd.github.raw' \
-    "/repos/fprl/simple-vps/contents/install.sh?ref=$VERSION" > install.sh
-else
-  curl -fsSL "https://raw.githubusercontent.com/fprl/simple-vps/$VERSION/install.sh" \
-    -o install.sh
-fi
-chmod 0755 install.sh
-
-SIMPLE_VPS_VERSION="$VERSION" ./install.sh \
+simple-vps host install \
   --host <vps-ip> \
   --ssh-key ~/.ssh/<root-key> \
-  --operator-ssh-public-key-file ~/.ssh/<root-key>.pub \
-  --deploy-ssh-public-key-file ~/.ssh/simple-vps-deploy.pub \
   --yes
 ```
 
 The operator key is for human host recovery and rerunning host install. The
-deploy key is what app commands use after install.
+deploy key is what app commands use after install. By default, host install
+uses `~/.ssh/simple-vps-deploy.pub` for the deploy user and the VPS bootstrap
+user's existing authorized key for the operator user.
 
-If release assets are private, authenticate `gh` before downloading the
-installer and export `SIMPLE_VPS_RELEASE_TOKEN`, `GH_TOKEN`, or `GITHUB_TOKEN`
-before running it.
+`host install` accepts a new SSH host key for a never-seen VPS. If you rebuilt
+a VPS at the same IP and SSH blocks because the host key changed, remove the
+old remembered key and rerun the command:
 
-The installer converges the host. Running it again is safe; unchanged hosts
-report `changed 0 operations`.
+```bash
+ssh-keygen -R <vps-ip>
+```
+
+Host install is idempotent. Running it again is safe; unchanged hosts report
+`changed 0 operations`.
 
 Check the host through the deploy user:
 
 ```bash
-SIMPLE_VPS_SSH_KEY="$(cat ~/.ssh/simple-vps-deploy)" \
-SIMPLE_VPS_KNOWN_HOSTS="$(ssh-keyscan -t ed25519 -H <vps-ip> 2>/dev/null)" \
-  simple-vps host status --server deploy@<vps-ip>
+simple-vps host status --server deploy@<vps-ip>
 ```
 
 ## 4. Scaffold an app
@@ -130,12 +97,7 @@ git commit -m "initial simple-vps app"
 
 ## 5. Configure and deploy it
 
-Use the deploy key for app commands:
-
 ```bash
-export SIMPLE_VPS_SSH_KEY="$(cat ~/.ssh/simple-vps-deploy)"
-export SIMPLE_VPS_KNOWN_HOSTS="$(ssh-keyscan -t ed25519 -H <vps-ip> 2>/dev/null)"
-
 simple-vps check --env production
 simple-vps setup --env production
 simple-vps deploy --env production

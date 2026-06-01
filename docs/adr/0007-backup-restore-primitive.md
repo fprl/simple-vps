@@ -11,7 +11,9 @@
 > `/var/apps/<app>/<env>/` examples. Current backups snapshot `data/`, the
 > applied `simple-vps.toml`, secrets, and static release assets when present;
 > restore writes the release manifest snapshot under
-> `/var/apps/<app>.<env>/releases/<release>/simple-vps.toml`.
+> `/var/apps/<app>.<env>/releases/<release>/simple-vps.toml`. Current install
+> flow is also different: `install.sh` installs the local CLI, and host
+> provisioning starts with `simple-vps host install`.
 
 ## Context
 

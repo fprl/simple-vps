@@ -6,6 +6,7 @@ VERSION ?= $(shell git describe --tags --always --dirty)
 VERSION_LDFLAGS := -X github.com/fprl/simple-vps/internal/version.Version=$(VERSION)
 SHELL_SCRIPTS := \
 	install.sh \
+	scripts/install-smoke.sh \
 	scripts/example-matrix-smoke.sh \
 	scripts/release-smoke.sh
 FAKE_VPS_SHELL_SCRIPTS := \
@@ -35,6 +36,7 @@ go-vet:
 shell-test:
 	for script in $(SHELL_SCRIPTS); do bash -n $$script; done
 	for script in $(FAKE_VPS_SHELL_SCRIPTS); do bash -n $$script; done
+	bash scripts/install-smoke.sh
 
 fake-vps-smoke:
 	SIMPLE_VPS_RUN_FAKE_VPS_SMOKE=1 $(GO) test ./tests/fake-vps -run TestContainerSmoke -count=1 -timeout 20m

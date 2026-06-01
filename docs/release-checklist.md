@@ -47,8 +47,8 @@ git push origin "$VERSION"
 ```
 
 The `Release` GitHub Actions workflow builds the release assets, generates
-`SHA256SUMS`, creates or updates the GitHub release, and uploads the assets with
-`--clobber`.
+`SHA256SUMS`, creates or updates the GitHub release, and uploads the assets plus
+`install.sh` with `--clobber`.
 
 ## Real VPS Smoke
 
@@ -69,6 +69,9 @@ By default the script uses:
 - operator public key: `~/.ssh/hetzner.pub`
 - deploy public key: `~/.ssh/simple-vps-deploy.pub`
 - deploy private key: `~/.ssh/simple-vps-deploy`
+
+The script installs the released CLI through the released `install.sh`, then
+uses that CLI for host install and app deploy.
 
 Override those with `SIMPLE_VPS_BOOTSTRAP_SSH_KEY`,
 `SIMPLE_VPS_OPERATOR_PUBKEY`, `SIMPLE_VPS_DEPLOY_PUBKEY`, and

@@ -22,6 +22,8 @@ Environment:
       leave deployed example envs on the host for debugging
   SIMPLE_VPS_EXAMPLE_MATRIX_INCLUDE_DJANGO=1
       include the heavier Django + SQLite + migration example
+  SIMPLE_VPS_EXAMPLE_MATRIX_REFRESH_KNOWN_HOSTS=0
+      do not refresh ~/.ssh/known_hosts for the disposable VPS
 USAGE
 }
 
@@ -42,6 +44,7 @@ workdir="${SIMPLE_VPS_EXAMPLE_MATRIX_WORKDIR:-$(mktemp -d /tmp/simple-vps-exampl
 deploy_key="${SIMPLE_VPS_DEPLOY_SSH_KEY:-$HOME/.ssh/simple-vps-deploy}"
 skip_destroy="${SIMPLE_VPS_EXAMPLE_MATRIX_SKIP_DESTROY:-0}"
 include_django="${SIMPLE_VPS_EXAMPLE_MATRIX_INCLUDE_DJANGO:-0}"
+refresh_known_hosts="${SIMPLE_VPS_EXAMPLE_MATRIX_REFRESH_KNOWN_HOSTS:-1}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -75,15 +78,18 @@ fi
 require_cmd curl
 require_cmd git
 require_cmd perl
+require_cmd ssh-keygen
 require_cmd ssh-keyscan
 
 server="deploy@$host"
-known_hosts="$(ssh-keyscan -t ed25519 -H "$host" 2>/dev/null)"
-[[ -n "$known_hosts" ]] || die "ssh-keyscan returned no host key for $host"
-SIMPLE_VPS_SSH_KEY="$(cat "$deploy_key")"
-SIMPLE_VPS_KNOWN_HOSTS="$known_hosts"
-export SIMPLE_VPS_SSH_KEY
-export SIMPLE_VPS_KNOWN_HOSTS
+if [[ "$refresh_known_hosts" == "1" ]]; then
+  ssh-keygen -R "$host" >/dev/null 2>&1 || true
+  ssh-keyscan -T 10 -t ed25519,rsa,ecdsa "$host" >>"$HOME/.ssh/known_hosts"
+fi
+if [[ "$deploy_key" != "$HOME/.ssh/simple-vps-deploy" ]]; then
+  SIMPLE_VPS_SSH_KEY="$(cat "$deploy_key")"
+  export SIMPLE_VPS_SSH_KEY
+fi
 
 mkdir -p "$workdir"
 log="$workdir/example-matrix-smoke.log"

@@ -89,4 +89,5 @@ jobs:
             dist/simple-vps-darwin-amd64 \
             dist/simple-vps-darwin-arm64 \
             dist/SHA256SUMS \
+            install.sh \
             --clobber

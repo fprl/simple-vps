@@ -252,6 +252,11 @@ func BuildPlan(opts Options, isRoot bool, osReleaseExists bool) (Plan, error) {
 	if operatorKeyFile == "" && opts.SSHKey != "" && fileExists(opts.SSHKey+".pub") {
 		operatorKeyFile = opts.SSHKey + ".pub"
 	}
+	if deployKeyFile == "" && !opts.SharedKey {
+		if defaultDeployKey, ok := defaultDeployPublicKeyPath(); ok {
+			deployKeyFile = defaultDeployKey
+		}
+	}
 
 	return Plan{
 		Mode:                     mode,
@@ -533,7 +538,11 @@ func (i *Installer) remoteCommand(plan Plan, command string) error {
 }
 
 func (i *Installer) copyRemote(plan Plan, src string, dst string) error {
-	args := []string{"-q"}
+	args := []string{
+		"-q",
+		"-o", "BatchMode=yes",
+		"-o", "StrictHostKeyChecking=accept-new",
+	}
 	if plan.SSHKey != "" {
 		args = append(args, "-i", plan.SSHKey)
 	}
@@ -572,7 +581,10 @@ func (i *Installer) writeRemoteKeyFiles(plan Plan, keys keyPlan) (string, string
 }
 
 func sshArgs(plan Plan, command string) []string {
-	args := []string{"-o", "BatchMode=yes"}
+	args := []string{
+		"-o", "BatchMode=yes",
+		"-o", "StrictHostKeyChecking=accept-new",
+	}
 	if plan.SSHKey != "" {
 		args = append(args, "-i", plan.SSHKey)
 	}
@@ -663,7 +675,7 @@ func resolveSSHKeyPlan(plan Plan, requireOperator bool, rootKeysPath string) (ke
 		if plan.SharedKey {
 			deployKey = operatorKey
 		} else {
-			return keyPlan{}, errors.New("No SSH public key source found for deploy user.\nProvide --deploy-ssh-public-key-file, or pass --shared-key to reuse the operator key.")
+			return keyPlan{}, fmt.Errorf("No SSH public key source found for deploy user.\nCreate the default deploy key with `ssh-keygen -q -t ed25519 -N '' -f %s`, provide --deploy-ssh-public-key-file, or pass --shared-key to reuse the operator key.", defaultDeployPrivateKeyCandidate())
 		}
 	}
 
@@ -819,14 +831,14 @@ func (i *Installer) printNextSteps(plan Plan) {
 	}
 	server := plan.DeployUser + "@" + plan.TargetHost
 	fmt.Fprintln(i.Stdout, "Next:")
-	if privateKey := deployPrivateKeyHint(plan); privateKey != "" {
-		fmt.Fprintf(i.Stdout, "1. export SIMPLE_VPS_SSH_KEY=\"$(cat %s)\"\n", utils.ShellEscape(privateKey))
-	} else {
-		fmt.Fprintln(i.Stdout, "1. export SIMPLE_VPS_SSH_KEY=\"$(cat <deploy-private-key>)\"")
+	step := 1
+	if privateKey := deployPrivateKeyHint(plan); privateKey != "" && !isDefaultDeployPrivateKey(privateKey) {
+		fmt.Fprintf(i.Stdout, "%d. export SIMPLE_VPS_SSH_KEY=\"$(cat %s)\"\n", step, utils.ShellEscape(privateKey))
+		step++
 	}
-	fmt.Fprintf(i.Stdout, "   export SIMPLE_VPS_KNOWN_HOSTS=\"$(ssh-keyscan -t ed25519 -H %s 2>/dev/null)\"\n", plan.TargetHost)
-	fmt.Fprintf(i.Stdout, "2. simple-vps host status --server %s\n", server)
-	fmt.Fprintln(i.Stdout, "3. simple-vps init --server "+server+" --host <app-domain>")
+	fmt.Fprintf(i.Stdout, "%d. simple-vps host status --server %s\n", step, server)
+	step++
+	fmt.Fprintf(i.Stdout, "%d. simple-vps init --server %s --host <app-domain>\n", step, server)
 }
 
 func deployPrivateKeyHint(plan Plan) string {
@@ -838,6 +850,26 @@ func deployPrivateKeyHint(plan Plan) string {
 		return strings.TrimSuffix(pub, ".pub")
 	}
 	return ""
+}
+
+func defaultDeployPublicKeyPath() (string, bool) {
+	path := defaultDeployPrivateKeyCandidate() + ".pub"
+	if !fileExists(path) {
+		return "", false
+	}
+	return path, true
+}
+
+func defaultDeployPrivateKeyCandidate() string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return "~/.ssh/simple-vps-deploy"
+	}
+	return filepath.Join(home, ".ssh", "simple-vps-deploy")
+}
+
+func isDefaultDeployPrivateKey(path string) bool {
+	return path == defaultDeployPrivateKeyCandidate()
 }
 
 func fileExists(path string) bool {

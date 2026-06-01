@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -73,6 +74,30 @@ func TestBuildPlanAndRemoteLocalInstallCommand(t *testing.T) {
 	}
 }
 
+func TestBuildPlanDefaultsDeployPublicKey(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	defaultPub := filepath.Join(home, ".ssh", "simple-vps-deploy.pub")
+	if err := os.MkdirAll(filepath.Dir(defaultPub), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(defaultPub, []byte("ssh-ed25519 AAAAdeploy test-deploy\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	opts := DefaultOptions(nil)
+	opts.Mode = "remote"
+	opts.TargetHost = "203.0.113.10"
+
+	plan, err := BuildPlan(opts, false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.DeploySSHPublicKeyFile != defaultPub {
+		t.Fatalf("DeploySSHPublicKeyFile = %q, want %q", plan.DeploySSHPublicKeyFile, defaultPub)
+	}
+}
+
 func TestDefaultOptionsDoNotInstallLitestream(t *testing.T) {
 	opts := DefaultOptions(nil)
 	if opts.InstallLitestream {
@@ -117,7 +142,6 @@ func TestPrintNextStepsForRemoteInstall(t *testing.T) {
 	text := out.String()
 	for _, want := range []string{
 		`export SIMPLE_VPS_SSH_KEY="$(cat /keys/deploy)"`,
-		`export SIMPLE_VPS_KNOWN_HOSTS="$(ssh-keyscan -t ed25519 -H 203.0.113.12 2>/dev/null)"`,
 		"simple-vps host status --server deploy@203.0.113.12",
 		"simple-vps init --server deploy@203.0.113.12 --host <app-domain>",
 	} {
@@ -125,8 +149,49 @@ func TestPrintNextStepsForRemoteInstall(t *testing.T) {
 			t.Fatalf("expected next steps to contain %q:\n%s", want, text)
 		}
 	}
+	if strings.Contains(text, "SIMPLE_VPS_KNOWN_HOSTS") {
+		t.Fatalf("next steps should use normal SSH known_hosts, got:\n%s", text)
+	}
 	if strings.Index(text, "export SIMPLE_VPS_SSH_KEY") > strings.Index(text, "simple-vps host status") {
 		t.Fatalf("deploy key export should be printed before host status:\n%s", text)
+	}
+}
+
+func TestPrintNextStepsOmitsDefaultDeployKeyEnv(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	defaultPub := filepath.Join(home, ".ssh", "simple-vps-deploy.pub")
+
+	var out bytes.Buffer
+	installer := NewInstaller()
+	installer.Stdout = &out
+	installer.printNextSteps(Plan{
+		Mode:                   "remote",
+		TargetHost:             "203.0.113.12",
+		DeployUser:             "deploy",
+		DeploySSHPublicKeyFile: defaultPub,
+	})
+
+	text := out.String()
+	if strings.Contains(text, "SIMPLE_VPS_SSH_KEY") || strings.Contains(text, "SIMPLE_VPS_KNOWN_HOSTS") {
+		t.Fatalf("default deploy key should not require env exports:\n%s", text)
+	}
+	if !strings.Contains(text, "1. simple-vps host status --server deploy@203.0.113.12") {
+		t.Fatalf("expected host status to be first step:\n%s", text)
+	}
+}
+
+func TestHostInstallSSHAcceptsNewHostKeysOnly(t *testing.T) {
+	args := sshArgs(Plan{
+		BootstrapUser: "root",
+		TargetHost:    "203.0.113.12",
+		SSHKey:        "/keys/root",
+	}, "true")
+
+	for _, want := range []string{"BatchMode=yes", "StrictHostKeyChecking=accept-new", "/keys/root", "root@203.0.113.12"} {
+		if !contains(args, want) {
+			t.Fatalf("expected ssh args to contain %q, got %v", want, args)
+		}
 	}
 }
 
@@ -233,6 +298,15 @@ func TestInstallPresetsRejectInvalidValues(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "invalid admin mode") {
 		t.Fatalf("expected invalid admin error, got %v", err)
 	}
+}
+
+func contains(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestCloudflareTokenRequiresTunnel(t *testing.T) {

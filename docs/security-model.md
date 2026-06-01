@@ -108,7 +108,7 @@ The intended privilege model has three identities:
 
 ```text
 bootstrap user   root or provider-created initial user
-                 used by install.sh phase 1 only
+                 used by remote host install only
                  not a steady-state Simple VPS identity
 
 operator user    human/admin identity for host convergence and recovery

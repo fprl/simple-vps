@@ -7,9 +7,9 @@ Usage:
   scripts/release-smoke.sh --version v0.7.0 --host 128.140.3.159
 
 Runs a release-artifact smoke against one VPS:
-  - fetch installer from the tag
+  - fetch installer from the release
+  - install the local CLI through that installer
   - run remote host install
-  - download and checksum the release client asset
   - run host status/doctor
   - generate a PHP app with simple-vps init
   - setup, deploy, curl, destroy
@@ -47,51 +47,27 @@ require_cmd() {
   command -v "$1" >/dev/null 2>&1 || die "$1 is required"
 }
 
-platform_asset() {
-  case "$(uname -s)-$(uname -m)" in
-    Darwin-arm64) printf 'simple-vps-darwin-arm64\n' ;;
-    Darwin-x86_64) printf 'simple-vps-darwin-amd64\n' ;;
-    Linux-arm64 | Linux-aarch64) printf 'simple-vps-linux-arm64\n' ;;
-    Linux-x86_64) printf 'simple-vps-linux-amd64\n' ;;
-    *) die "unsupported smoke host: $(uname -s)-$(uname -m)" ;;
-  esac
-}
-
 api_get() {
   curl -fsSL "${auth_args[@]}" "$@"
 }
 
 download_installer() {
+  local asset_url
+
   if [[ ${#auth_args[@]} -gt 0 ]]; then
+    release_json="$(api_get \
+      -H "Accept: application/vnd.github+json" \
+      "https://api.github.com/repos/fprl/simple-vps/releases/tags/$version")"
+    asset_url="$(printf '%s' "$release_json" | jq -r '.assets[] | select(.name == "install.sh") | .url')"
+    [[ -n "$asset_url" && "$asset_url" != "null" ]] || die "release asset not found: install.sh"
     api_get \
-      -H "Accept: application/vnd.github.raw" \
-      "https://api.github.com/repos/fprl/simple-vps/contents/install.sh?ref=$version" \
+      -H "Accept: application/octet-stream" \
+      "$asset_url" \
       -o install.sh
   else
-    curl -fsSL "https://raw.githubusercontent.com/fprl/simple-vps/$version/install.sh" -o install.sh
+    curl -fsSL "https://github.com/fprl/simple-vps/releases/download/$version/install.sh" -o install.sh
   fi
   chmod 0755 install.sh
-}
-
-download_release_asset() {
-  local name="$1"
-  local output="$2"
-  local url
-
-  url="$(printf '%s' "$release_json" | jq -r --arg name "$name" '.assets[] | select(.name == $name) | .url')"
-  [[ -n "$url" && "$url" != "null" ]] || die "release asset not found: $name"
-  api_get \
-    -H "Accept: application/octet-stream" \
-    "$url" \
-    -o "$output"
-}
-
-verify_client_checksum() {
-  if command -v sha256sum >/dev/null 2>&1; then
-    grep "  $asset$" SHA256SUMS | sed "s/$asset/simple-vps/" | sha256sum -c -
-  else
-    grep "  $asset$" SHA256SUMS | sed "s/$asset/simple-vps/" | shasum -a 256 -c -
-  fi
 }
 
 version="${VERSION:-}"
@@ -146,16 +122,18 @@ operator_pubkey="${SIMPLE_VPS_OPERATOR_PUBKEY:-$HOME/.ssh/hetzner.pub}"
 deploy_pubkey="${SIMPLE_VPS_DEPLOY_PUBKEY:-$HOME/.ssh/simple-vps-deploy.pub}"
 deploy_key="${SIMPLE_VPS_DEPLOY_SSH_KEY:-$HOME/.ssh/simple-vps-deploy}"
 
-[[ -r "$bootstrap_key" ]] || die "bootstrap SSH key not readable: $bootstrap_key"
-[[ -r "$operator_pubkey" ]] || die "operator public key not readable: $operator_pubkey"
-[[ -r "$deploy_pubkey" ]] || die "deploy public key not readable: $deploy_pubkey"
+if [[ "$skip_install" != "1" ]]; then
+  [[ -r "$bootstrap_key" ]] || die "bootstrap SSH key not readable: $bootstrap_key"
+  [[ -r "$operator_pubkey" ]] || die "operator public key not readable: $operator_pubkey"
+  [[ -r "$deploy_pubkey" ]] || die "deploy public key not readable: $deploy_pubkey"
+fi
 [[ -r "$deploy_key" ]] || die "deploy SSH key not readable: $deploy_key"
 
 app="${SIMPLE_VPS_SMOKE_APP:-svps-smoke-$(date -u +%H%M%S)}"
 route_host="${SIMPLE_VPS_SMOKE_ROUTE_HOST:-$app.$host.nip.io}"
 server="deploy@$host"
 workdir="${SIMPLE_VPS_SMOKE_WORKDIR:-$(mktemp -d /tmp/simple-vps-release-smoke-XXXXXX)}"
-client="$workdir/simple-vps"
+client="$workdir/bin/simple-vps"
 app_dir="$workdir/app"
 log="$workdir/release-smoke.log"
 
@@ -177,14 +155,20 @@ run_smoke() {
   printf 'route host: %s\n' "$route_host"
 
   download_installer
+  mkdir -p "$workdir/bin"
+  SIMPLE_VPS_VERSION="$version" \
+    SIMPLE_VPS_INSTALL_DIR="$workdir/bin" \
+    SIMPLE_VPS_RELEASE_TOKEN="$token" \
+    ./install.sh
+  "$client" version
+
+  if [[ "$refresh_known_hosts" == "1" ]]; then
+    ssh-keygen -R "$host" >/dev/null 2>&1 || true
+    ssh-keyscan -T 10 -t ed25519,rsa,ecdsa "$host" >>"$HOME/.ssh/known_hosts"
+  fi
 
   if [[ "$skip_install" != "1" ]]; then
-    if [[ "$refresh_known_hosts" == "1" ]]; then
-      ssh-keygen -R "$host" >/dev/null 2>&1 || true
-      ssh-keyscan -T 10 -t ed25519,rsa,ecdsa "$host" >>"$HOME/.ssh/known_hosts"
-    fi
-    SIMPLE_VPS_VERSION="$version" SIMPLE_VPS_RELEASE_TOKEN="$token" ./install.sh \
-      --mode remote \
+    "$client" host install \
       --host "$host" \
       --bootstrap-user "$bootstrap_user" \
       --ssh-key "$bootstrap_key" \
@@ -197,22 +181,10 @@ run_smoke() {
     printf 'skipping host install\n'
   fi
 
-  release_json="$(api_get \
-    -H "Accept: application/vnd.github+json" \
-    "https://api.github.com/repos/fprl/simple-vps/releases/tags/$version")"
-  asset="$(platform_asset)"
-  download_release_asset "$asset" simple-vps
-  download_release_asset SHA256SUMS SHA256SUMS
-  chmod 0755 simple-vps
-  verify_client_checksum
-  "$client" version
-
-  known_hosts="$(ssh-keyscan -t ed25519 -H "$host" 2>/dev/null)"
-  [[ -n "$known_hosts" ]] || die "ssh-keyscan returned no host key for $host"
-  SIMPLE_VPS_SSH_KEY="$(cat "$deploy_key")"
-  SIMPLE_VPS_KNOWN_HOSTS="$known_hosts"
-  export SIMPLE_VPS_SSH_KEY
-  export SIMPLE_VPS_KNOWN_HOSTS
+  if [[ "$deploy_key" != "$HOME/.ssh/simple-vps-deploy" ]]; then
+    SIMPLE_VPS_SSH_KEY="$(cat "$deploy_key")"
+    export SIMPLE_VPS_SSH_KEY
+  fi
 
   "$client" host status --json --server "$server" >/dev/null
   "$client" host doctor --json --server "$server" >/dev/null

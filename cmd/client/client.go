@@ -35,22 +35,22 @@ func NewCommandRunner() (*CommandRunner, error) {
 	sshOpts := []string{"-o", "BatchMode=yes"}
 	key := os.Getenv("SIMPLE_VPS_SSH_KEY")
 	if key == "" {
+		if defaultKey, ok := defaultDeployKeyPath(); ok {
+			sshOpts = append(sshOpts,
+				"-i", defaultKey,
+				"-o", "IdentitiesOnly=yes",
+			)
+		}
 		return &CommandRunner{
 			SshOptions:       sshOpts,
 			RsyncRemoteShell: sshRemoteShell(sshOpts),
 		}, nil
 	}
-	knownHosts := os.Getenv("SIMPLE_VPS_KNOWN_HOSTS")
-	if knownHosts == "" {
-		return nil, errors.New("SIMPLE_VPS_KNOWN_HOSTS is required when SIMPLE_VPS_SSH_KEY is set")
-	}
-
 	dir, err := os.MkdirTemp("", "simple-vps-ssh-")
 	if err != nil {
 		return nil, err
 	}
 	keyPath := filepath.Join(dir, "id")
-	knownHostsPath := filepath.Join(dir, "known_hosts")
 
 	ensureNL := func(s string) string {
 		if !strings.HasSuffix(s, "\n") {
@@ -63,16 +63,10 @@ func NewCommandRunner() (*CommandRunner, error) {
 		os.RemoveAll(dir)
 		return nil, err
 	}
-	if err := os.WriteFile(knownHostsPath, []byte(ensureNL(knownHosts)), 0600); err != nil {
-		os.RemoveAll(dir)
-		return nil, err
-	}
 
 	sshOpts = append(sshOpts,
 		"-i", keyPath,
 		"-o", "IdentitiesOnly=yes",
-		"-o", "StrictHostKeyChecking=yes",
-		"-o", "UserKnownHostsFile="+knownHostsPath,
 	)
 
 	return &CommandRunner{
@@ -80,6 +74,19 @@ func NewCommandRunner() (*CommandRunner, error) {
 		RsyncRemoteShell: sshRemoteShell(sshOpts),
 		TempDir:          dir,
 	}, nil
+}
+
+func defaultDeployKeyPath() (string, bool) {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return "", false
+	}
+	path := filepath.Join(home, ".ssh", "simple-vps-deploy")
+	info, err := os.Stat(path)
+	if err != nil || info.IsDir() {
+		return "", false
+	}
+	return path, true
 }
 
 func sshRemoteShell(sshOpts []string) string {

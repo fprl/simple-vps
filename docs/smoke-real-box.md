@@ -7,7 +7,9 @@ scripts/release-smoke.sh --version v0.7.0 --host <IP>
 ```
 
 This runbook is the lower-level debugging path when the scripted smoke fails
-or when you need to inspect the host between steps.
+or when you need to inspect the host between steps. It deliberately uses temp
+keys, `SIMPLE_VPS_SSH_KEY`, and a local `dist/simple-vps` binary; the normal
+user path is [getting-started.md](getting-started.md).
 
 The fake-VPS smoke (`make fake-vps-smoke`, `make fake-vps-install-smoke`)
 proves simple-vps's internal shape is consistent against fake Podman
@@ -48,19 +50,17 @@ the real Caddy container lifecycle.
   ssh-keygen -q -t ed25519 -N '' -f /tmp/simple-vps-smoke-keys/deploy
   ```
 
-- If the VPS was rebuilt at the same IP, refresh the laptop's SSH host key
-  entry before running remote install:
+- If the VPS was rebuilt at the same IP and SSH reports that the host key
+  changed, remove the old remembered key before running remote install:
 
   ```sh
   ssh-keygen -R <IP>
-  ssh-keyscan -T 10 -t ed25519,rsa,ecdsa <IP> >> ~/.ssh/known_hosts
   ```
 
 ## 1. Host install
 
 ```sh
 ./dist/simple-vps host install \
-  --mode remote \
   --host <IP> \
   --bootstrap-user root \
   --ssh-key ~/.ssh/<root-key> \
@@ -90,11 +90,9 @@ Verify the public host read surface from the laptop:
 
 ```sh
 SIMPLE_VPS_SSH_KEY="$(cat /tmp/simple-vps-smoke-keys/deploy)" \
-SIMPLE_VPS_KNOWN_HOSTS="$(ssh-keyscan -t ed25519 -H <IP> 2>/dev/null)" \
   ./dist/simple-vps host status --json --server deploy@<IP> | jq .
 
 SIMPLE_VPS_SSH_KEY="$(cat /tmp/simple-vps-smoke-keys/deploy)" \
-SIMPLE_VPS_KNOWN_HOSTS="$(ssh-keyscan -t ed25519 -H <IP> 2>/dev/null)" \
   ./dist/simple-vps host doctor --json --server deploy@<IP> | jq .
 ```
 
@@ -173,7 +171,6 @@ health path, one secret reference, and no image-specific writable-path knobs.
 cd /tmp/simple-vps-smoke-app
 
 SIMPLE_VPS_SSH_KEY="$(cat /tmp/simple-vps-smoke-keys/deploy)" \
-SIMPLE_VPS_KNOWN_HOSTS="$(ssh-keyscan -t ed25519 -H <IP> 2>/dev/null)" \
   /path/to/simple-vps/dist/simple-vps setup --env production
 
 # Verify on the box (over SSH as root):
@@ -183,15 +180,12 @@ SIMPLE_VPS_KNOWN_HOSTS="$(ssh-keyscan -t ed25519 -H <IP> 2>/dev/null)" \
 
 printf 'smoke-secret-value' | \
 SIMPLE_VPS_SSH_KEY="$(cat /tmp/simple-vps-smoke-keys/deploy)" \
-SIMPLE_VPS_KNOWN_HOSTS="$(ssh-keyscan -t ed25519 -H <IP> 2>/dev/null)" \
   /path/to/simple-vps/dist/simple-vps secret set smoke_key --env production
 
 SIMPLE_VPS_SSH_KEY="$(cat /tmp/simple-vps-smoke-keys/deploy)" \
-SIMPLE_VPS_KNOWN_HOSTS="$(ssh-keyscan -t ed25519 -H <IP> 2>/dev/null)" \
   /path/to/simple-vps/dist/simple-vps secret list --json --env production | jq .
 
 SIMPLE_VPS_SSH_KEY="$(cat /tmp/simple-vps-smoke-keys/deploy)" \
-SIMPLE_VPS_KNOWN_HOSTS="$(ssh-keyscan -t ed25519 -H <IP> 2>/dev/null)" \
   /path/to/simple-vps/dist/simple-vps deploy --env production
 ```
 
@@ -203,11 +197,9 @@ Verify the app read surface:
 
 ```sh
 SIMPLE_VPS_SSH_KEY="$(cat /tmp/simple-vps-smoke-keys/deploy)" \
-SIMPLE_VPS_KNOWN_HOSTS="$(ssh-keyscan -t ed25519 -H <IP> 2>/dev/null)" \
   /path/to/simple-vps/dist/simple-vps status --json --env production | jq .
 
 SIMPLE_VPS_SSH_KEY="$(cat /tmp/simple-vps-smoke-keys/deploy)" \
-SIMPLE_VPS_KNOWN_HOSTS="$(ssh-keyscan -t ed25519 -H <IP> 2>/dev/null)" \
   /path/to/simple-vps/dist/simple-vps logs web --env production | tail -20
 ```
 
@@ -264,11 +256,9 @@ If you're reusing the box, use the public teardown path:
 
 ```sh
 SIMPLE_VPS_SSH_KEY="$(cat /tmp/simple-vps-smoke-keys/deploy)" \
-SIMPLE_VPS_KNOWN_HOSTS="$(ssh-keyscan -t ed25519 -H <IP> 2>/dev/null)" \
   /path/to/simple-vps/dist/simple-vps destroy --env production --confirm hello --purge
 
 SIMPLE_VPS_SSH_KEY="$(cat /tmp/simple-vps-smoke-keys/deploy)" \
-SIMPLE_VPS_KNOWN_HOSTS="$(ssh-keyscan -t ed25519 -H <IP> 2>/dev/null)" \
   /path/to/simple-vps/dist/simple-vps status --json --env production | jq .
 ```
 

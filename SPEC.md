@@ -11,8 +11,9 @@ design discipline that gates new features live in
 [docs/positioning.md](docs/positioning.md).
 
 ```text
-fresh Ubuntu VPS  ->  install.sh           ->  hardened box
-your app repo     ->  simple-vps deploy    ->  live app
+your laptop/CI    ->  install.sh              ->  local CLI
+fresh Ubuntu VPS  ->  simple-vps host install ->  hardened box
+your app repo     ->  simple-vps deploy       ->  live app
 ```
 
 Two responsibilities, one CLI:
@@ -143,7 +144,7 @@ simple-vps host install --admin public-ssh|tailscale
 
 `status` and `doctor` report on host readiness through SSH. `host install`
 runs the bounded Go host provisioner from the Go binary. The public
-`install.sh` entrypoint is a tiny bootstrap for the one-line install path.
+`install.sh` entrypoint only installs the local CLI.
 
 `host install` accepts individual provider flags today:
 
@@ -349,42 +350,42 @@ for the manifest v2, env-root, and derived infra ID contract.
 
 ## Installation
 
-Bootstrapping a fresh Ubuntu 24.04/26.04 host starts with `install.sh`.
-The script finds, downloads, or builds a Go binary, then execs
-`simple-vps host install`.
+`install.sh` installs the local CLI only. It downloads the selected release
+asset for the laptop/CI platform, verifies `SHA256SUMS`, and writes
+`simple-vps` to `~/.local/bin` unless `SIMPLE_VPS_INSTALL_DIR` overrides it.
 
-```text
-# on a fresh box, ssh'd as root:
-VERSION=v0.7.0
-if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
-  gh api -H 'Accept: application/vnd.github.raw' \
-    "/repos/fprl/simple-vps/contents/install.sh?ref=$VERSION" > install.sh
-else
-  curl -fsSL "https://raw.githubusercontent.com/fprl/simple-vps/$VERSION/install.sh" \
-    -o install.sh
-fi
-chmod 0755 install.sh
-SIMPLE_VPS_VERSION="$VERSION" ./install.sh \
-    --deploy-ssh-public-key-file ~/.ssh/simple-vps-deploy.pub
+```bash
+curl -fsSL https://github.com/fprl/simple-vps/releases/download/v0.7.0/install.sh | bash
+export PATH="$HOME/.local/bin:$PATH"
+simple-vps version
+```
 
-# or from a laptop, against a fresh box:
-SIMPLE_VPS_VERSION="$VERSION" ./install.sh \
+Bootstrapping a fresh Ubuntu 24.04/26.04 host is the explicit infrastructure
+mutation:
+
+```bash
+test -f ~/.ssh/simple-vps-deploy || \
+  ssh-keygen -q -t ed25519 -N '' -f ~/.ssh/simple-vps-deploy
+test -f ~/.ssh/simple-vps-deploy.pub || \
+  ssh-keygen -y -f ~/.ssh/simple-vps-deploy > ~/.ssh/simple-vps-deploy.pub
+
+simple-vps host install \
     --host <ip> \
     --ssh-key ~/.ssh/id_ed25519 \
-    --operator-ssh-public-key-file ~/.ssh/id_ed25519.pub \
-    --deploy-ssh-public-key-file ~/.ssh/simple-vps-deploy.pub \
     --yes
 ```
 
 The default install opens host ports 80 / 443 publicly (the ADR-0002
 "public" ingress preset, today reached by omitting any tunnel flag).
 
-`install.sh` supports both remote-from-laptop and local-on-box modes.
-The Go command underneath accepts the same flags:
+`host install` accepts a new SSH host key for a never-seen VPS and still rejects
+a changed remembered key. If a VPS was rebuilt at the same IP, run
+`ssh-keygen -R <ip>` and rerun `host install`.
 
-```bash
-simple-vps host install --mode remote --host <ip> --bootstrap-user root
-```
+By default, remote `host install` uses `~/.ssh/simple-vps-deploy.pub` for the
+deploy user and the bootstrap user's existing authorized key for the operator
+user. Use `--deploy-ssh-public-key-file` and
+`--operator-ssh-public-key-file` for custom key paths.
 
 Cloudflare Tunnel and Tailscale are opt-in, switched on by the `--ingress`
 and `--admin` presets from [docs/security-model.md](docs/security-model.md):

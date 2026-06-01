@@ -47,65 +47,50 @@ For the fresh-VPS-to-first-app path, use
 
 ## Install The CLI
 
-Download the release asset for your laptop/CI machine and put it on `PATH`.
-Release artifacts are named by OS and CPU architecture:
+Install the local CLI on your laptop or CI machine:
 
-```text
-simple-vps-linux-amd64
-simple-vps-linux-arm64
-simple-vps-darwin-amd64
-simple-vps-darwin-arm64
+```bash
+curl -fsSL https://github.com/fprl/simple-vps/releases/download/v0.7.0/install.sh | bash
+export PATH="$HOME/.local/bin:$PATH"
+simple-vps version
 ```
 
-See [docs/getting-started.md](docs/getting-started.md) for copy-paste install
-commands with checksum verification.
+The installer downloads the release asset for your OS/CPU, verifies it against
+`SHA256SUMS`, and writes `simple-vps` to `~/.local/bin`.
+
+The curl command assumes public release assets. For private release assets,
+download `install.sh` with GitHub authentication first, then run it with
+`SIMPLE_VPS_RELEASE_TOKEN`, `GH_TOKEN`, or `GITHUB_TOKEN`.
 
 ## Install A VPS
 
-`install.sh` is the host installer entrypoint. It finds, builds, or downloads a
-matching `simple-vps` binary, then runs `simple-vps host install`. It does not
-install the local CLI onto your laptop.
-
-Download the installer from the same release you are installing:
+Create a deploy key if you do not already have one:
 
 ```bash
-VERSION=v0.7.0
-if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
-  gh api -H 'Accept: application/vnd.github.raw' \
-    "/repos/fprl/simple-vps/contents/install.sh?ref=$VERSION" > install.sh
-else
-  curl -fsSL "https://raw.githubusercontent.com/fprl/simple-vps/$VERSION/install.sh" \
-    -o install.sh
-fi
-chmod 0755 install.sh
+test -f ~/.ssh/simple-vps-deploy || \
+  ssh-keygen -q -t ed25519 -N '' -f ~/.ssh/simple-vps-deploy
+test -f ~/.ssh/simple-vps-deploy.pub || \
+  ssh-keygen -y -f ~/.ssh/simple-vps-deploy > ~/.ssh/simple-vps-deploy.pub
 ```
 
-The installer downloads the selected release asset that matches your platform
-and verifies it against `SHA256SUMS`. From macOS, remote install also downloads
-and verifies the matching Linux helper binary for the target VPS. Set
-`SIMPLE_VPS_VERSION=vX.Y.Z` to pin a release.
+Then converge a fresh Ubuntu VPS:
 
 ```bash
-SIMPLE_VPS_VERSION="$VERSION" ./install.sh \
+simple-vps host install \
   --host <vps-ip> \
   --ssh-key ~/.ssh/<root-key> \
-  --operator-ssh-public-key-file ~/.ssh/<root-key>.pub \
-  --deploy-ssh-public-key-file ~/.ssh/simple-vps-deploy.pub \
   --yes
 ```
 
 The operator key is for human host recovery and rerunning host install. The
 deploy key is what `deploy`, `status`, `secret`, and other app commands use
-after install.
+after install. By default, host install uses `~/.ssh/simple-vps-deploy.pub` for
+the deploy user and the VPS bootstrap user's existing authorized key for the
+operator user.
 
-If the release assets are private, authenticate `gh` before downloading the
-installer and set `SIMPLE_VPS_RELEASE_TOKEN`, `GH_TOKEN`, or `GITHUB_TOKEN`
-before running it. For local development, run `make build` first and the
-installer will use `dist/simple-vps` instead of downloading a release.
-
-To install from a source checkout instead of a release, run `make build`, pin a
-release with `SIMPLE_VPS_VERSION=vX.Y.Z`, or point at a custom binary with
-`SIMPLE_VPS_BINARY_URL`.
+`host install` accepts a new SSH host key for a never-seen VPS. If you rebuilt
+a VPS at the same IP and SSH blocks because the host key changed, remove the
+old remembered key with `ssh-keygen -R <vps-ip>` and rerun the command.
 
 ## Deploy An App
 
@@ -226,14 +211,17 @@ make clean
 make build-release VERSION=v0.7.0
 ```
 
-Artifacts land in `dist/`:
+Build artifacts land in `dist/`:
 
 ```text
 simple-vps-linux-amd64
 simple-vps-linux-arm64
 simple-vps-darwin-amd64
 simple-vps-darwin-arm64
+SHA256SUMS
 ```
+
+The release workflow uploads those files plus the root `install.sh` script.
 
 Smoke a published release against a VPS:
 
