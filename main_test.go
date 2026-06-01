@@ -79,6 +79,22 @@ func TestPublicCLIRejectsRemovedCompatibilityForms(t *testing.T) {
 	}
 }
 
+func TestHostWithoutSubcommandShowsSubcommandHelp(t *testing.T) {
+	_, err := newTestParser(t).Parse([]string{"host"})
+	if err == nil {
+		t.Fatal("parse host unexpectedly succeeded")
+	}
+	text := err.Error()
+	if strings.Contains(text, "--server") {
+		t.Fatalf("host without subcommand should not fall through to host status: %v", err)
+	}
+	for _, want := range []string{"status", "doctor", "install"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("host parse error should mention %q subcommand, got: %v", want, err)
+		}
+	}
+}
+
 func TestAppRootUsesManifestDirectory(t *testing.T) {
 	root := t.TempDir()
 	configPath := filepath.Join(root, "apps", "api", "simple-vps.toml")

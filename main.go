@@ -358,7 +358,7 @@ func (c secretRmCmd) Run() error {
 }
 
 type hostCmd struct {
-	Status  hostStatusCmd  `cmd:"" default:"1" help:"Show host status."`
+	Status  hostStatusCmd  `cmd:"" help:"Show host status."`
 	Doctor  hostDoctorCmd  `cmd:"" help:"Run host diagnostics."`
 	Install hostInstallCmd `cmd:"" help:"Install or converge a host."`
 }
