@@ -70,8 +70,7 @@ relative to that manifest's directory.
 ```bash
 simple-vps init [--config <path>] [--template container|static|php|hono] [--name <app>] [--env <env>] [--server <ssh-target>] [--host <host>] [--tls auto|internal] [--port <port>] # scaffold simple-vps.toml plus starter files
 simple-vps check [--env <env>]                        # validate manifest; with --env also checks local deploy blockers
-simple-vps setup --env <env>                          # create per-env user, paths, Podman network
-simple-vps deploy --env <env> [--dirty] [--rebuild] [--include-dotenv] # build image or publish static assets, route via Caddy
+simple-vps deploy --env <env> [--dirty] [--rebuild] [--include-dotenv] # prepare env if missing, build image or publish static assets, route via Caddy
 simple-vps status --env <env> [--json]                # runtime process table
 simple-vps app list --server <ssh-target> [--json]    # env identity + podman labels app/env list
 simple-vps restart [process] --env <env>              # bounce running processes in place (same image)
@@ -342,8 +341,11 @@ do not enter that app's deploy artifact.
 Before deploy uploads anything, the client runs a read-only remote preflight:
 SSH reachability, deploy-user `rsync`, helper availability, host state validity,
 setup-env layout, env identity validity, running ingress Caddy container, full
-Caddy config validation, app network, and required secret presence. Setup and
-repair stay explicit in `setup` and `host install`.
+Caddy config validation, app network, and required secret presence. If the only
+remote preflight issues are a missing app env user/root/identity/network, deploy
+runs the hidden setup-env repair step and repeats preflight before upload. Host
+installation and secret creation stay explicit in `host install` and
+`secret set`.
 
 See [ADR-0008](docs/adr/0008-manifest-v2-env-root-and-runtime-identity.md)
 for the manifest v2, env-root, and derived infra ID contract.

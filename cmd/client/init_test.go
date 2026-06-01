@@ -191,7 +191,6 @@ func TestRenderInitResultIncludesConfigPathOutsideCwd(t *testing.T) {
 		"git -C " + result.Root + " add .",
 		"git -C " + result.Root + " commit -m \"initial simple-vps app\"",
 		"simple-vps check --config " + result.ConfigPath + " --env production",
-		"simple-vps setup --config " + result.ConfigPath + " --env production",
 		"simple-vps deploy --config " + result.ConfigPath + " --env production",
 	} {
 		if !strings.Contains(out, want) {

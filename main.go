@@ -15,23 +15,31 @@ import (
 // purpose; host mutation goes through the privileged helper and runtime
 // truth comes from manifest snapshots, identity files, and Podman labels.
 type cli struct {
-	Init     initCmd          `cmd:"" help:"Create a simple-vps.toml manifest and starter files."`
-	Check    checkCmd         `cmd:"" help:"Validate an app manifest."`
-	Setup    setupCmd         `cmd:"" help:"Create the per-env Linux user, directories, and Podman network on the host."`
-	Deploy   deployCmd        `cmd:"" help:"Build the container image on the host and run the app's processes."`
-	Status   statusCmd        `cmd:"" help:"Show running processes for an environment."`
-	Restart  restartCmd       `cmd:"" help:"Restart processes for an environment (bounces in place; same image)."`
-	Rollback rollbackCmd      `cmd:"" help:"Run an older image or static release for an environment."`
-	Backup   backupCmd        `cmd:"" help:"Back up app data, manifest, and secrets."`
-	Restore  restoreCmd       `cmd:"" help:"Restore app data, manifest, and secrets from a backup."`
-	Destroy  destroyCmd       `cmd:"" help:"Destroy an app environment on the host."`
-	Logs     logsCmd          `cmd:"" help:"Tail logs for one process."`
-	App      appCmd           `cmd:"" help:"Inspect apps on a host."`
-	Secret   secretCmd        `cmd:"" help:"Manage per-(app, env, key) secret values referenced from the manifest."`
-	SSH      sshCmd           `cmd:"ssh" help:"Open an SSH session to an app environment."`
-	Host     hostCmd          `cmd:"" help:"Install or inspect a Simple VPS host."`
-	Version  versionCmd       `cmd:"" help:"Print the Simple VPS version."`
-	Server   helper.ServerCmd `cmd:"" hidden:"" help:"Privileged host API."`
+	Init     initCmd          `cmd:"" group:"project" help:"Create local project files and a simple-vps.toml manifest."`
+	Check    checkCmd         `cmd:"" group:"project" help:"Validate the current project manifest."`
+	Setup    setupCmd         `cmd:"" hidden:"" group:"project" help:"Repair or prepare one app environment on the host."`
+	Deploy   deployCmd        `cmd:"" group:"project" help:"Deploy the current project to one app environment."`
+	Status   statusCmd        `cmd:"" group:"project" help:"Show host-observed status for the current app environment."`
+	Restart  restartCmd       `cmd:"" group:"project" help:"Restart processes for the current app environment."`
+	Rollback rollbackCmd      `cmd:"" group:"project" help:"Run an older release for the current app environment."`
+	Backup   backupCmd        `cmd:"" group:"project" help:"Manage backups for the current app environment."`
+	Restore  restoreCmd       `cmd:"" group:"project" help:"Restore the current app environment from a backup."`
+	Destroy  destroyCmd       `cmd:"" group:"project" help:"Destroy the current app environment on the host."`
+	Logs     logsCmd          `cmd:"" group:"project" help:"Tail process logs for the current app environment."`
+	Secret   secretCmd        `cmd:"" group:"project" help:"Manage secrets for the current app environment."`
+	SSH      sshCmd           `cmd:"ssh" group:"project" help:"Open an SSH session to the current app environment."`
+	App      appCmd           `cmd:"" group:"host" help:"List app environments on a host."`
+	Host     hostCmd          `cmd:"" group:"host" help:"Install or inspect a Simple VPS host."`
+	Version  versionCmd       `cmd:"" group:"global" help:"Print the Simple VPS version."`
+	Server   helper.ServerCmd `cmd:"" hidden:"" group:"global" help:"Privileged host API."`
+}
+
+func cliCommandGroups() []kong.Group {
+	return []kong.Group{
+		{Key: "project", Title: "Project commands:"},
+		{Key: "host", Title: "Host commands:"},
+		{Key: "global", Title: "Global commands:"},
+	}
 }
 
 type versionCmd struct{}
@@ -490,6 +498,7 @@ func main() {
 		&cli{},
 		kong.Name("simple-vps"),
 		kong.Description("Deploy containerized apps to a single hardened VPS."),
+		kong.ExplicitGroups(cliCommandGroups()),
 		kong.ConfigureHelp(kong.HelpOptions{NoExpandSubcommands: true}),
 		kong.UsageOnError(),
 	)

@@ -421,7 +421,6 @@ func renderInitResult(result InitResult) {
 		gitPrefix+"add .",
 		gitPrefix+"commit -m \"initial simple-vps app\"",
 		fmt.Sprintf("simple-vps check%s --env %s", configFlag, result.Env),
-		fmt.Sprintf("simple-vps setup%s --env %s", configFlag, result.Env),
 		fmt.Sprintf("simple-vps deploy%s --env %s", configFlag, result.Env),
 	)
 	fmt.Println("Next:")

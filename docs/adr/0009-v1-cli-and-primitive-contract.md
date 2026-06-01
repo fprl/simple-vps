@@ -46,7 +46,6 @@ repo or monorepo path, users pass `--config`.
 Env-scoped commands use `--env` / `-e`:
 
 ```bash
-simple-vps setup --env production
 simple-vps deploy --env production
 simple-vps status --env production --json
 simple-vps logs web --env production --follow --tail 100
@@ -63,6 +62,10 @@ simple-vps secret rm DATABASE_URL --env production
 simple-vps destroy --env production --confirm api --purge
 simple-vps ssh --env production
 ```
+
+`simple-vps deploy --env <env>` prepares the app environment on first deploy.
+The lower-level `setup` command is a hidden repair/debug command, not part of
+the normal public flow.
 
 Do not support positional-env aliases such as `simple-vps deploy production`.
 Env is execution context, not the command subject. This avoids parser traps if

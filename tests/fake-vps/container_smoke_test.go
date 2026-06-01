@@ -16,16 +16,14 @@ import (
 // TestContainerSmoke exercises the new container-deploy lifecycle (ADR-0005
 // + ADR-0006 Cut 2) end-to-end against the fake-vps fixture:
 //
-//   - `simple-vps setup --env production` calls `server app setup-env`, which
-//     creates the per-env Linux user, on-disk layout under
-//     /var/apps/<app>.<env>/, and the per-(app, env) Podman network.
-//   - `simple-vps deploy --env production` tars the working tree, uploads the
-//     manifest, calls `server app apply`, which runs `podman build` +
-//     `podman run` (§7 hardening subset) without any host-port
-//     publish — the app container joins both the per-(app, env) network
-//     and the shared `ingress` network. The helper writes a per-app
-//     Caddyfile fragment that reverse-proxies via container DNS, then
-//     reloads Caddy via `podman exec caddy caddy reload`.
+//   - `simple-vps deploy --env production` prepares the app env on first
+//     deploy, tars the working tree, uploads the manifest, calls
+//     `server app apply`, which runs `podman build` + `podman run`
+//     (§7 hardening subset) without any host-port publish — the app
+//     container joins both the per-(app, env) network and the shared
+//     `ingress` network. The helper writes a per-app Caddyfile fragment
+//     that reverse-proxies via container DNS, then reloads Caddy via
+//     `podman exec caddy caddy reload`.
 //   - End-to-end: `curl -H 'Host: api.example.com' http://127.0.0.1/health`
 //     reaches the app container through the fake Caddy proxy.
 func TestContainerSmoke(t *testing.T) {
@@ -77,6 +75,7 @@ func (e *smokeEnv) testContainerAppLifecycle(t *testing.T) {
 {"version":1,"desired":{"users":{"operator":"operator","deploy":"deploy"},"ingress":{"expose":"public","tunnel":"none"},"features":{},"packages":{"podman":{"source":"apt"},"rsync":{"source":"apt"},"caddy":{"source":"container"}}},"observed":{"packages":{},"ingress":{}},"meta":{}}
 EOF`)
 	e.dockerExec(t, "mkdir -p /etc/caddy/simple-vps /etc/caddy/conf.d /var/lib/caddy")
+	e.dockerExec(t, "mkdir -p /tmp/simple-vps-deploy && chmod 1777 /tmp/simple-vps-deploy")
 	e.dockerExec(t, `cat > /etc/caddy/Caddyfile <<'EOF'
 import simple-vps/*.caddy
 import conf.d/*.caddy
@@ -84,8 +83,9 @@ EOF`)
 	e.dockerExec(t, "podman network create ingress")
 	e.dockerExec(t, "podman run -d --name caddy --network ingress --publish 80:80 -v /etc/caddy:/etc/caddy:Z docker.io/library/caddy:2-alpine")
 
-	// 1. Setup creates the per-env user, paths, and per-(app, env) network.
-	e.simpleVPS(t, app, nil, "setup", "--env", "production")
+	// 1. Deploy on a clean tree. First deploy prepares the per-env user,
+	// paths, identity, and per-(app, env) network before the release starts.
+	e.simpleVPS(t, app, nil, "deploy", "--env", "production")
 
 	e.ssh(t, "getent passwd "+identity.SystemUser("api", "production")+" >/dev/null")
 	e.ssh(t, "test -d "+identity.DataDir("api", "production"))
@@ -97,8 +97,6 @@ EOF`)
 		t.Fatalf("release dir ownership = %q, want `755 root`", releaseDirStat)
 	}
 
-	// 2. Deploy on a clean tree.
-	e.simpleVPS(t, app, nil, "deploy", "--env", "production")
 	release := gitRelease(t, e, app)
 	webContainer := identity.ContainerName("api", "production", "web", release)
 	releaseManifest := e.ssh(t, "cat "+identity.ReleaseManifestFile("api", "production", release))
@@ -191,7 +189,6 @@ func (e *smokeEnv) testReleaseCommandFailure(t *testing.T) {
 	writeReleaseFailFixture(t, app)
 	e.commitFixture(t, app)
 
-	e.simpleVPS(t, app, nil, "setup", "--env", "production")
 	e.simpleVPS(t, app, nil, "deploy", "--env", "production")
 	e.dockerExec(t, "test -f "+identity.DataDir("releasefail", "production")+"/release-ok")
 	stableEnv := e.dockerExec(t, "cat "+identity.EnvFile("releasefail", "production"))
@@ -240,7 +237,6 @@ func (e *smokeEnv) testCaddySwitchFailureRollback(t *testing.T) {
 	writeCaddyFailFixture(t, app)
 	e.commitFixture(t, app)
 
-	e.simpleVPS(t, app, nil, "setup", "--env", "production")
 	e.simpleVPS(t, app, nil, "deploy", "--env", "production")
 	stableWorker := currentProcessContainer(t, e, app, "worker")
 	stableEnv := e.dockerExec(t, "cat "+identity.EnvFile("caddyfail", "production"))
@@ -298,7 +294,6 @@ func (e *smokeEnv) testDirtyDeployStatus(t *testing.T) {
 	baseCommit := strings.TrimSpace(e.mustRun(t, app, nil, "git", "rev-parse", "HEAD"))
 	baseShort := gitRelease(t, e, app)
 
-	e.simpleVPS(t, app, nil, "setup", "--env", "production")
 	mustWrite(t, filepath.Join(app, "dirty.txt"), "dirty deploy payload")
 	rejected := e.runSimpleVPS(t, app, nil, "deploy", "--env", "production")
 	if rejected.err == nil {
@@ -493,7 +488,6 @@ func (e *smokeEnv) testRemovedProcessReconciliation(t *testing.T) {
 	writePruneFixture(t, app)
 	e.commitFixture(t, app)
 
-	e.simpleVPS(t, app, nil, "setup", "--env", "production")
 	e.simpleVPS(t, app, nil, "deploy", "--env", "production")
 	oldRelease := gitRelease(t, e, app)
 	oldWorker := identity.ContainerName("prune", "production", "worker", oldRelease)
@@ -529,7 +523,6 @@ func (e *smokeEnv) testStaticOnlyAppLifecycle(t *testing.T) {
 	writeStaticFixture(t, app)
 	e.commitFixture(t, app)
 
-	e.simpleVPS(t, app, nil, "setup", "--env", "production")
 	e.simpleVPS(t, app, nil, "deploy", "--env", "production")
 	oldRelease := currentStaticReleaseFor(t, e, "site", "production")
 	staticReleaseManifest := e.ssh(t, "cat "+identity.ReleaseManifestFile("site", "production", oldRelease))
@@ -604,7 +597,6 @@ func (e *smokeEnv) testMixedContainerStaticLifecycle(t *testing.T) {
 	writeMixedFixture(t, app)
 	e.commitFixture(t, app)
 
-	e.simpleVPS(t, app, nil, "setup", "--env", "production")
 	e.simpleVPS(t, app, nil, "deploy", "--env", "production")
 	oldRelease := currentStaticReleaseFor(t, e, "mix", "production")
 	oldWeb := identity.ContainerName("mix", "production", "web", oldRelease)
@@ -725,7 +717,6 @@ host = "sec.example.com"
 process = "web"
 `)
 	e.commitFixture(t, app)
-	e.simpleVPS(t, app, nil, "setup", "--env", "production")
 
 	// 1. set: value over stdin, never argv. The fake-VPS harness uses
 	// docker exec ssh under the hood and the helper reads from its

@@ -95,7 +95,6 @@ git commit -m "initial simple-vps app"
 
 ```bash
 simple-vps check --env production
-simple-vps setup --env production
 simple-vps deploy --env production
 simple-vps status --env production
 ```
@@ -103,7 +102,8 @@ simple-vps status --env production
 `check --env` is a local check. It validates the manifest, Git release identity,
 static directories, Dockerfile shape, and lists required secrets with the exact
 `secret set` commands. `deploy --env` does the remote read-only preflight and
-hard-fails if required host secrets are missing.
+hard-fails if required host secrets are missing. On first deploy, simple-vps
+prepares the app environment on the host before upload/build/routing starts.
 
 Then hit Caddy on the VPS:
 

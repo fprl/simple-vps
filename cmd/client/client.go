@@ -837,7 +837,7 @@ func CmdDeploy(root string, envName string, dirty bool, rebuild bool, includeDot
 		utils.Die(err.Error(), 1)
 	}
 	defer runner.Close()
-	if err := deployRemotePreflight(runner, ctx); err != nil {
+	if err := ensureRemoteEnvReadyForDeploy(runner, ctx); err != nil {
 		utils.Die(err.Error(), 1)
 	}
 

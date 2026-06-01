@@ -14,6 +14,7 @@ func newTestParser(t *testing.T) *kong.Kong {
 	parser, err := kong.New(
 		&cli{},
 		kong.Name("simple-vps"),
+		kong.ExplicitGroups(cliCommandGroups()),
 		kong.ConfigureHelp(kong.HelpOptions{NoExpandSubcommands: true}),
 	)
 	if err != nil {
@@ -29,7 +30,6 @@ func TestPublicCLIParsesV1Contract(t *testing.T) {
 		{"check"},
 		{"check", "--env", "production"},
 		{"check", "-e", "production"},
-		{"setup", "--env", "production"},
 		{"deploy", "--env", "production"},
 		{"deploy", "--env", "production", "--include-dotenv"},
 		{"deploy", "-e", "production", "--config", "apps/api/simple-vps.toml"},
@@ -84,6 +84,12 @@ func TestPublicCLIRejectsRemovedCompatibilityForms(t *testing.T) {
 	}
 }
 
+func TestHiddenSetupRepairCommandStillParses(t *testing.T) {
+	if _, err := newTestParser(t).Parse([]string{"setup", "--env", "production"}); err != nil {
+		t.Fatalf("hidden setup command should remain available for repair: %v", err)
+	}
+}
+
 func TestHostWithoutSubcommandShowsSubcommandHelp(t *testing.T) {
 	_, err := newTestParser(t).Parse([]string{"host"})
 	if err == nil {
@@ -106,6 +112,7 @@ func TestTopLevelHelpShowsParentCommands(t *testing.T) {
 		&cli{},
 		kong.Name("simple-vps"),
 		kong.Description("Deploy containerized apps to a single hardened VPS."),
+		kong.ExplicitGroups(cliCommandGroups()),
 		kong.ConfigureHelp(kong.HelpOptions{NoExpandSubcommands: true}),
 		kong.UsageOnError(),
 		kong.Exit(func(int) {}),
@@ -116,12 +123,12 @@ func TestTopLevelHelpShowsParentCommands(t *testing.T) {
 	}
 	_, _ = parser.Parse([]string{"--help"})
 	text := stdout.String() + stderr.String()
-	for _, want := range []string{"backup <command>", "app <command>", "secret <command>", "host <command>"} {
+	for _, want := range []string{"Project commands:", "Host commands:", "Global commands:", "backup <command>", "app <command>", "secret <command>", "host <command>"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("top-level help should mention %q, got:\n%s", want, text)
 		}
 	}
-	for _, legacy := range []string{"backup create", "app list", "secret set", "host status"} {
+	for _, legacy := range []string{"setup", "backup create", "app list", "secret set", "host status"} {
 		if strings.Contains(text, legacy) {
 			t.Fatalf("top-level help should not expand %q, got:\n%s", legacy, text)
 		}

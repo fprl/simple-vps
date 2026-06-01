@@ -755,11 +755,24 @@ func TestServerAppSecretListCommandSupportsJSON(t *testing.T) {
 type fakeSSHRunner struct {
 	responses map[string]string
 	failures  map[string]string
+	sequences map[string][]fakeSSHResult
 	commands  []string
+}
+
+type fakeSSHResult struct {
+	stdout string
+	stderr string
+	code   int
+	err    error
 }
 
 func (f *fakeSSHRunner) RunSSH(_ string, command string) (string, string, int, error) {
 	f.commands = append(f.commands, command)
+	if seq, ok := f.sequences[command]; ok && len(seq) > 0 {
+		result := seq[0]
+		f.sequences[command] = seq[1:]
+		return result.stdout, result.stderr, result.code, result.err
+	}
 	if out, ok := f.failures[command]; ok {
 		return out, "", 1, nil
 	}
@@ -806,7 +819,7 @@ func TestDeployRemotePreflightFailsMissingSecrets(t *testing.T) {
 		"test -x /usr/local/bin/simple-vps": "",
 		"command -v rsync >/dev/null":       "",
 	}, failures: map[string]string{
-		serverAppPreflightJSONCommand("api", "production", []string{"DATABASE_URL"}): `{"app":"api","env":"production","healthy":false,"findings":["missing secret DATABASE_URL; run ` + "`" + `simple-vps secret set DATABASE_URL --env production` + "`" + `"]}`,
+		serverAppPreflightJSONCommand("api", "production", []string{"DATABASE_URL"}): `{"app":"api","env":"production","healthy":false,"issues":[{"code":"secret_missing","message":"missing secret DATABASE_URL; run ` + "`" + `simple-vps secret set DATABASE_URL --env production` + "`" + `"}],"findings":["missing secret DATABASE_URL; run ` + "`" + `simple-vps secret set DATABASE_URL --env production` + "`" + `"]}`,
 	}}
 
 	err := deployRemotePreflight(runner, ctx)
@@ -815,6 +828,100 @@ func TestDeployRemotePreflightFailsMissingSecrets(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "No remote files, routes, or containers were changed.") {
 		t.Fatalf("expected read-only preflight boundary in error, got %v", err)
+	}
+}
+
+func TestEnsureRemoteEnvReadyPreparesMissingEnv(t *testing.T) {
+	ctx := &config.AppContext{
+		AppName: "api",
+		EnvName: "production",
+		Server:  "deploy@example.com",
+	}
+	preflightCmd := serverAppPreflightJSONCommand("api", "production", nil)
+	runner := &fakeSSHRunner{
+		responses: map[string]string{
+			"true":                                        `ok`,
+			"test -x /usr/local/bin/simple-vps":           "",
+			"command -v rsync >/dev/null":                 "",
+			serverAppSetupEnvCommand("api", "production"): "App api (production) is ready",
+		},
+		sequences: map[string][]fakeSSHResult{
+			preflightCmd: {
+				{stdout: `{"app":"api","env":"production","healthy":false,"issues":[{"code":"env_missing","message":"app env is not prepared: missing /var/apps/api.production"}],"findings":["app env is not prepared: missing /var/apps/api.production"]}`, code: 1},
+				{stdout: `{"app":"api","env":"production","healthy":true,"issues":[],"findings":[]}`, code: 0},
+			},
+		},
+	}
+
+	if err := ensureRemoteEnvReadyForDeploy(runner, ctx); err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(runner.commands, "\n")
+	if !strings.Contains(joined, serverAppSetupEnvCommand("api", "production")) {
+		t.Fatalf("expected deploy preparation to run setup-env, got:\n%s", joined)
+	}
+}
+
+func TestEnsureRemoteEnvReadyDoesNotPrepareWhenSecretsAreMissing(t *testing.T) {
+	ctx := &config.AppContext{
+		AppName:    "api",
+		EnvName:    "production",
+		Server:     "deploy@example.com",
+		SecretRefs: map[string]string{"DATABASE_URL": "DATABASE_URL"},
+	}
+	preflightCmd := serverAppPreflightJSONCommand("api", "production", []string{"DATABASE_URL"})
+	runner := &fakeSSHRunner{
+		responses: map[string]string{
+			"true":                              `ok`,
+			"test -x /usr/local/bin/simple-vps": "",
+			"command -v rsync >/dev/null":       "",
+		},
+		failures: map[string]string{
+			preflightCmd: `{"app":"api","env":"production","healthy":false,"issues":[{"code":"env_missing","message":"app env is not prepared: missing /var/apps/api.production"},{"code":"secret_missing","message":"missing secret DATABASE_URL; run ` + "`" + `simple-vps secret set DATABASE_URL --env production` + "`" + `"}],"findings":["app env is not prepared: missing /var/apps/api.production","missing secret DATABASE_URL; run ` + "`" + `simple-vps secret set DATABASE_URL --env production` + "`" + `"]}`,
+		},
+	}
+
+	err := ensureRemoteEnvReadyForDeploy(runner, ctx)
+	if err == nil || !strings.Contains(err.Error(), "missing secret DATABASE_URL") {
+		t.Fatalf("expected missing secret error, got %v", err)
+	}
+	joined := strings.Join(runner.commands, "\n")
+	if strings.Contains(joined, "setup-env") {
+		t.Fatalf("deploy should not mutate when required secrets are missing:\n%s", joined)
+	}
+}
+
+func TestEnsureRemoteEnvReadyUsesPostPrepareBoundaryForSecondPreflightFailure(t *testing.T) {
+	ctx := &config.AppContext{
+		AppName: "api",
+		EnvName: "production",
+		Server:  "deploy@example.com",
+	}
+	preflightCmd := serverAppPreflightJSONCommand("api", "production", nil)
+	runner := &fakeSSHRunner{
+		responses: map[string]string{
+			"true":                                        `ok`,
+			"test -x /usr/local/bin/simple-vps":           "",
+			"command -v rsync >/dev/null":                 "",
+			serverAppSetupEnvCommand("api", "production"): "App api (production) is ready",
+		},
+		sequences: map[string][]fakeSSHResult{
+			preflightCmd: {
+				{stdout: `{"app":"api","env":"production","healthy":false,"issues":[{"code":"env_missing","message":"app env is not prepared: missing /var/apps/api.production"}],"findings":["app env is not prepared: missing /var/apps/api.production"]}`, code: 1},
+				{stdout: `not-json`, stderr: `broken preflight`, code: 1},
+			},
+		},
+	}
+
+	err := ensureRemoteEnvReadyForDeploy(runner, ctx)
+	if err == nil {
+		t.Fatal("expected second preflight failure")
+	}
+	if !strings.Contains(err.Error(), "after preparing the app environment") {
+		t.Fatalf("expected post-prepare error boundary, got %v", err)
+	}
+	if strings.Contains(err.Error(), "No remote files, routes, or containers were changed.") {
+		t.Fatalf("post-prepare failure must not claim no remote files changed, got %v", err)
 	}
 }
 

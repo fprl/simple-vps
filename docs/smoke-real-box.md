@@ -165,18 +165,10 @@ git add . && git commit -q -m "fixture"
 This fixture keeps the image boring: one Dockerfile, one web process, one
 health path, one secret reference, and no image-specific writable-path knobs.
 
-## 3. Setup and deploy
+## 3. Deploy
 
 ```sh
 cd /tmp/simple-vps-smoke-app
-
-SIMPLE_VPS_SSH_KEY="$(cat /tmp/simple-vps-smoke-keys/deploy)" \
-  /path/to/simple-vps/dist/simple-vps setup --env production
-
-# Verify on the box (over SSH as root):
-#   test -d /var/apps/hello.production/data
-#   jq . /var/apps/hello.production/simple-vps.json
-#   podman network ls                           # includes the derived infra_id
 
 printf 'smoke-secret-value' | \
 SIMPLE_VPS_SSH_KEY="$(cat /tmp/simple-vps-smoke-keys/deploy)" \
@@ -188,6 +180,9 @@ SIMPLE_VPS_SSH_KEY="$(cat /tmp/simple-vps-smoke-keys/deploy)" \
 SIMPLE_VPS_SSH_KEY="$(cat /tmp/simple-vps-smoke-keys/deploy)" \
   /path/to/simple-vps/dist/simple-vps deploy --env production
 ```
+
+First deploy prepares `/var/apps/hello.production`, writes the env identity,
+and creates the per-env Podman network before upload/build/routing starts.
 
 Expected last line: `Deployed hello (production) at <sha>`. If the
 deploy errors with `wget: bad address`, rerun host install with the

@@ -13,7 +13,6 @@ git init
 git add .
 git commit -m "initial simple-vps app"
 simple-vps check --env production
-simple-vps setup --env production
 printf '%s' "$(openssl rand -hex 32)" | simple-vps secret set DJANGO_SECRET_KEY --env production
 simple-vps deploy --env production
 curl https://django.example.com/health

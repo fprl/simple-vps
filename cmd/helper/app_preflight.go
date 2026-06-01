@@ -24,10 +24,16 @@ type appPreflightCmd struct {
 }
 
 type appPreflightReport struct {
-	App      string   `json:"app"`
-	Env      string   `json:"env"`
-	Healthy  bool     `json:"healthy"`
-	Findings []string `json:"findings"`
+	App      string              `json:"app"`
+	Env      string              `json:"env"`
+	Healthy  bool                `json:"healthy"`
+	Issues   []appPreflightIssue `json:"issues"`
+	Findings []string            `json:"findings"`
+}
+
+type appPreflightIssue struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
 }
 
 func (c appPreflightCmd) Run() error {
@@ -51,44 +57,66 @@ func (c appPreflightCmd) Run() error {
 }
 
 func appPreflightReportFor(app, env string, requiredSecrets []string) appPreflightReport {
-	findings := appPreflightFindings(app, env, requiredSecrets)
+	issues := appPreflightIssues(app, env, requiredSecrets)
+	findings := make([]string, 0, len(issues))
+	for _, issue := range issues {
+		findings = append(findings, issue.Message)
+	}
 	return appPreflightReport{
 		App:      app,
 		Env:      env,
-		Healthy:  len(findings) == 0,
+		Healthy:  len(issues) == 0,
+		Issues:   issues,
 		Findings: findings,
 	}
 }
 
-func appPreflightFindings(app, env string, requiredSecrets []string) []string {
-	var findings []string
+const (
+	appPreflightHostNotInstalled = "host_not_installed"
+	appPreflightHostInvalid      = "host_invalid"
+	appPreflightMissingTool      = "missing_tool"
+	appPreflightDeployTmpMissing = "deploy_tmp_missing"
+	appPreflightDeployTmpInvalid = "deploy_tmp_invalid"
+	appPreflightEnvMissing       = "env_missing"
+	appPreflightEnvInvalid       = "env_invalid"
+	appPreflightIngressInvalid   = "ingress_invalid"
+	appPreflightSecretMissing    = "secret_missing"
+	appPreflightSecretInvalid    = "secret_invalid"
+	appPreflightSecretReadError  = "secret_read_error"
+)
+
+func appPreflightIssues(app, env string, requiredSecrets []string) []appPreflightIssue {
+	var issues []appPreflightIssue
+	addIssue := func(code, message string) {
+		issues = append(issues, appPreflightIssue{Code: code, Message: message})
+	}
 	stateStore := store.Default()
 	if installed, err := stateStore.HostInstalled(); err != nil {
-		findings = append(findings, fmt.Sprintf("cannot read host install state: %v", err))
+		addIssue(appPreflightHostInvalid, fmt.Sprintf("cannot read host install state: %v", err))
 	} else if !installed {
-		findings = append(findings, "host is not installed; run `simple-vps host install`")
+		addIssue(appPreflightHostNotInstalled, "host is not installed; run `simple-vps host install`")
 	} else if _, err := stateStore.ReadHost(); err != nil {
-		findings = append(findings, fmt.Sprintf("host install state is invalid: %v", err))
+		addIssue(appPreflightHostInvalid, fmt.Sprintf("host install state is invalid: %v", err))
 	}
 	for _, tool := range []string{"podman", "rsync"} {
 		if _, err := exec.LookPath(tool); err != nil {
-			findings = append(findings, fmt.Sprintf("missing host tool: %s", tool))
+			addIssue(appPreflightMissingTool, fmt.Sprintf("missing host tool: %s", tool))
 		}
 	}
 	deployTmp := host.DeployTmpDir()
 	if info, err := os.Stat(deployTmp); err != nil {
-		findings = append(findings, fmt.Sprintf("deploy tmp dir is missing: %s; run `simple-vps host install`", deployTmp))
+		addIssue(appPreflightDeployTmpMissing, fmt.Sprintf("deploy tmp dir is missing: %s; run `simple-vps host install`", deployTmp))
 	} else if !info.IsDir() {
-		findings = append(findings, fmt.Sprintf("expected %s to be a directory", deployTmp))
+		addIssue(appPreflightDeployTmpInvalid, fmt.Sprintf("expected %s to be a directory", deployTmp))
 	} else {
 		mode := info.Mode()
 		if mode.Perm() != 0777 || mode&os.ModeSticky == 0 {
-			findings = append(findings, fmt.Sprintf("deploy tmp dir %s must be sticky 0777", deployTmp))
+			addIssue(appPreflightDeployTmpInvalid, fmt.Sprintf("deploy tmp dir %s must be sticky 0777", deployTmp))
 		}
 	}
 	user := identity.SystemUser(app, env)
 	if !host.CommandSucceeds("id", "-u", user) {
-		findings = append(findings, fmt.Sprintf("app env is not set up: missing system user %s; run `simple-vps setup --env %s`", user, env))
+		addIssue(appPreflightEnvMissing, fmt.Sprintf("app env is not prepared: missing system user %s", user))
 	}
 	for _, dir := range []string{
 		identity.EnvRoot(app, env),
@@ -99,41 +127,41 @@ func appPreflightFindings(app, env string, requiredSecrets []string) []string {
 	} {
 		info, err := os.Stat(dir)
 		if err != nil {
-			findings = append(findings, fmt.Sprintf("app env is not set up: missing %s; run `simple-vps setup --env %s`", dir, env))
+			addIssue(appPreflightEnvMissing, fmt.Sprintf("app env is not prepared: missing %s", dir))
 			continue
 		}
 		if !info.IsDir() {
-			findings = append(findings, fmt.Sprintf("expected %s to be a directory", dir))
+			addIssue(appPreflightEnvInvalid, fmt.Sprintf("expected %s to be a directory", dir))
 		}
 	}
 	if _, err := os.Stat(identity.IdentityFile(app, env)); err != nil {
-		findings = append(findings, fmt.Sprintf("app env identity is missing; run `simple-vps setup --env %s`", env))
+		addIssue(appPreflightEnvMissing, "app env identity is missing")
 	} else if err := validateEnvIdentityFile(app, env); err != nil {
-		findings = append(findings, fmt.Sprintf("app env identity is invalid: %v; run `simple-vps setup --env %s`", err, env))
+		addIssue(appPreflightEnvInvalid, fmt.Sprintf("app env identity is invalid: %v", err))
 	}
 	if !host.CommandSucceeds("podman", "network", "exists", identity.Network(app, env)) {
-		findings = append(findings, fmt.Sprintf("app env network is missing; run `simple-vps setup --env %s`", env))
+		addIssue(appPreflightEnvMissing, "app env network is missing")
 	}
 	caddyRunning, err := containerRunning("caddy")
 	if err != nil {
-		findings = append(findings, fmt.Sprintf("cannot inspect ingress container caddy: %v", err))
+		addIssue(appPreflightIngressInvalid, fmt.Sprintf("cannot inspect ingress container caddy: %v", err))
 	} else if !caddyRunning {
-		findings = append(findings, "ingress container caddy is not running; run host install or inspect `simple-vps host doctor`")
+		addIssue(appPreflightIngressInvalid, "ingress container caddy is not running; run host install or inspect `simple-vps host doctor`")
 	} else if err := validateCaddyConfigReadOnly(); err != nil {
-		findings = append(findings, fmt.Sprintf("caddy config does not validate: %v", err))
+		addIssue(appPreflightIngressInvalid, fmt.Sprintf("caddy config does not validate: %v", err))
 	}
 	for _, key := range sortedUniqueStrings(requiredSecrets) {
 		if err := secrets.ValidateKey(key); err != nil {
-			findings = append(findings, err.Error())
+			addIssue(appPreflightSecretInvalid, err.Error())
 			continue
 		}
 		if _, err := secrets.Get(app, env, key); errors.Is(err, secrets.ErrNotFound) {
-			findings = append(findings, fmt.Sprintf("missing secret %s; run `simple-vps secret set %s --env %s`", key, key, env))
+			addIssue(appPreflightSecretMissing, fmt.Sprintf("missing secret %s; run `simple-vps secret set %s --env %s`", key, key, env))
 		} else if err != nil {
-			findings = append(findings, fmt.Sprintf("read secret %s: %v", key, err))
+			addIssue(appPreflightSecretReadError, fmt.Sprintf("read secret %s: %v", key, err))
 		}
 	}
-	return findings
+	return issues
 }
 
 func validateEnvIdentityFile(app, env string) error {

@@ -169,14 +169,14 @@ git init
 git add .
 git commit -m "initial simple-vps app"
 simple-vps check --env production
-simple-vps setup --env production
 simple-vps deploy --env production
 simple-vps status --env production
 ```
 
 `check --env` uses the same local deploy diagnostics as `deploy`: the app
 directory must be a committed Git worktree, and dirty deploys must be explicit
-with `deploy --dirty`.
+with `deploy --dirty`. First deploy prepares the remote app environment before
+uploading, building, or routing the release.
 
 Deploy excludes dotenv files by default. Use `[vars]` and `@secret:` for real
 secrets; pass `deploy --include-dotenv` only when you intentionally want dotenv

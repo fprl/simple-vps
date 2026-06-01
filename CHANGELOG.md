@@ -40,11 +40,18 @@
   `actions/setup-go@v6`.
 - Getting started and README now lead with the tested first-run flow and
   simpler host install command.
+- `deploy --env` now prepares a missing app environment automatically before
+  upload/build/routing; `setup` is hidden as a repair command.
+- Top-level help groups project, host, and global commands and keeps nested
+  subcommands under their parent command help.
 
 ### Fixed
 
 - Release command failure diagnostics now say the failure happened before the
   traffic switch.
+- Deploy preflight now uses typed remote issue codes, so missing secrets still
+  block before any app-env mutation while a missing app env can be prepared
+  safely.
 - Failed deploys now clean up their uploaded remote source directory before
   exiting.
 - Failed release commands restore the previous runtime env file before

@@ -12,7 +12,6 @@ git init
 git add .
 git commit -m "initial simple-vps app"
 simple-vps check --env production
-simple-vps setup --env production
 simple-vps deploy --env production
 curl https://mixed.example.com/health
 curl https://mixed.example.com/docs
