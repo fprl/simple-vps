@@ -78,8 +78,7 @@ Then converge a fresh Ubuntu VPS:
 ```bash
 simple-vps host install \
   --host <vps-ip> \
-  --ssh-key ~/.ssh/<root-key> \
-  --yes
+  --ssh-key ~/.ssh/<root-key>
 ```
 
 The operator key is for human host recovery and rerunning host install. The

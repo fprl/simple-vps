@@ -373,8 +373,7 @@ test -f ~/.ssh/simple-vps-deploy.pub || \
 
 simple-vps host install \
     --host <ip> \
-    --ssh-key ~/.ssh/id_ed25519 \
-    --yes
+    --ssh-key ~/.ssh/id_ed25519
 ```
 
 The default install opens host ports 80 / 443 publicly (the ADR-0002

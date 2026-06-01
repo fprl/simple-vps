@@ -20,7 +20,7 @@ After this, run:
 
   test -f ~/.ssh/simple-vps-deploy || ssh-keygen -q -t ed25519 -N '' -f ~/.ssh/simple-vps-deploy
   test -f ~/.ssh/simple-vps-deploy.pub || ssh-keygen -y -f ~/.ssh/simple-vps-deploy > ~/.ssh/simple-vps-deploy.pub
-  simple-vps host install --host <vps-ip> --ssh-key ~/.ssh/<root-key> --yes
+  simple-vps host install --host <vps-ip> --ssh-key ~/.ssh/<root-key>
 
 Environment:
   SIMPLE_VPS_VERSION
